@@ -191,10 +191,10 @@ function RecordStep({
     setError("");
     setUploading(true);
     setUploadPct(0);
-    const form = new FormData();
-    form.append("file", file, file.name || "record.webm");
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `/api/projects/${project.id}/upload`);
+    // потоковая загрузка: тело — сам файл, имя — в заголовке
+    xhr.open("PUT", `/api/projects/${project.id}/upload`);
+    xhr.setRequestHeader("x-filename", file.name || "record.webm");
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) setUploadPct(Math.round((e.loaded / e.total) * 100));
     };
@@ -204,14 +204,18 @@ function RecordStep({
         await reload();
         onNext();
       } else {
-        setError(`Ошибка загрузки: ${xhr.responseText.slice(0, 200)}`);
+        let reason = xhr.responseText.slice(0, 300);
+        try {
+          reason = JSON.parse(xhr.responseText).error ?? reason;
+        } catch {}
+        setError(`Ошибка загрузки (HTTP ${xhr.status}): ${reason || "сервер не вернул причину"}`);
       }
     };
     xhr.onerror = () => {
       setUploading(false);
-      setError("Сеть недоступна");
+      setError("Сеть оборвалась во время загрузки — попробуйте ещё раз");
     };
-    xhr.send(form);
+    xhr.send(file);
   }
 
   return (
@@ -361,7 +365,7 @@ function Teleprompter({
     const mime = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"].find((m) =>
       MediaRecorder.isTypeSupported(m),
     );
-    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
     recorder.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
     recorder.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "video/webm" });

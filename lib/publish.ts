@@ -14,11 +14,15 @@ export async function publish(id: string, platform: Platform): Promise<Publicati
     .filter(Boolean)
     .join("\n\n");
 
+  const coverPath = project.cover ? path.join(projectDir(id), project.cover) : null;
+  const coverMs = Math.round((project.coverOffsetSec ?? 1) * 1000);
+
   let result: PublishResult;
   try {
-    if (platform === "youtube") result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? []);
-    else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description);
-    else result = await publishInstagram(id, title, description);
+    if (platform === "youtube")
+      result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? [], coverPath);
+    else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description, coverMs);
+    else result = await publishInstagram(id, title, description, coverMs);
   } catch (e: any) {
     result = { platform, status: "error", message: String(e?.message ?? e) };
   }
@@ -64,7 +68,13 @@ async function youtubeAccessToken(): Promise<string | null> {
   return json.access_token;
 }
 
-async function publishYouTube(videoPath: string, title: string, description: string, tags: string[]): Promise<PublishResult> {
+async function publishYouTube(
+  videoPath: string,
+  title: string,
+  description: string,
+  tags: string[],
+  coverPath: string | null,
+): Promise<PublishResult> {
   const token = await youtubeAccessToken();
   if (!token) return demo("youtube", "аккаунт YouTube не подключён");
 
@@ -99,12 +109,23 @@ async function publishYouTube(videoPath: string, title: string, description: str
   );
   if (!res.ok) throw new Error(`YouTube API: ${res.status} ${(await res.text()).slice(0, 300)}`);
   const json: any = await res.json();
+
+  // пробуем поставить сгенерированную обложку (работает на верифицированных каналах)
+  if (coverPath && fs.existsSync(coverPath)) {
+    try {
+      await fetch(`https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${json.id}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/jpeg" },
+        body: new Uint8Array(fs.readFileSync(coverPath)),
+      });
+    } catch {}
+  }
   return { platform: "youtube", status: "published", url: `https://youtube.com/shorts/${json.id}` };
 }
 
 // ===== TikTok (Content Posting API) =====
 
-async function publishTikTok(videoPath: string, title: string, description: string): Promise<PublishResult> {
+async function publishTikTok(videoPath: string, title: string, description: string, coverMs: number): Promise<PublishResult> {
   const s = getSettings();
   const token = s.tiktokTokens?.access_token;
   if (!token) return demo("tiktok", "аккаунт TikTok не подключён");
@@ -115,6 +136,7 @@ async function publishTikTok(videoPath: string, title: string, description: stri
       post_info: {
         title: `${title}\n${description}`.slice(0, 2200),
         privacy_level: privacy,
+        video_cover_timestamp_ms: coverMs,
       },
       source_info: {
         source: "FILE_UPLOAD",
@@ -168,7 +190,7 @@ async function publishTikTok(videoPath: string, title: string, description: stri
 
 // ===== Instagram Reels (Graph API) =====
 
-async function publishInstagram(id: string, title: string, description: string): Promise<PublishResult> {
+async function publishInstagram(id: string, title: string, description: string, coverMs: number): Promise<PublishResult> {
   const s = getSettings();
   const token = s.instagramTokens?.access_token;
   const igUser = s.instagramTokens?.ig_user_id;
@@ -188,7 +210,13 @@ async function publishInstagram(id: string, title: string, description: string):
   const containerRes = await fetch(`${graph}/v21.0/${igUser}/media`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ media_type: "REELS", video_url: videoUrl, caption, access_token: token }),
+    body: new URLSearchParams({
+      media_type: "REELS",
+      video_url: videoUrl,
+      caption,
+      thumb_offset: String(coverMs),
+      access_token: token,
+    }),
   });
   if (!containerRes.ok) throw new Error(`IG container: ${(await containerRes.text()).slice(0, 300)}`);
   const container: any = await containerRes.json();

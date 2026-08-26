@@ -13,6 +13,7 @@ type Project = {
   processedVideo: string | null;
   processing: { state: "idle" | "running" | "done" | "error"; step: string; progress: number; error?: string };
   subtitlesSource?: string;
+  cover?: string | null;
   meta: Meta | null;
   publications: Publication[];
 };
@@ -517,8 +518,23 @@ function ProcessStep({
         <div style={{ marginTop: 18 }}>
           <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed&t=${Date.now()}`} controls />
           <p className="hint" style={{ textAlign: "center", marginTop: 8 }}>
-            Субтитры: {project.subtitlesSource === "whisper" ? "по распознанной речи (Whisper)" : "по тексту сценария"}
+            Субтитры:{" "}
+            {project.subtitlesSource === "scribe"
+              ? "по речи (ElevenLabs Scribe)"
+              : project.subtitlesSource === "whisper"
+                ? "по речи (Whisper)"
+                : "по тексту сценария"}
           </p>
+          {project.cover && (
+            <div style={{ textAlign: "center", marginTop: 10 }}>
+              <img
+                src={`/api/projects/${project.id}/video?which=cover&t=${Date.now()}`}
+                alt="Обложка"
+                style={{ maxWidth: 160, borderRadius: 10, border: "1px solid var(--border)" }}
+              />
+              <p className="hint">Обложка (кадр + заголовок)</p>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -678,6 +694,11 @@ function PublishStep({
           <a className="btn btn-secondary" href={`/api/projects/${project.id}/video?which=processed`} download={`gudini-${project.id}.mp4`}>
             ⬇ Скачать готовое видео
           </a>
+          {project.cover && (
+            <a className="btn btn-secondary" href={`/api/projects/${project.id}/video?which=cover`} download={`gudini-${project.id}-cover.jpg`}>
+              ⬇ Обложка
+            </a>
+          )}
           <span className="hint">Готовый MP4 можно опубликовать вручную из приложения платформы</span>
         </div>
       </div>

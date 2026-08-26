@@ -3,6 +3,30 @@ import { getSettings } from "./store";
 
 export type Word = { word: string; start: number; end: number };
 
+/** Распознавание речи через ElevenLabs Scribe (пословные таймкоды, отлично для русского). */
+export async function scribeTranscribe(wavPath: string): Promise<Word[] | null> {
+  const key = getSettings().elevenLabsKey;
+  if (!key) return null;
+  const form = new FormData();
+  form.append("file", new Blob([fs.readFileSync(wavPath)], { type: "audio/wav" }), "audio.wav");
+  form.append("model_id", "scribe_v1");
+  form.append("tag_audio_events", "false");
+
+  const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+    method: "POST",
+    headers: { "xi-api-key": key },
+    body: form,
+  });
+  if (!res.ok) {
+    throw new Error(`ElevenLabs Scribe: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  }
+  const json: any = await res.json();
+  const words: Word[] = (json.words ?? [])
+    .filter((w: any) => w.type === "word" && String(w.text).trim())
+    .map((w: any) => ({ word: String(w.text).trim(), start: Number(w.start), end: Number(w.end) }));
+  return words.length ? words : null;
+}
+
 /** Распознавание речи через OpenAI Whisper (пословные таймкоды). */
 export async function whisperTranscribe(wavPath: string): Promise<Word[] | null> {
   const key = getSettings().openaiKey;

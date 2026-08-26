@@ -33,7 +33,9 @@ export type Project = {
   rawVideo: string | null; // имя файла в data/uploads/{id}/
   processedVideo: string | null;
   processing: ProcessingState;
-  subtitlesSource?: "whisper" | "script";
+  subtitlesSource?: "scribe" | "whisper" | "script";
+  cover?: string | null; // cover.jpg — обложка с заголовком
+  coverOffsetSec?: number; // момент видео, из которого взят кадр обложки
   meta: ProjectMeta | null;
   publications: Publication[];
 };
@@ -41,6 +43,7 @@ export type Project = {
 export type Settings = {
   anthropicKey?: string;
   openaiKey?: string;
+  elevenLabsKey?: string;
   googleClientId?: string;
   googleClientSecret?: string;
   tiktokClientKey?: string;
@@ -61,6 +64,15 @@ const DATA_DIR = path.join(process.cwd(), "data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
+export const MUSIC_FILE = path.join(DATA_DIR, "music.mp3");
+
+export function hasMusic(): boolean {
+  try {
+    return fs.statSync(MUSIC_FILE).size > 0;
+  } catch {
+    return false;
+  }
+}
 
 function ensureDirs() {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -152,6 +164,7 @@ export function getSettings(): Settings {
   return {
     anthropicKey: saved.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
     openaiKey: saved.openaiKey || process.env.OPENAI_API_KEY || undefined,
+    elevenLabsKey: saved.elevenLabsKey || process.env.ELEVENLABS_API_KEY || undefined,
     googleClientId: saved.googleClientId || process.env.GOOGLE_CLIENT_ID || undefined,
     googleClientSecret: saved.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET || undefined,
     tiktokClientKey: saved.tiktokClientKey || process.env.TIKTOK_CLIENT_KEY || undefined,

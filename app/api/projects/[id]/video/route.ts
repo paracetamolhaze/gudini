@@ -20,12 +20,22 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const project = getProject(id);
   if (!project) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
 
-  const which = req.nextUrl.searchParams.get("which") === "raw" ? "raw" : "processed";
-  const filename = which === "raw" ? project.rawVideo : project.processedVideo;
-  if (!filename) return NextResponse.json({ error: "Видео нет" }, { status: 404 });
+  const whichParam = req.nextUrl.searchParams.get("which");
+  const which = whichParam === "raw" ? "raw" : whichParam === "cover" ? "cover" : "processed";
+  const filename = which === "raw" ? project.rawVideo : which === "cover" ? project.cover : project.processedVideo;
+  if (!filename) return NextResponse.json({ error: "Файла нет" }, { status: 404 });
 
   const filePath = path.join(projectDir(id), filename);
   if (!fs.existsSync(filePath)) return NextResponse.json({ error: "Файл не найден" }, { status: 404 });
+
+  if (which === "cover") {
+    return new NextResponse(fs.createReadStream(filePath) as any, {
+      headers: {
+        "Content-Type": "image/jpeg",
+        "Content-Disposition": `inline; filename="gudini-cover.jpg"`,
+      },
+    });
+  }
 
   const stat = fs.statSync(filePath);
   const mime = MIME[path.extname(filename)] ?? "video/mp4";

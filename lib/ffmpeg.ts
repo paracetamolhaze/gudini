@@ -82,7 +82,55 @@ export function runFfmpeg(
   });
 }
 
-/** Извлекает аудио в WAV 16 кГц моно (для распознавания речи). */
-export async function extractAudio(inputFile: string, outputWav: string, cwd: string): Promise<void> {
-  await runFfmpeg(["-i", inputFile, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", outputWav], { cwd });
+/** Извлекает аудио в WAV 16 кГц моно (для распознавания речи), с необязательной обрезкой. */
+export async function extractAudio(
+  inputFile: string,
+  outputWav: string,
+  cwd: string,
+  trim?: { start: number; duration: number },
+): Promise<void> {
+  const pre = trim ? ["-ss", String(trim.start), "-t", String(trim.duration)] : [];
+  await runFfmpeg([...pre, "-i", inputFile, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", outputWav], { cwd });
+}
+
+/**
+ * Находит тишину в начале и конце ролика (паузы до/после речи) и возвращает
+ * границы полезной части. Если обрезать нечего — вернёт весь диапазон.
+ */
+export async function detectEdges(
+  file: string,
+  cwd: string,
+  duration: number,
+): Promise<{ start: number; end: number }> {
+  const stderr = await new Promise<string>((resolve, reject) => {
+    const proc = spawn(
+      ffmpegBin(),
+      ["-hide_banner", "-i", file, "-af", "silencedetect=n=-35dB:d=0.4", "-f", "null", "-"],
+      { cwd, windowsHide: true },
+    );
+    let out = "";
+    proc.stderr.on("data", (d) => (out += d));
+    proc.on("error", reject);
+    proc.on("close", () => resolve(out));
+  });
+
+  const events: { start: number; end?: number }[] = [];
+  for (const line of stderr.split("\n")) {
+    const s = line.match(/silence_start:\s*([\d.]+)/);
+    const e = line.match(/silence_end:\s*([\d.]+)/);
+    if (s) events.push({ start: parseFloat(s[1]) });
+    else if (e && events.length) events[events.length - 1].end = parseFloat(e[1]);
+  }
+
+  let start = 0;
+  let end = duration;
+  const first = events[0];
+  if (first && first.start <= 0.3 && first.end) start = Math.max(0, first.end - 0.2);
+  const last = events[events.length - 1];
+  if (last && (last.end === undefined || last.end >= duration - 0.3) && last.start > start) {
+    end = Math.min(duration, last.start + 0.3);
+  }
+  // защита от чрезмерной обрезки
+  if (end - start < 3) return { start: 0, end: duration };
+  return { start, end };
 }

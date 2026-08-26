@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSettings, saveSettings } from "@/lib/store";
+import { getSettings, hasMusic, saveSettings } from "@/lib/store";
 
 function mask(value?: string): string {
   if (!value) return "";
@@ -11,6 +11,8 @@ export async function GET() {
   return NextResponse.json({
     anthropicKey: mask(s.anthropicKey),
     openaiKey: mask(s.openaiKey),
+    elevenLabsKey: mask(s.elevenLabsKey),
+    music: hasMusic(),
     googleClientId: s.googleClientId ?? "",
     googleClientSecret: mask(s.googleClientSecret),
     tiktokClientKey: s.tiktokClientKey ?? "",
@@ -32,6 +34,7 @@ export async function GET() {
 const FIELDS = [
   "anthropicKey",
   "openaiKey",
+  "elevenLabsKey",
   "googleClientId",
   "googleClientSecret",
   "tiktokClientKey",

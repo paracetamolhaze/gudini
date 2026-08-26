@@ -6,6 +6,8 @@ import { useSearchParams } from "next/navigation";
 type SettingsView = {
   anthropicKey: string;
   openaiKey: string;
+  elevenLabsKey: string;
+  music: boolean;
   googleClientId: string;
   googleClientSecret: string;
   tiktokClientKey: string;
@@ -88,8 +90,53 @@ function Settings() {
         </p>
         <label>Anthropic API Key — сценарии и описания (console.anthropic.com)</label>
         <input type="password" value={s.anthropicKey} onChange={(e) => field("anthropicKey", e.target.value)} placeholder="sk-ant-…" />
-        <label>OpenAI API Key — Whisper, точные субтитры по речи (platform.openai.com)</label>
+        <label>ElevenLabs API Key — Scribe, точные субтитры по речи (elevenlabs.io → Profile → API Keys)</label>
+        <input type="password" value={s.elevenLabsKey} onChange={(e) => field("elevenLabsKey", e.target.value)} placeholder="xi-…" />
+        <label>OpenAI API Key — Whisper, запасной вариант субтитров (platform.openai.com)</label>
         <input type="password" value={s.openaiKey} onChange={(e) => field("openaiKey", e.target.value)} placeholder="sk-…" />
+      </div>
+
+      <div className="card">
+        <h2>🎵 Фоновая музыка</h2>
+        <p className="hint">
+          Загрузите трек (MP3, до 30 МБ) — он будет тихо играть под каждым роликом и автоматически приглушаться,
+          когда вы говорите. Используйте музыку, свободную от авторских прав (например, из фонотек платформ).
+        </p>
+        <div className="row" style={{ marginTop: 10 }}>
+          {s.music ? (
+            <>
+              <span className="badge success">Трек загружен ✓</span>
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={async () => {
+                  await fetch("/api/settings/music", { method: "DELETE" });
+                  setS((prev) => (prev ? { ...prev, music: false } : prev));
+                }}
+              >
+                Удалить
+              </button>
+            </>
+          ) : (
+            <span className="badge">Музыки нет — ролики монтируются без неё</span>
+          )}
+          <label className="btn btn-secondary btn-sm" style={{ margin: 0, cursor: "pointer" }}>
+            📁 Загрузить трек
+            <input
+              type="file"
+              accept="audio/*"
+              hidden
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const form = new FormData();
+                form.append("file", file);
+                const res = await fetch("/api/settings/music", { method: "POST", body: form });
+                if (res.ok) setS((prev) => (prev ? { ...prev, music: true } : prev));
+                else setError("Не удалось загрузить музыку");
+              }}
+            />
+          </label>
+        </div>
       </div>
 
       <div className="card">

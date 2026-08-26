@@ -48,11 +48,13 @@ export type Settings = {
   metaAppId?: string;
   metaAppSecret?: string;
   metaConfigId?: string;
+  igAppId?: string;
+  igAppSecret?: string;
   publicBaseUrl?: string;
   // OAuth-токены подключённых аккаунтов
   youtubeTokens?: { access_token: string; refresh_token?: string; expires_at?: number };
   tiktokTokens?: { access_token: string; refresh_token?: string; expires_at?: number; open_id?: string };
-  instagramTokens?: { access_token: string; ig_user_id?: string };
+  instagramTokens?: { access_token: string; ig_user_id?: string; via?: "ig" | "fb" };
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -157,6 +159,8 @@ export function getSettings(): Settings {
     metaAppId: saved.metaAppId || process.env.META_APP_ID || undefined,
     metaAppSecret: saved.metaAppSecret || process.env.META_APP_SECRET || undefined,
     metaConfigId: saved.metaConfigId || process.env.META_CONFIG_ID || undefined,
+    igAppId: saved.igAppId || process.env.IG_APP_ID || undefined,
+    igAppSecret: saved.igAppSecret || process.env.IG_APP_SECRET || undefined,
     publicBaseUrl: normalizeUrl(saved.publicBaseUrl || process.env.PUBLIC_BASE_URL),
     youtubeTokens: saved.youtubeTokens,
     tiktokTokens: saved.tiktokTokens,

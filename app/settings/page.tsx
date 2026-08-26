@@ -13,6 +13,8 @@ type SettingsView = {
   metaAppId: string;
   metaAppSecret: string;
   metaConfigId: string;
+  igAppId: string;
+  igAppSecret: string;
   publicBaseUrl: string;
   connected: { youtube: boolean; tiktok: boolean; instagram: boolean };
 };
@@ -119,18 +121,22 @@ function Settings() {
 
         <h3 style={{ margin: "22px 0 4px", fontSize: 15 }}>📸 Instagram Reels {s.connected.instagram && <span className="badge success">подключён</span>}</h3>
         <p className="hint">
-          developers.facebook.com → приложение с Instagram Graph API (нужен Business/Creator аккаунт, привязанный к
-          странице Facebook). Для Reels также нужен публичный URL сервера.
+          Рекомендуемый способ — прямой вход через Instagram: в приложении Meta откройте сценарий Instagram → «API
+          setup with Instagram business login» и возьмите оттуда Instagram App ID/Secret. Аккаунт должен быть
+          Business/Creator; Facebook-страница и бизнес-портфолио не нужны. Redirect URI:{" "}
+          <code>{origin}/api/auth/instagram/callback</code>
+        </p>
+        <label>Instagram App ID</label>
+        <input type="text" value={s.igAppId} onChange={(e) => field("igAppId", e.target.value)} />
+        <label>Instagram App Secret</label>
+        <input type="password" value={s.igAppSecret} onChange={(e) => field("igAppSecret", e.target.value)} />
+        <p className="hint" style={{ marginTop: 14 }}>
+          Запасной способ — вход через Facebook (нужна привязанная страница FB):
         </p>
         <label>Meta App ID</label>
         <input type="text" value={s.metaAppId} onChange={(e) => field("metaAppId", e.target.value)} />
         <label>Meta App Secret</label>
         <input type="password" value={s.metaAppSecret} onChange={(e) => field("metaAppSecret", e.target.value)} />
-        <label>
-          Meta Configuration ID — для «Входа через Facebook для бизнеса»: продукт Facebook Login → Configurations →
-          создать конфигурацию с разрешениями Instagram → скопировать ID
-        </label>
-        <input type="text" value={s.metaConfigId} onChange={(e) => field("metaConfigId", e.target.value)} placeholder="например 123456789012345" />
         <label>Публичный URL сервера (после деплоя, для Instagram)</label>
         <input type="text" value={s.publicBaseUrl} onChange={(e) => field("publicBaseUrl", e.target.value)} placeholder="https://mysite.com" />
       </div>

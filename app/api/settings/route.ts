@@ -18,6 +18,8 @@ export async function GET() {
     metaAppId: s.metaAppId ?? "",
     metaAppSecret: mask(s.metaAppSecret),
     metaConfigId: s.metaConfigId ?? "",
+    igAppId: s.igAppId ?? "",
+    igAppSecret: mask(s.igAppSecret),
     publicBaseUrl: s.publicBaseUrl ?? "",
     connected: {
       youtube: Boolean(s.youtubeTokens),
@@ -37,6 +39,8 @@ const FIELDS = [
   "metaAppId",
   "metaAppSecret",
   "metaConfigId",
+  "igAppId",
+  "igAppSecret",
   "publicBaseUrl",
 ] as const;
 

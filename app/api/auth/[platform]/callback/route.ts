@@ -61,6 +61,36 @@ export async function GET(req: NextRequest, { params }: Ctx) {
           open_id: json.open_id,
         },
       });
+    } else if (platform === "instagram" && s.igAppId && s.igAppSecret) {
+      // Прямой вход через Instagram: обмен кода → короткий токен → длинный токен (60 дней)
+      const cleanCode = code.replace(/#_$/, "");
+      const tokenRes = await fetch("https://api.instagram.com/oauth/access_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: s.igAppId,
+          client_secret: s.igAppSecret,
+          grant_type: "authorization_code",
+          redirect_uri: redirect,
+          code: cleanCode,
+        }),
+      });
+      const token: any = await tokenRes.json();
+      if (!token.access_token) throw new Error(JSON.stringify(token).slice(0, 300));
+
+      let accessToken: string = token.access_token;
+      try {
+        const longLived: any = await (
+          await fetch(
+            `https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=${s.igAppSecret}&access_token=${accessToken}`,
+          )
+        ).json();
+        if (longLived.access_token) accessToken = longLived.access_token;
+      } catch {}
+
+      saveSettings({
+        instagramTokens: { access_token: accessToken, ig_user_id: String(token.user_id), via: "ig" },
+      });
     } else if (platform === "instagram") {
       const tokenRes = await fetch(
         `https://graph.facebook.com/v21.0/oauth/access_token?` +
@@ -85,7 +115,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         igUserId = pages?.data?.find((p: any) => p.instagram_business_account)?.instagram_business_account?.id;
       } catch {}
 
-      saveSettings({ instagramTokens: { access_token: token.access_token, ig_user_id: igUserId } });
+      saveSettings({ instagramTokens: { access_token: token.access_token, ig_user_id: igUserId, via: "fb" } });
     } else {
       return NextResponse.redirect(`${origin}/settings?error=unknown_platform`);
     }

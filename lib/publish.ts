@@ -182,8 +182,10 @@ async function publishInstagram(id: string, title: string, description: string):
 
   const videoUrl = `${s.publicBaseUrl.replace(/\/$/, "")}/api/projects/${id}/video?which=processed`;
   const caption = `${title}\n\n${description}`.slice(0, 2200);
+  // прямой вход через Instagram → graph.instagram.com; вход через Facebook → graph.facebook.com
+  const graph = s.instagramTokens?.via === "ig" ? "https://graph.instagram.com" : "https://graph.facebook.com";
 
-  const containerRes = await fetch(`https://graph.facebook.com/v21.0/${igUser}/media`, {
+  const containerRes = await fetch(`${graph}/v21.0/${igUser}/media`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ media_type: "REELS", video_url: videoUrl, caption, access_token: token }),
@@ -195,13 +197,13 @@ async function publishInstagram(id: string, title: string, description: string):
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 5000));
     const st: any = await (
-      await fetch(`https://graph.facebook.com/v21.0/${container.id}?fields=status_code&access_token=${token}`)
+      await fetch(`${graph}/v21.0/${container.id}?fields=status_code&access_token=${token}`)
     ).json();
     if (st.status_code === "FINISHED") break;
     if (st.status_code === "ERROR") throw new Error("Instagram не смог обработать видео");
   }
 
-  const pubRes = await fetch(`https://graph.facebook.com/v21.0/${igUser}/media_publish`, {
+  const pubRes = await fetch(`${graph}/v21.0/${igUser}/media_publish`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ creation_id: container.id, access_token: token }),

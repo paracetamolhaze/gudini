@@ -43,7 +43,17 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   }
 
   if (platform === "instagram") {
-    if (!s.metaAppId) return missing("Meta App ID/Secret (developers.facebook.com → Instagram Graph API)");
+    // Современный путь: прямой вход через Instagram (Instagram API with Instagram Login) —
+    // не требует Facebook-страницы и бизнес-портфолио.
+    if (s.igAppId) {
+      const url = new URL("https://www.instagram.com/oauth/authorize");
+      url.searchParams.set("client_id", s.igAppId);
+      url.searchParams.set("redirect_uri", redirect);
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("scope", "instagram_business_basic,instagram_business_content_publish");
+      return NextResponse.redirect(url);
+    }
+    if (!s.metaAppId) return missing("Instagram App ID (Instagram API setup) или Meta App ID/Secret");
     const url = new URL("https://www.facebook.com/v21.0/dialog/oauth");
     url.searchParams.set("client_id", s.metaAppId);
     url.searchParams.set("redirect_uri", redirect);

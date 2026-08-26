@@ -1,0 +1,468 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #0a0a11;
+  --bg-card: #14141f;
+  --bg-input: #1c1c2b;
+  --border: #2a2a3d;
+  --text: #f0f0f5;
+  --text-dim: #9a9ab0;
+  --accent: #8b5cf6;
+  --accent2: #ec4899;
+  --gradient: linear-gradient(135deg, #8b5cf6, #ec4899);
+  --success: #34d399;
+  --error: #f87171;
+  --warn: #fbbf24;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 20px 80px;
+}
+
+/* ===== Шапка ===== */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 0;
+  margin-bottom: 24px;
+}
+
+.logo {
+  font-size: 26px;
+  font-weight: 800;
+  background: var(--gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  letter-spacing: 0.5px;
+}
+
+.logo-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.nav-link {
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  transition: all 0.15s;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* ===== Карточки ===== */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 16px;
+}
+
+.card h2 {
+  font-size: 18px;
+  margin-bottom: 14px;
+}
+
+.hint {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ===== Формы ===== */
+input[type="text"],
+input[type="password"],
+textarea,
+select {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 12px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.6;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 14px 0 6px;
+}
+
+/* ===== Кнопки ===== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--gradient);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 12px 22px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+  font-family: inherit;
+}
+
+.btn:hover {
+  opacity: 0.9;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.btn-secondary:hover {
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.btn-sm {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+.btn-danger {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--error);
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* ===== Шаги ===== */
+.steps {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+}
+
+.step {
+  flex: 1;
+  min-width: 110px;
+  text-align: center;
+  padding: 10px 6px;
+  border-radius: 10px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.step.active {
+  background: var(--gradient);
+  color: #fff;
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.step.done {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.step:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ===== Прогресс ===== */
+.progress-track {
+  background: var(--bg-input);
+  border-radius: 999px;
+  height: 12px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--gradient);
+  border-radius: 999px;
+  transition: width 0.4s;
+}
+
+/* ===== Список проектов ===== */
+.project-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 10px;
+  transition: border-color 0.15s;
+}
+
+.project-item:hover {
+  border-color: var(--accent);
+}
+
+.badge {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.badge.success {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.badge.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.badge.accent {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ===== Видео ===== */
+.video-preview {
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 9 / 16;
+  background: #000;
+  border-radius: 14px;
+  display: block;
+  margin: 0 auto;
+}
+
+/* ===== Дропзона ===== */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 14px;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--text-dim);
+}
+
+.dropzone:hover,
+.dropzone.drag {
+  border-color: var(--accent);
+  color: var(--text);
+  background: rgba(139, 92, 246, 0.05);
+}
+
+/* ===== Телесуфлёр ===== */
+.teleprompter-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 5, 10, 0.97);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+.teleprompter-text {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  max-width: 700px;
+  margin: 0 auto;
+  width: 100%;
+  mask-image: linear-gradient(to bottom, transparent, #000 15%, #000 85%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 15%, #000 85%, transparent);
+}
+
+.teleprompter-inner {
+  font-size: 34px;
+  line-height: 1.7;
+  font-weight: 600;
+  text-align: center;
+  white-space: pre-wrap;
+  padding: 45vh 10px;
+}
+
+.camera-pip {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 180px;
+  aspect-ratio: 9 / 16;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 2px solid var(--accent);
+  z-index: 101;
+  background: #000;
+}
+
+.rec-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--error);
+  animation: blink 1s infinite;
+  margin-right: 6px;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+/* ===== Платформы ===== */
+.platform-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.platform-card {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.platform-card h3 {
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.platform-status {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  min-height: 38px;
+}
+
+.hashtags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.hashtag {
+  background: rgba(139, 92, 246, 0.15);
+  color: #c4b5fd;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+}
+
+.error-box {
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: var(--error);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  margin: 10px 0;
+  line-height: 1.5;
+}
+
+.success-box {
+  background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  color: var(--success);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  margin: 10px 0;
+  line-height: 1.5;
+}
+
+.empty {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 50px 20px;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.spin {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

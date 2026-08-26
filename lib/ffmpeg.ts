@@ -111,19 +111,14 @@ export async function extractAudio(
   await runFfmpeg([...pre, "-i", inputFile, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", outputWav], { cwd });
 }
 
-/**
- * Находит тишину в начале и конце ролика (паузы до/после речи) и возвращает
- * границы полезной части. Если обрезать нечего — вернёт весь диапазон.
- */
-export async function detectEdges(
-  file: string,
-  cwd: string,
-  duration: number,
-): Promise<{ start: number; end: number }> {
+export type SilenceEvent = { start: number; end: number };
+
+/** Все участки тишины в файле (silencedetect). */
+export async function detectSilences(file: string, cwd: string, duration: number): Promise<SilenceEvent[]> {
   const stderr = await new Promise<string>((resolve, reject) => {
     const proc = spawn(
       ffmpegBin(),
-      ["-hide_banner", "-i", file, "-af", "silencedetect=n=-40dB:d=0.7", "-f", "null", "-"],
+      ["-hide_banner", "-i", file, "-af", "silencedetect=n=-40dB:d=0.6", "-f", "null", "-"],
       { cwd, windowsHide: true },
     );
     let out = "";
@@ -139,17 +134,44 @@ export async function detectEdges(
     if (s) events.push({ start: parseFloat(s[1]) });
     else if (e && events.length) events[events.length - 1].end = parseFloat(e[1]);
   }
+  return events.map((ev) => ({ start: ev.start, end: ev.end ?? duration }));
+}
 
+/**
+ * По списку тишин строит сегменты речи, которые остаются в ролике:
+ * обрезает края и вырезает длинные паузы внутри (оставляя естественный зазор).
+ */
+export function buildKeepSegments(
+  silences: SilenceEvent[],
+  duration: number,
+): { start: number; end: number }[] {
   let start = 0;
   let end = duration;
-  const first = events[0];
-  if (first && first.start <= 0.3 && first.end) start = Math.max(0, first.end - 0.25);
-  const last = events[events.length - 1];
-  // хвост режем осторожно: только явную тишину до самого конца, с запасом полсекунды
-  if (last && (last.end === undefined || last.end >= duration - 0.5) && last.start > start) {
-    end = Math.min(duration, last.start + 0.5);
+  const first = silences[0];
+  if (first && first.start <= 0.3 && first.end < duration) start = Math.max(0, first.end - 0.25);
+  const last = silences[silences.length - 1];
+  if (last && last.end >= duration - 0.5 && last.start > start) end = Math.min(duration, last.start + 0.5);
+  if (end - start < 3) {
+    start = 0;
+    end = duration;
   }
-  // защита от чрезмерной обрезки
-  if (end - start < 3) return { start: 0, end: duration };
-  return { start, end };
+
+  // внутренние паузы > 1.2 сек ужимаем до ~0.45 сек (0.25 до + 0.2 после)
+  const cuts: { start: number; end: number }[] = [];
+  for (const sil of silences) {
+    const s = Math.max(sil.start, start);
+    const e = Math.min(sil.end, end);
+    if (e - s > 1.2 && s > start + 0.5 && e < end - 0.5) {
+      cuts.push({ start: s + 0.25, end: e - 0.2 });
+    }
+  }
+
+  const segments: { start: number; end: number }[] = [];
+  let cursor = start;
+  for (const cut of cuts) {
+    if (cut.start > cursor + 0.2) segments.push({ start: cursor, end: cut.start });
+    cursor = Math.max(cursor, cut.end);
+  }
+  if (end > cursor + 0.2) segments.push({ start: cursor, end });
+  return segments.length ? segments : [{ start, end }];
 }

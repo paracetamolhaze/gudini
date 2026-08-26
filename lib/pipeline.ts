@@ -5,6 +5,7 @@ import { probe, runFfmpeg, extractAudio, detectEdges } from "./ffmpeg";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { buildAss } from "./subtitles";
 import { generateMeta } from "./ai";
+import { prepareBroll, BrollClip } from "./broll";
 
 const running = new Set<string>();
 
@@ -66,6 +67,15 @@ export async function processProject(id: string): Promise<void> {
     setStep(id, "Генерация субтитров", 20);
     fs.writeFileSync(path.join(dir, "subs.ass"), buildAss(words), "utf8");
 
+    // --- Б-роллы: перебивки поверх стримера на визуализируемых фразах ---
+    setStep(id, "Подбор перебивок (б-ролл)", 22);
+    let broll: BrollClip[] = [];
+    try {
+      broll = await prepareBroll(dir, words, project.topic);
+    } catch (e) {
+      console.warn("Б-роллы пропущены:", e);
+    }
+
     // --- Метаданные (нужны до обложки — на ней заголовок) ---
     setStep(id, "Описание и хэштеги", 24);
     let meta = getProject(id)?.meta ?? null;
@@ -82,10 +92,23 @@ export async function processProject(id: string): Promise<void> {
     setStep(id, "Монтаж видео", 28);
     const music = hasMusic();
     const totalFrames = Math.max(1, Math.round(effDur * 30));
-    const videoChain =
+
+    // базовая картинка стримера
+    let videoChain =
       `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,` +
-      `zoompan=z=1+0.07*in/${totalFrames}:d=1:x=(iw-iw/zoom)/2:y=(ih-ih/zoom)/2:s=1080x1920:fps=30,` +
-      `ass=subs.ass[v]`;
+      `zoompan=z=1+0.07*in/${totalFrames}:d=1:x=(iw-iw/zoom)/2:y=(ih-ih/zoom)/2:s=1080x1920:fps=30[v0]`;
+    // перебивки поверх (голос стримера продолжает идти)
+    broll.forEach((clip, k) => {
+      const inputIdx = (music ? 2 : 1) + k;
+      const dur = (clip.end - clip.start).toFixed(3);
+      videoChain +=
+        `;[${inputIdx}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,` +
+        `trim=duration=${dur},setpts=PTS-STARTPTS+${clip.start.toFixed(3)}/TB[bv${k}]` +
+        `;[v${k}][bv${k}]overlay=eof_action=pass:enable='between(t,${clip.start.toFixed(3)},${clip.end.toFixed(3)})'[v${k + 1}]`;
+    });
+    // субтитры поверх всего
+    videoChain += `;[v${broll.length}]ass=subs.ass[v]`;
+
     const audioChain = music
       ? `[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[vo];` +
         `[1:a]volume=0.22[mus];` +
@@ -97,6 +120,7 @@ export async function processProject(id: string): Promise<void> {
       [
         "-ss", String(start), "-t", String(effDur), "-i", raw,
         ...(music ? ["-stream_loop", "-1", "-i", MUSIC_FILE] : []),
+        ...broll.flatMap((clip) => ["-i", clip.file]),
         "-filter_complex", `${videoChain};${audioChain}`,
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -132,6 +156,7 @@ export async function processProject(id: string): Promise<void> {
       subtitlesSource: source,
       cover,
       coverOffsetSec: coverOffset,
+      brollCount: broll.length,
       meta,
       processing: { state: "done", step: "Готово", progress: 100 },
     });

@@ -70,6 +70,42 @@ export async function generateMeta(topic: string, script: string): Promise<{ met
   }
 }
 
+// ===== План б-роллов (перебивок) =====
+
+export type BrollPlan = { from: number; to: number; query: string };
+
+const BROLL_SYSTEM = `Ты — монтажёр коротких вертикальных видео. Тебе дают слова речи с индексами.
+Выбери 2–4 фразы (3–8 подряд идущих слов), которые стоит проиллюстрировать видеоперебивкой (б-роллом):
+конкретные, визуализируемые вещи — места, животные, предметы, действия. Не выбирай абстракции и связки.
+Фразы не должны пересекаться и не должны стоять в самом начале ролика (первые 2 слова — лицо автора).
+Ответь СТРОГО валидным JSON-массивом без пояснений:
+[{"from": индекс_первого_слова, "to": индекс_последнего_слова, "query": "запрос для видеостока на английском, 2-4 слова"}]`;
+
+export async function planBrollSegments(
+  words: { word: string }[],
+  topic: string,
+): Promise<BrollPlan[] | null> {
+  const c = client();
+  if (!c) return null;
+  const list = words.map((w, i) => `${i}:${w.word}`).join(" ");
+  const response = await c.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    system: BROLL_SYSTEM,
+    messages: [{ role: "user", content: `Тема видео: ${topic}\n\nСлова:\n${list}` }],
+  });
+  try {
+    const raw = textOf(response).replace(/^```(json)?/m, "").replace(/```$/m, "").trim();
+    const json = JSON.parse(raw);
+    if (!Array.isArray(json)) return null;
+    return json
+      .map((s: any) => ({ from: Number(s.from), to: Number(s.to), query: String(s.query ?? "") }))
+      .filter((s) => Number.isFinite(s.from) && Number.isFinite(s.to) && s.to >= s.from && s.query);
+  } catch {
+    return null;
+  }
+}
+
 // ===== Демо-режим (без API-ключа) =====
 
 function demoScript(topic: string): string {

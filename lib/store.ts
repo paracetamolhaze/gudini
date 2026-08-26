@@ -36,6 +36,7 @@ export type Project = {
   subtitlesSource?: "scribe" | "whisper" | "script";
   cover?: string | null; // cover.jpg — обложка с заголовком
   coverOffsetSec?: number; // момент видео, из которого взят кадр обложки
+  brollCount?: number; // сколько б-ролл перебивок вошло в монтаж
   meta: ProjectMeta | null;
   publications: Publication[];
 };
@@ -44,6 +45,7 @@ export type Settings = {
   anthropicKey?: string;
   openaiKey?: string;
   elevenLabsKey?: string;
+  pexelsKey?: string;
   googleClientId?: string;
   googleClientSecret?: string;
   tiktokClientKey?: string;
@@ -165,6 +167,7 @@ export function getSettings(): Settings {
     anthropicKey: saved.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
     openaiKey: saved.openaiKey || process.env.OPENAI_API_KEY || undefined,
     elevenLabsKey: saved.elevenLabsKey || process.env.ELEVENLABS_API_KEY || undefined,
+    pexelsKey: saved.pexelsKey || process.env.PEXELS_API_KEY || undefined,
     googleClientId: saved.googleClientId || process.env.GOOGLE_CLIENT_ID || undefined,
     googleClientSecret: saved.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET || undefined,
     tiktokClientKey: saved.tiktokClientKey || process.env.TIKTOK_CLIENT_KEY || undefined,

@@ -14,6 +14,7 @@ type Project = {
   processing: { state: "idle" | "running" | "done" | "error"; step: string; progress: number; error?: string };
   subtitlesSource?: string;
   cover?: string | null;
+  brollCount?: number;
   meta: Meta | null;
   publications: Publication[];
 };
@@ -524,6 +525,7 @@ function ProcessStep({
               : project.subtitlesSource === "whisper"
                 ? "по речи (Whisper)"
                 : "по тексту сценария"}
+            {project.brollCount ? ` · перебивок: ${project.brollCount}` : ""}
           </p>
           {project.cover && (
             <div style={{ textAlign: "center", marginTop: 10 }}>

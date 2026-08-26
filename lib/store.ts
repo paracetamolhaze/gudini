@@ -47,6 +47,7 @@ export type Settings = {
   tiktokClientSecret?: string;
   metaAppId?: string;
   metaAppSecret?: string;
+  metaConfigId?: string;
   publicBaseUrl?: string;
   // OAuth-токены подключённых аккаунтов
   youtubeTokens?: { access_token: string; refresh_token?: string; expires_at?: number };
@@ -155,6 +156,7 @@ export function getSettings(): Settings {
     tiktokClientSecret: saved.tiktokClientSecret || process.env.TIKTOK_CLIENT_SECRET || undefined,
     metaAppId: saved.metaAppId || process.env.META_APP_ID || undefined,
     metaAppSecret: saved.metaAppSecret || process.env.META_APP_SECRET || undefined,
+    metaConfigId: saved.metaConfigId || process.env.META_CONFIG_ID || undefined,
     publicBaseUrl: normalizeUrl(saved.publicBaseUrl || process.env.PUBLIC_BASE_URL),
     youtubeTokens: saved.youtubeTokens,
     tiktokTokens: saved.tiktokTokens,

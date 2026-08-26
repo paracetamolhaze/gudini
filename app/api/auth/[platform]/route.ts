@@ -48,10 +48,15 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     url.searchParams.set("client_id", s.metaAppId);
     url.searchParams.set("redirect_uri", redirect);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set(
-      "scope",
-      "instagram_basic,instagram_content_publish,pages_show_list,business_management",
-    );
+    if (s.metaConfigId) {
+      // «Вход через Facebook для бизнеса» принимает только ID конфигурации, не список scope
+      url.searchParams.set("config_id", s.metaConfigId);
+    } else {
+      url.searchParams.set(
+        "scope",
+        "instagram_basic,instagram_content_publish,pages_show_list,business_management",
+      );
+    }
     return NextResponse.redirect(url);
   }
 

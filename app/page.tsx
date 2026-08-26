@@ -25,8 +25,15 @@ function statusBadge(p: Project) {
   return <span className="badge">Новый</span>;
 }
 
+const PLATFORM_LABELS: { key: string; name: string; icon: string }[] = [
+  { key: "youtube", name: "YouTube", icon: "▶️" },
+  { key: "tiktok", name: "TikTok", icon: "🎵" },
+  { key: "instagram", name: "Reels", icon: "📸" },
+];
+
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
+  const [connected, setConnected] = useState<Record<string, boolean> | null>(null);
   const [topic, setTopic] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -37,6 +44,10 @@ export default function Dashboard() {
       .then((r) => r.json())
       .then(setProjects)
       .catch(() => setProjects([]));
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((s) => setConnected(s.connected ?? {}))
+      .catch(() => setConnected({}));
   }, []);
 
   async function create() {
@@ -66,6 +77,17 @@ export default function Dashboard() {
 
   return (
     <main>
+      <div className="row" style={{ marginBottom: 14 }}>
+        <span className="hint">Аккаунты публикации:</span>
+        {PLATFORM_LABELS.map(({ key, name, icon }) => (
+          <span key={key} className={`badge ${connected?.[key] ? "success" : ""}`}>
+            {icon} {name} {connected === null ? "…" : connected[key] ? "✓ подключён" : "не подключён"}
+          </span>
+        ))}
+        <Link className="hint" href="/settings" style={{ textDecoration: "underline" }}>
+          настроить →
+        </Link>
+      </div>
       <div className="card">
         <h2>🎬 Новое видео</h2>
         <p className="hint">

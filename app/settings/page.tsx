@@ -12,6 +12,7 @@ type SettingsView = {
   tiktokClientSecret: string;
   metaAppId: string;
   metaAppSecret: string;
+  metaConfigId: string;
   publicBaseUrl: string;
   connected: { youtube: boolean; tiktok: boolean; instagram: boolean };
 };
@@ -125,6 +126,11 @@ function Settings() {
         <input type="text" value={s.metaAppId} onChange={(e) => field("metaAppId", e.target.value)} />
         <label>Meta App Secret</label>
         <input type="password" value={s.metaAppSecret} onChange={(e) => field("metaAppSecret", e.target.value)} />
+        <label>
+          Meta Configuration ID — для «Входа через Facebook для бизнеса»: продукт Facebook Login → Configurations →
+          создать конфигурацию с разрешениями Instagram → скопировать ID
+        </label>
+        <input type="text" value={s.metaConfigId} onChange={(e) => field("metaConfigId", e.target.value)} placeholder="например 123456789012345" />
         <label>Публичный URL сервера (после деплоя, для Instagram)</label>
         <input type="text" value={s.publicBaseUrl} onChange={(e) => field("publicBaseUrl", e.target.value)} placeholder="https://mysite.com" />
       </div>

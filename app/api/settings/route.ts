@@ -17,6 +17,7 @@ export async function GET() {
     tiktokClientSecret: mask(s.tiktokClientSecret),
     metaAppId: s.metaAppId ?? "",
     metaAppSecret: mask(s.metaAppSecret),
+    metaConfigId: s.metaConfigId ?? "",
     publicBaseUrl: s.publicBaseUrl ?? "",
     connected: {
       youtube: Boolean(s.youtubeTokens),
@@ -35,6 +36,7 @@ const FIELDS = [
   "tiktokClientSecret",
   "metaAppId",
   "metaAppSecret",
+  "metaConfigId",
   "publicBaseUrl",
 ] as const;
 

@@ -8,6 +8,7 @@ type SettingsView = {
   openaiKey: string;
   elevenLabsKey: string;
   pexelsKey: string;
+  pixabayKey: string;
   music: boolean;
   googleClientId: string;
   googleClientSecret: string;
@@ -97,6 +98,8 @@ function Settings() {
         <input type="password" value={s.openaiKey} onChange={(e) => field("openaiKey", e.target.value)} placeholder="sk-…" />
         <label>Pexels API Key — стоковые видео для б-ролл перебивок, бесплатно (pexels.com/api)</label>
         <input type="password" value={s.pexelsKey} onChange={(e) => field("pexelsKey", e.target.value)} />
+        <label>Pixabay API Key — второй источник стока, бесплатно (pixabay.com/api/docs)</label>
+        <input type="password" value={s.pixabayKey} onChange={(e) => field("pixabayKey", e.target.value)} />
       </div>
 
       <div className="card">

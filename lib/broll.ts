@@ -67,10 +67,16 @@ function heuristicPlan(words: Word[]): { from: number; to: number; query: string
   });
 }
 
-/** Ищет и скачивает вертикальный стоковый ролик с Pexels. */
+/** Ищет и скачивает стоковый ролик: сначала Pexels, затем Pixabay. */
 export async function fetchStockVideo(query: string, minDuration: number, outPath: string): Promise<boolean> {
+  if (!query.trim()) return false;
+  if (await fetchPexels(query, minDuration, outPath)) return true;
+  return fetchPixabay(query, minDuration, outPath);
+}
+
+async function fetchPexels(query: string, minDuration: number, outPath: string): Promise<boolean> {
   const key = getSettings().pexelsKey;
-  if (!key || !query.trim()) return false;
+  if (!key) return false;
 
   const url = new URL("https://api.pexels.com/videos/search");
   url.searchParams.set("query", query);
@@ -89,6 +95,33 @@ export async function fetchStockVideo(query: string, minDuration: number, outPat
     const file = files[0];
     if (!file) continue;
     const download = await fetch(file.link);
+    if (!download.ok) continue;
+    const buffer = Buffer.from(await download.arrayBuffer());
+    if (buffer.length < 50_000) continue;
+    fs.writeFileSync(outPath, buffer);
+    return true;
+  }
+  return false;
+}
+
+async function fetchPixabay(query: string, minDuration: number, outPath: string): Promise<boolean> {
+  const key = getSettings().pixabayKey;
+  if (!key) return false;
+
+  const url = new URL("https://pixabay.com/api/videos/");
+  url.searchParams.set("key", key);
+  url.searchParams.set("q", query);
+  url.searchParams.set("per_page", "5");
+  url.searchParams.set("safesearch", "true");
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Pixabay: ${res.status} ${(await res.text()).slice(0, 200)}`);
+  const json: any = await res.json();
+
+  for (const hit of json.hits ?? []) {
+    if ((hit.duration ?? 0) < Math.max(2, minDuration)) continue;
+    const variant = hit.videos?.large?.url ? hit.videos.large : hit.videos?.medium;
+    if (!variant?.url) continue;
+    const download = await fetch(variant.url);
     if (!download.ok) continue;
     const buffer = Buffer.from(await download.arrayBuffer());
     if (buffer.length < 50_000) continue;

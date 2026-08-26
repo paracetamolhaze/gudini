@@ -8,6 +8,7 @@ export type ProcessingState = {
   step: string;
   progress: number; // 0..100
   error?: string;
+  at?: string; // время последнего обновления — для обнаружения зависших задач
 };
 
 export type Publication = {
@@ -134,9 +135,18 @@ export function updateProject(id: string, patch: Partial<Project>): Project | nu
   const db = readDb();
   const idx = db.projects.findIndex((p) => p.id === id);
   if (idx === -1) return null;
+  if (patch.processing) patch.processing = { ...patch.processing, at: new Date().toISOString() };
   db.projects[idx] = { ...db.projects[idx], ...patch };
   writeDb(db);
   return db.projects[idx];
+}
+
+/** Вставка/замена проекта целиком (используется воркером монтажа). */
+export function upsertProject(project: Project) {
+  const db = readDb();
+  db.projects = db.projects.filter((p) => p.id !== project.id);
+  db.projects.push(project);
+  writeDb(db);
 }
 
 export function deleteProject(id: string): boolean {

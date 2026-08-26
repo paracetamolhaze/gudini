@@ -9,6 +9,7 @@ type SettingsView = {
   elevenLabsKey: string;
   pexelsKey: string;
   pixabayKey: string;
+  runwayKey: string;
   music: boolean;
   googleClientId: string;
   googleClientSecret: string;
@@ -100,6 +101,11 @@ function Settings() {
         <input type="password" value={s.pexelsKey} onChange={(e) => field("pexelsKey", e.target.value)} />
         <label>Pixabay API Key — второй источник стока, бесплатно (pixabay.com/api/docs)</label>
         <input type="password" value={s.pixabayKey} onChange={(e) => field("pixabayKey", e.target.value)} />
+        <label>
+          Runway API Key — ИИ-генерация перебивок точно под фразу (dev.runwayml.com, ~$0.30 за клип). Если ключ
+          вставлен — используется вместо стока; сток остаётся запасным.
+        </label>
+        <input type="password" value={s.runwayKey} onChange={(e) => field("runwayKey", e.target.value)} placeholder="key_…" />
       </div>
 
       <div className="card">

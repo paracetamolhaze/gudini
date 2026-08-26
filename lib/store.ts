@@ -47,6 +47,7 @@ export type Settings = {
   elevenLabsKey?: string;
   pexelsKey?: string;
   pixabayKey?: string;
+  runwayKey?: string;
   googleClientId?: string;
   googleClientSecret?: string;
   tiktokClientKey?: string;
@@ -170,6 +171,7 @@ export function getSettings(): Settings {
     elevenLabsKey: saved.elevenLabsKey || process.env.ELEVENLABS_API_KEY || undefined,
     pexelsKey: saved.pexelsKey || process.env.PEXELS_API_KEY || undefined,
     pixabayKey: saved.pixabayKey || process.env.PIXABAY_API_KEY || undefined,
+    runwayKey: saved.runwayKey || process.env.RUNWAY_API_KEY || undefined,
     googleClientId: saved.googleClientId || process.env.GOOGLE_CLIENT_ID || undefined,
     googleClientSecret: saved.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET || undefined,
     tiktokClientKey: saved.tiktokClientKey || process.env.TIKTOK_CLIENT_KEY || undefined,

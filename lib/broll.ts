@@ -10,9 +10,9 @@ const MIN_LEN = 1.2; // сек
 const MAX_LEN = 4.0;
 
 /**
- * Готовит перебивки: ИИ (или эвристика) выбирает фразы, для каждой берётся ролик:
- * уже лежащий в проекте broll{k}.mp4 или скачанный со стока Pexels.
- * Без источников видео возвращает пустой список — монтаж идёт без перебивок.
+ * Готовит перебивки: ИИ (или эвристика) выбирает фразы, для каждой берётся ролик.
+ * Приоритет источника: файл broll{k}.mp4 в проекте → Runway (ИИ-генерация, если есть ключ) →
+ * сток Pexels/Pixabay. Без источников возвращает пустой список — монтаж идёт без перебивок.
  */
 export async function prepareBroll(dir: string, words: Word[], topic: string): Promise<BrollClip[]> {
   if (words.length < 10) return [];
@@ -21,34 +21,106 @@ export async function prepareBroll(dir: string, words: Word[], topic: string): P
   let plans = await planBrollSegments(words, topic).catch(() => null);
   if (!plans || !plans.length) plans = heuristicPlan(words);
 
-  const clips: BrollClip[] = [];
-  let k = 0;
+  // --- раскладка по времени без пересечений ---
+  const segments: BrollClip[] = [];
   for (const plan of plans.slice(0, 4)) {
     const from = Math.max(0, Math.min(plan.from, words.length - 1));
     const to = Math.max(from, Math.min(plan.to, words.length - 1));
-    let start = words[from].start;
+    const start = words[from].start;
     let end = Math.min(words[to].end + 0.15, start + MAX_LEN);
     if (end - start < MIN_LEN) end = start + MIN_LEN;
-    // не пересекаться с предыдущей перебивкой
-    const prev = clips[clips.length - 1];
+    const prev = segments[segments.length - 1];
     if (prev && start < prev.end + 0.8) continue;
+    segments.push({ start, end, file: `broll${segments.length}.mp4`, query: plan.query });
+  }
 
-    const file = `broll${k}.mp4`;
-    const full = path.join(dir, file);
-    let ok = fs.existsSync(full);
-    if (!ok) {
+  // --- материалы (параллельно) ---
+  const results = await Promise.all(
+    segments.map(async (seg) => {
+      const full = path.join(dir, seg.file);
+      if (fs.existsSync(full)) return seg;
+      const runway = Boolean(getSettings().runwayKey);
       try {
-        ok = await fetchStockVideo(plan.query, end - start, full);
+        if (runway && (await generateRunwayVideo(seg.query, full))) return seg;
       } catch (e) {
-        console.warn(`Б-ролл «${plan.query}» не скачался:`, e);
+        console.warn(`Runway «${seg.query}» не сгенерировался:`, e);
       }
+      try {
+        if (await fetchStockVideo(seg.query, seg.end - seg.start, full)) return seg;
+      } catch (e) {
+        console.warn(`Б-ролл «${seg.query}» не скачался:`, e);
+      }
+      return null;
+    }),
+  );
+
+  return results.filter((c): c is BrollClip => c !== null);
+}
+
+// ===== Runway: ИИ-генерация перебивки под точную фразу =====
+
+const RUNWAY_BASE = "https://api.dev.runwayml.com/v1";
+
+async function generateRunwayVideo(query: string, outPath: string): Promise<boolean> {
+  const key = getSettings().runwayKey;
+  if (!key || !query.trim()) return false;
+  const headers = {
+    Authorization: `Bearer ${key}`,
+    "X-Runway-Version": "2024-11-06",
+    "Content-Type": "application/json",
+  };
+
+  // 1) кадр по описанию
+  const imageTask = await runwayPost("/text_to_image", headers, {
+    model: "gen4_image",
+    promptText: `${query}, vertical cinematic shot, realistic, high detail`,
+    ratio: "1080:1920",
+  });
+  const imageUrl = await runwayWait(imageTask, headers);
+
+  // 2) оживляем кадр в 5-секундный клип
+  const videoTask = await runwayPost("/image_to_video", headers, {
+    model: "gen4_turbo",
+    promptImage: imageUrl,
+    promptText: query,
+    ratio: "720:1280",
+    duration: 5,
+  });
+  const videoUrl = await runwayWait(videoTask, headers);
+
+  const download = await fetch(videoUrl);
+  if (!download.ok) throw new Error(`Runway download: ${download.status}`);
+  const buffer = Buffer.from(await download.arrayBuffer());
+  if (buffer.length < 50_000) throw new Error("Runway вернул пустой файл");
+  fs.writeFileSync(outPath, buffer);
+  return true;
+}
+
+async function runwayPost(endpoint: string, headers: Record<string, string>, body: unknown): Promise<string> {
+  const res = await fetch(RUNWAY_BASE + endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`Runway ${endpoint}: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  const json: any = await res.json();
+  if (!json.id) throw new Error(`Runway ${endpoint}: нет id задачи`);
+  return json.id;
+}
+
+/** Ждёт завершения задачи Runway (до 5 минут), возвращает URL результата. */
+async function runwayWait(taskId: string, headers: Record<string, string>): Promise<string> {
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const res = await fetch(`${RUNWAY_BASE}/tasks/${taskId}`, { headers });
+    if (!res.ok) throw new Error(`Runway task: ${res.status}`);
+    const json: any = await res.json();
+    if (json.status === "SUCCEEDED") {
+      const url = Array.isArray(json.output) ? json.output[0] : json.output;
+      if (!url) throw new Error("Runway: задача завершилась без результата");
+      return String(url);
     }
-    if (ok) {
-      clips.push({ start, end, file, query: plan.query });
-      k++;
+    if (json.status === "FAILED" || json.status === "CANCELLED") {
+      throw new Error(`Runway: ${json.status} ${json.failure ?? json.failureCode ?? ""}`);
     }
   }
-  return clips;
+  throw new Error("Runway: задача не завершилась за 5 минут");
 }
 
 /** Эвристика без ИИ: три окна по 3 слова на 25/50/75% ролика, запрос — сами слова. */

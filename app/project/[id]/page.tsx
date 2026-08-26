@@ -187,43 +187,50 @@ function RecordStep({
   const [prompterOpen, setPrompterOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  function upload(file: File) {
+  async function upload(file: File) {
     setError("");
     setUploading(true);
     setUploadPct(0);
-    const xhr = new XMLHttpRequest();
-    // потоковая загрузка: тело — сам файл, имя — в заголовке
-    xhr.open("PUT", `/api/projects/${project.id}/upload`);
-    xhr.setRequestHeader("x-filename", file.name || "record.webm");
-    xhr.setRequestHeader("x-file-size", String(file.size));
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) setUploadPct(Math.round((e.loaded / e.total) * 100));
-    };
-    xhr.onload = async () => {
-      setUploading(false);
-      if (xhr.status === 200) {
-        try {
-          const json = JSON.parse(xhr.responseText);
-          if (json.uploadedSize && json.uploadedSize !== file.size) {
-            setError(`Загрузка неполная: дошло ${json.uploadedSize} из ${file.size} байт — повторите`);
-            return;
+    // грузим кусками по 4 МБ: большие тела запросов режутся прокси хостинга
+    const CHUNK = 4 * 1024 * 1024;
+    const name = file.name || "record.webm";
+    let offset = 0;
+    try {
+      while (offset < file.size) {
+        const chunk = file.slice(offset, Math.min(offset + CHUNK, file.size));
+        let attempt = 0;
+        for (;;) {
+          const res = await fetch(`/api/projects/${project.id}/upload`, {
+            method: "PUT",
+            headers: {
+              "x-filename": name,
+              "x-file-size": String(file.size),
+              "x-offset": String(offset),
+            },
+            body: chunk,
+          });
+          const json: any = await res.json().catch(() => ({}));
+          if (res.ok) {
+            offset = typeof json.received === "number" ? json.received : offset + chunk.size;
+            if (json.uploadedSize) offset = file.size;
+            break;
           }
-        } catch {}
-        await reload();
-        onNext();
-      } else {
-        let reason = xhr.responseText.slice(0, 300);
-        try {
-          reason = JSON.parse(xhr.responseText).error ?? reason;
-        } catch {}
-        setError(`Ошибка загрузки (HTTP ${xhr.status}): ${reason || "сервер не вернул причину"}`);
+          if (res.status === 409 && typeof json.received === "number") {
+            offset = json.received; // продолжаем с фактического места
+            break;
+          }
+          if (++attempt >= 3) throw new Error(json.error ?? `HTTP ${res.status}`);
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        setUploadPct(Math.round((offset / file.size) * 100));
       }
-    };
-    xhr.onerror = () => {
       setUploading(false);
-      setError("Сеть оборвалась во время загрузки — попробуйте ещё раз");
-    };
-    xhr.send(file);
+      await reload();
+      onNext();
+    } catch (e: any) {
+      setUploading(false);
+      setError(`Ошибка загрузки: ${String(e?.message ?? e)}`);
+    }
   }
 
   return (

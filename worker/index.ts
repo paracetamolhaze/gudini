@@ -50,13 +50,38 @@ async function downloadRaw(project: Project): Promise<void> {
 async function uploadResult(id: string, file: string, which: "out" | "cover"): Promise<void> {
   const full = path.join(projectDir(id), file);
   if (!fs.existsSync(full)) return;
-  const res = await fetch(`${SITE}/api/worker/result/${id}?file=${which}`, {
-    method: "PUT",
-    headers: { Authorization: AUTH, "Content-Type": "application/octet-stream" },
-    body: new Uint8Array(fs.readFileSync(full)),
-  });
-  if (!res.ok) throw new Error(`Загрузка ${file}: ${res.status}`);
-  console.log(`  залит ${file}`);
+  // кусками по 4 МБ: прокси хостинга обрывает большие тела запросов
+  const CHUNK = 4 * 1024 * 1024;
+  const data = fs.readFileSync(full);
+  let offset = 0;
+  while (offset < data.length) {
+    const chunk = data.subarray(offset, Math.min(offset + CHUNK, data.length));
+    let attempt = 0;
+    for (;;) {
+      const res = await fetch(`${SITE}/api/worker/result/${id}?file=${which}`, {
+        method: "PUT",
+        headers: {
+          Authorization: AUTH,
+          "Content-Type": "application/octet-stream",
+          "x-offset": String(offset),
+          "x-file-size": String(data.length),
+        },
+        body: new Uint8Array(chunk),
+      });
+      const json: any = await res.json().catch(() => ({}));
+      if (res.ok) {
+        offset = json.done ? data.length : typeof json.received === "number" ? json.received : offset + chunk.length;
+        break;
+      }
+      if (res.status === 409 && typeof json.received === "number") {
+        offset = json.received;
+        break;
+      }
+      if (++attempt >= 3) throw new Error(`Загрузка ${file}: ${res.status} ${json.error ?? ""}`);
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+  console.log(`  залит ${file} (${(data.length / 1e6).toFixed(1)} МБ)`);
 }
 
 async function runJob(id: string): Promise<void> {

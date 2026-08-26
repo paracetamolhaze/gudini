@@ -6,8 +6,8 @@ import { Word } from "./transcribe";
 
 export type BrollClip = { start: number; end: number; file: string; query: string };
 
-const MIN_LEN = 1.2; // сек
-const MAX_LEN = 4.0;
+const MIN_LEN = 2.0; // сек
+const MAX_LEN = 5.0;
 
 /**
  * Готовит перебивки: ИИ (или эвристика) выбирает фразы, для каждой берётся ролик.
@@ -23,7 +23,7 @@ export async function prepareBroll(dir: string, words: Word[], topic: string): P
 
   // --- раскладка по времени без пересечений ---
   const segments: BrollClip[] = [];
-  for (const plan of plans.slice(0, 4)) {
+  for (const plan of plans.slice(0, 6)) {
     const from = Math.max(0, Math.min(plan.from, words.length - 1));
     const to = Math.max(from, Math.min(plan.to, words.length - 1));
     const start = words[from].start;
@@ -123,9 +123,9 @@ async function runwayWait(taskId: string, headers: Record<string, string>): Prom
   throw new Error("Runway: задача не завершилась за 5 минут");
 }
 
-/** Эвристика без ИИ: три окна по 3 слова на 25/50/75% ролика, запрос — сами слова. */
+/** Эвристика без ИИ: окна по 3 слова равномерно по ролику, запрос — сами слова. */
 function heuristicPlan(words: Word[]): { from: number; to: number; query: string }[] {
-  const spots = [0.25, 0.5, 0.75];
+  const spots = [0.15, 0.32, 0.5, 0.68, 0.85];
   return spots.map((fraction) => {
     const center = Math.floor(words.length * fraction);
     const from = Math.max(2, center - 1);

@@ -1,8 +1,8 @@
 import { Word } from "./transcribe";
 
 /**
- * Генерирует ASS-субтитры в стиле вирусных Reels:
- * крупные слова по центру, активное слово подсвечивается жёлтым (караоке-эффект).
+ * Генерирует ASS-субтитры: крупные белые слова аккуратным шрифтом,
+ * чёрная обводка и мягкая тень — читаются на любом фоне.
  */
 export function buildAss(words: Word[]): string {
   const header = `[Script Info]
@@ -14,7 +14,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Arial,88,&H0000E5FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,9,2,2,60,60,560,1
+Style: Caption,Arial,80,&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,-1,0,0,0,100,100,0.5,0,1,6,2.5,2,70,70,560,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -24,14 +24,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const lines = chunks.map((chunk) => {
     const start = chunk[0].start;
     const end = chunk[chunk.length - 1].end + 0.04;
-    // караоке: \k в сотых секунды — слово заливается из белого (Secondary) в жёлтый (Primary)
-    const text = chunk
-      .map((w) => {
-        const cs = Math.max(1, Math.round((w.end - w.start) * 100));
-        return `{\\k${cs}}${escapeAss(w.word).toUpperCase()}`;
-      })
-      .join(" ");
-    return `Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,{\\fad(60,0)}${text}`;
+    const text = chunk.map((w) => escapeAss(w.word).toUpperCase()).join(" ");
+    return `Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,{\\fad(50,0)}${text}`;
   });
 
   return header + lines.join("\n") + "\n";

@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE } from "./store";
-import { probe, runFfmpeg, extractAudio, detectEdges } from "./ffmpeg";
+import { probe, probeDuration, runFfmpeg, extractAudio, detectEdges } from "./ffmpeg";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { buildAss } from "./subtitles";
 import { generateMeta } from "./ai";
@@ -33,9 +33,13 @@ export async function processProject(id: string): Promise<void> {
     const info = await probe(path.join(dir, raw));
     if (!info.hasAudio) throw new Error("В видео нет звуковой дорожки — запишите с микрофоном");
 
-    // --- Обрезаем тишину в начале и в конце ---
+    // --- Точная длительность: метаданным webm с камеры верить нельзя, мерим по аудио ---
     setStep(id, "Обрезка пауз по краям", 7);
-    const { start, end } = await detectEdges(raw, dir, info.duration);
+    await extractAudio(raw, "audio_full.wav", dir);
+    const duration = (await probeDuration(path.join(dir, "audio_full.wav"))) || info.duration;
+
+    // --- Обрезаем тишину в начале и в конце ---
+    const { start, end } = await detectEdges("audio_full.wav", dir, duration);
     const effDur = end - start;
 
     // --- Распознавание речи: Scribe → Whisper → раскладка сценария ---
@@ -144,15 +148,8 @@ export async function processProject(id: string): Promise<void> {
         },
       );
 
-    try {
-      await encode(true);
-    } catch (e: any) {
-      // сервер убил процесс по памяти — повторяем без зума (легче)
-      if (String(e?.message ?? "").includes("остановлен системой")) {
-        setStep(id, "Монтаж видео (экономный режим)", 30);
-        await encode(false);
-      } else throw e;
-    }
+    // зум отключён по фидбеку: вебкамера и так «приближена» вертикальным кадрированием
+    await encode(false);
 
     // --- Обложка: кадр из видео + крупный заголовок ---
     setStep(id, "Обложка", 92);

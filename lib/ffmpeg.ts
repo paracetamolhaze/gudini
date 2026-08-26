@@ -15,6 +15,18 @@ export type ProbeInfo = {
   hasAudio: boolean;
 };
 
+/** Точная длительность файла (для webm с камеры метаданные врут — мерим по аудио). */
+export async function probeDuration(file: string): Promise<number> {
+  const out = await runCapture(ffprobeBin(), [
+    "-v", "quiet",
+    "-print_format", "json",
+    "-show_format",
+    file,
+  ]);
+  const json = JSON.parse(out);
+  return parseFloat(json.format?.duration ?? "0") || 0;
+}
+
 export async function probe(file: string): Promise<ProbeInfo> {
   const out = await runCapture(ffprobeBin(), [
     "-v", "quiet",
@@ -111,7 +123,7 @@ export async function detectEdges(
   const stderr = await new Promise<string>((resolve, reject) => {
     const proc = spawn(
       ffmpegBin(),
-      ["-hide_banner", "-i", file, "-af", "silencedetect=n=-35dB:d=0.4", "-f", "null", "-"],
+      ["-hide_banner", "-i", file, "-af", "silencedetect=n=-40dB:d=0.7", "-f", "null", "-"],
       { cwd, windowsHide: true },
     );
     let out = "";
@@ -131,10 +143,11 @@ export async function detectEdges(
   let start = 0;
   let end = duration;
   const first = events[0];
-  if (first && first.start <= 0.3 && first.end) start = Math.max(0, first.end - 0.2);
+  if (first && first.start <= 0.3 && first.end) start = Math.max(0, first.end - 0.25);
   const last = events[events.length - 1];
-  if (last && (last.end === undefined || last.end >= duration - 0.3) && last.start > start) {
-    end = Math.min(duration, last.start + 0.3);
+  // хвост режем осторожно: только явную тишину до самого конца, с запасом полсекунды
+  if (last && (last.end === undefined || last.end >= duration - 0.5) && last.start > start) {
+    end = Math.min(duration, last.start + 0.5);
   }
   // защита от чрезмерной обрезки
   if (end - start < 3) return { start: 0, end: duration };

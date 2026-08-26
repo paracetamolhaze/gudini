@@ -113,8 +113,8 @@ async function runJob(id: string): Promise<void> {
 }
 
 async function main() {
-  if (!PASSWORD) {
-    console.error("Задайте GUDINI_PASSWORD (пароль сайта) в .env");
+  if (!PASSWORD || PASSWORD.includes("ВПИШИТЕ")) {
+    console.error("Задайте GUDINI_PASSWORD в .env — это пароль входа на сайт (SITE_PASSWORD на Railway)");
     process.exit(1);
   }
   console.log(`Гудини-воркер запущен → ${SITE}`);

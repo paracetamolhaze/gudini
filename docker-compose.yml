@@ -1,0 +1,17 @@
+# Воркер монтажа Гудини для Docker Desktop.
+# Запуск один раз: docker compose up -d --build
+# Дальше контейнер gudini-worker виден в Docker Desktop, стартует сам вместе с Docker
+# и управляется кнопками ▶/■. Настройки берутся из .env (GUDINI_URL, GUDINI_PASSWORD, ключи ИИ).
+services:
+  gudini-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: gudini-worker
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - gudini-worker-data:/app/data
+
+volumes:
+  gudini-worker-data:

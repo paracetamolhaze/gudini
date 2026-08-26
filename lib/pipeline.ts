@@ -93,21 +93,27 @@ export async function processProject(id: string): Promise<void> {
     const music = hasMusic();
     const totalFrames = Math.max(1, Math.round(effDur * 30));
 
-    // базовая картинка стримера
-    let videoChain =
-      `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,` +
-      `zoompan=z=1+0.07*in/${totalFrames}:d=1:x=(iw-iw/zoom)/2:y=(ih-ih/zoom)/2:s=1080x1920:fps=30[v0]`;
-    // перебивки поверх (голос стримера продолжает идти)
-    broll.forEach((clip, k) => {
-      const inputIdx = (music ? 2 : 1) + k;
-      const dur = (clip.end - clip.start).toFixed(3);
-      videoChain +=
-        `;[${inputIdx}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,` +
-        `trim=duration=${dur},setpts=PTS-STARTPTS+${clip.start.toFixed(3)}/TB[bv${k}]` +
-        `;[v${k}][bv${k}]overlay=eof_action=pass:enable='between(t,${clip.start.toFixed(3)},${clip.end.toFixed(3)})'[v${k + 1}]`;
-    });
-    // субтитры поверх всего
-    videoChain += `;[v${broll.length}]ass=subs.ass[v]`;
+    const buildVideoChain = (withZoom: boolean): string => {
+      // базовая картинка стримера (зум опционален — на слабых серверах он съедает память)
+      let chain =
+        `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30` +
+        (withZoom
+          ? `,zoompan=z=1+0.07*in/${totalFrames}:d=1:x=(iw-iw/zoom)/2:y=(ih-ih/zoom)/2:s=1080x1920:fps=30`
+          : "") +
+        `[v0]`;
+      // перебивки поверх (голос стримера продолжает идти)
+      broll.forEach((clip, k) => {
+        const inputIdx = (music ? 2 : 1) + k;
+        const clipDur = (clip.end - clip.start).toFixed(3);
+        chain +=
+          `;[${inputIdx}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,` +
+          `trim=duration=${clipDur},setpts=PTS-STARTPTS+${clip.start.toFixed(3)}/TB[bv${k}]` +
+          `;[v${k}][bv${k}]overlay=eof_action=pass:enable='between(t,${clip.start.toFixed(3)},${clip.end.toFixed(3)})'[v${k + 1}]`;
+      });
+      // субтитры поверх всего
+      chain += `;[v${broll.length}]ass=subs.ass[v]`;
+      return chain;
+    };
 
     const audioChain = music
       ? `[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[vo];` +
@@ -116,25 +122,37 @@ export async function processProject(id: string): Promise<void> {
         `[vo][duck]amix=inputs=2:duration=first:normalize=0[a]`
       : `[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[a]`;
 
-    await runFfmpeg(
-      [
-        "-ss", String(start), "-t", String(effDur), "-i", raw,
-        ...(music ? ["-stream_loop", "-1", "-i", MUSIC_FILE] : []),
-        ...broll.flatMap((clip) => ["-i", clip.file]),
-        "-filter_complex", `${videoChain};${audioChain}`,
-        "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "192k",
-        "-movflags", "+faststart",
-        ...(music ? ["-shortest"] : []),
-        "out.mp4",
-      ],
-      {
-        cwd: dir,
-        totalDurationSec: effDur,
-        onProgress: (f) => setStep(id, "Монтаж видео", 28 + Math.round(f * 60)),
-      },
-    );
+    const encode = (withZoom: boolean) =>
+      runFfmpeg(
+        [
+          "-ss", String(start), "-t", String(effDur), "-i", raw,
+          ...(music ? ["-stream_loop", "-1", "-i", MUSIC_FILE] : []),
+          ...broll.flatMap((clip) => ["-i", clip.file]),
+          "-filter_complex", `${buildVideoChain(withZoom)};${audioChain}`,
+          "-map", "[v]", "-map", "[a]",
+          "-threads", "4",
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+          "-c:a", "aac", "-b:a", "192k",
+          "-movflags", "+faststart",
+          ...(music ? ["-shortest"] : []),
+          "out.mp4",
+        ],
+        {
+          cwd: dir,
+          totalDurationSec: effDur,
+          onProgress: (f) => setStep(id, "Монтаж видео", 28 + Math.round(f * 60)),
+        },
+      );
+
+    try {
+      await encode(true);
+    } catch (e: any) {
+      // сервер убил процесс по памяти — повторяем без зума (легче)
+      if (String(e?.message ?? "").includes("остановлен системой")) {
+        setStep(id, "Монтаж видео (экономный режим)", 30);
+        await encode(false);
+      } else throw e;
+    }
 
     // --- Обложка: кадр из видео + крупный заголовок ---
     setStep(id, "Обложка", 92);

@@ -75,9 +75,15 @@ export function runFfmpeg(
       }
     });
     proc.on("error", reject);
-    proc.on("close", (code) => {
+    proc.on("close", (code, signal) => {
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg завершился с кодом ${code}: ${stderr.slice(-800)}`));
+      else if (code === null) {
+        reject(
+          new Error(
+            `ffmpeg был остановлен системой (сигнал ${signal ?? "неизвестен"}) — почти всегда это нехватка ОЗУ на сервере. Увеличьте память сервиса или упростите монтаж.`,
+          ),
+        );
+      } else reject(new Error(`ffmpeg завершился с кодом ${code}: ${stderr.slice(-800)}`));
     });
   });
 }

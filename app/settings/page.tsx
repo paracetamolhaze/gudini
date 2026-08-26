@@ -42,6 +42,8 @@ function Settings() {
 
   if (!s) return <p className="hint">Загрузка…</p>;
 
+  const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
+
   function field(key: keyof SettingsView, value: string) {
     setS((prev) => (prev ? { ...prev, [key]: value } : prev));
     setSaved(false);
@@ -97,7 +99,7 @@ function Settings() {
         <h3 style={{ margin: "18px 0 4px", fontSize: 15 }}>▶️ YouTube Shorts {s.connected.youtube && <span className="badge success">подключён</span>}</h3>
         <p className="hint">
           Google Cloud Console → включить YouTube Data API v3 → OAuth Client (Web) → Redirect URI:{" "}
-          <code>http://localhost:3000/api/auth/youtube/callback</code>
+          <code>{origin}/api/auth/youtube/callback</code>
         </p>
         <label>Google Client ID</label>
         <input type="text" value={s.googleClientId} onChange={(e) => field("googleClientId", e.target.value)} />
@@ -107,7 +109,7 @@ function Settings() {
         <h3 style={{ margin: "22px 0 4px", fontSize: 15 }}>🎵 TikTok {s.connected.tiktok && <span className="badge success">подключён</span>}</h3>
         <p className="hint">
           developers.tiktok.com → приложение с Content Posting API → Redirect URI:{" "}
-          <code>http://localhost:3000/api/auth/tiktok/callback</code>
+          <code>{origin}/api/auth/tiktok/callback</code>
         </p>
         <label>TikTok Client Key</label>
         <input type="text" value={s.tiktokClientKey} onChange={(e) => field("tiktokClientKey", e.target.value)} />

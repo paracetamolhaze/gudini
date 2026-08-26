@@ -132,6 +132,14 @@ export function deleteProject(id: string): boolean {
   return db.projects.length < before;
 }
 
+/** Приводит URL к виду https://домен (без завершающего слэша). */
+function normalizeUrl(url?: string): string | undefined {
+  if (!url || !url.trim()) return undefined;
+  let u = url.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
+  return u;
+}
+
 /** Настройки: значения из settings.json поверх переменных окружения. */
 export function getSettings(): Settings {
   let saved: Settings = {};
@@ -147,7 +155,7 @@ export function getSettings(): Settings {
     tiktokClientSecret: saved.tiktokClientSecret || process.env.TIKTOK_CLIENT_SECRET || undefined,
     metaAppId: saved.metaAppId || process.env.META_APP_ID || undefined,
     metaAppSecret: saved.metaAppSecret || process.env.META_APP_SECRET || undefined,
-    publicBaseUrl: saved.publicBaseUrl || process.env.PUBLIC_BASE_URL || undefined,
+    publicBaseUrl: normalizeUrl(saved.publicBaseUrl || process.env.PUBLIC_BASE_URL),
     youtubeTokens: saved.youtubeTokens,
     tiktokTokens: saved.tiktokTokens,
     instagramTokens: saved.instagramTokens,

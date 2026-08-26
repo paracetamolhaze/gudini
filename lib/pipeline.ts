@@ -14,6 +14,7 @@ import { buildAss, buildCalloutsAss } from "./subtitles";
 import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
 import { planEdit } from "./editPlanner";
+import { generateCoverConcept, generateAiCover } from "./cover";
 import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE } from "./editPlan";
 
 const running = new Set<string>();
@@ -165,19 +166,30 @@ export async function processProject(id: string): Promise<void> {
       setStep(id, "Монтаж видео", 38 + Math.round(f * 52)),
     );
 
-    // --- Обложка ---
+    // --- Обложка: ИИ-key-art с reference-лицом; фолбэк — кадр из видео ---
     setStep(id, "Обложка", 92);
     const coverOffset = Math.min(Math.max(1, effDur * 0.25), Math.max(0.1, effDur - 0.2));
     let cover: string | null = null;
     try {
-      fs.writeFileSync(path.join(dir, "cover.ass"), buildCoverAss(meta.title || project.topic), "utf8");
-      await runFfmpeg(
-        ["-ss", String(coverOffset), "-i", "out.mp4", "-frames:v", "1", "-vf", "ass=cover.ass", "-q:v", "2", "cover.jpg"],
-        { cwd: dir },
-      );
-      cover = "cover.jpg";
+      const concept = await generateCoverConcept(project.topic, project.script, meta.title);
+      if (concept) {
+        fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
+        if (await generateAiCover(dir, concept)) cover = "cover.jpg";
+      }
     } catch (e) {
-      console.warn("Обложка не сгенерировалась:", e);
+      console.warn("ИИ-обложка не сгенерировалась, фолбэк на кадр:", e);
+    }
+    if (!cover) {
+      try {
+        fs.writeFileSync(path.join(dir, "cover.ass"), buildCoverAss(meta.title || project.topic), "utf8");
+        await runFfmpeg(
+          ["-ss", String(coverOffset), "-i", "out.mp4", "-frames:v", "1", "-vf", "ass=cover.ass", "-q:v", "2", "cover.jpg"],
+          { cwd: dir },
+        );
+        cover = "cover.jpg";
+      } catch (e) {
+        console.warn("Обложка не сгенерировалась:", e);
+      }
     }
 
     // --- Self-check результата ---

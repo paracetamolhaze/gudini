@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSettings, hasMusic, saveSettings } from "@/lib/store";
+import { getSettings, hasFace, hasMusic, saveSettings } from "@/lib/store";
 
 function mask(value?: string): string {
   if (!value) return "";
@@ -16,6 +16,7 @@ export async function GET() {
     pixabayKey: mask(s.pixabayKey),
     runwayKey: mask(s.runwayKey),
     music: hasMusic(),
+    face: hasFace(),
     googleClientId: s.googleClientId ?? "",
     googleClientSecret: mask(s.googleClientSecret),
     tiktokClientKey: s.tiktokClientKey ?? "",

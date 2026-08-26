@@ -70,10 +70,19 @@ const DB_FILE = path.join(DATA_DIR, "db.json");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 export const MUSIC_FILE = path.join(DATA_DIR, "music.mp3");
+export const FACE_FILE = path.join(DATA_DIR, "face.jpg");
 
 export function hasMusic(): boolean {
   try {
     return fs.statSync(MUSIC_FILE).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function hasFace(): boolean {
+  try {
+    return fs.statSync(FACE_FILE).size > 0;
   } catch {
     return false;
   }

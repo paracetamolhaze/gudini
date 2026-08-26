@@ -36,6 +36,19 @@ async function api(pathname: string, init: RequestInit = {}): Promise<any> {
   return res.json();
 }
 
+/** Подтягивает reference-фото стримера с сайта (для ИИ-обложек); отсутствие — не ошибка. */
+async function syncFace(): Promise<void> {
+  try {
+    const res = await fetch(`${SITE}/api/settings/face`, { headers: { Authorization: AUTH } });
+    if (!res.ok) return;
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > 1000) {
+      fs.mkdirSync(path.join(process.cwd(), "data"), { recursive: true });
+      fs.writeFileSync(path.join(process.cwd(), "data", "face.jpg"), buffer);
+    }
+  } catch {}
+}
+
 async function downloadRaw(project: Project): Promise<void> {
   const dir = projectDir(project.id);
   const res = await fetch(`${SITE}/api/projects/${project.id}/video?which=raw`, {
@@ -97,6 +110,7 @@ async function runJob(id: string): Promise<void> {
     processing: { state: "idle", step: "", progress: 0 },
   });
   await downloadRaw(project);
+  await syncFace();
 
   // трансляция прогресса на сайт
   const forwarder = setInterval(async () => {

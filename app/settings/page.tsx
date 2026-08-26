@@ -11,6 +11,7 @@ type SettingsView = {
   pixabayKey: string;
   runwayKey: string;
   music: boolean;
+  face: boolean;
   googleClientId: string;
   googleClientSecret: string;
   tiktokClientKey: string;
@@ -106,6 +107,56 @@ function Settings() {
           вставлен — используется вместо стока; сток остаётся запасным.
         </label>
         <input type="password" value={s.runwayKey} onChange={(e) => field("runwayKey", e.target.value)} placeholder="key_…" />
+      </div>
+
+      <div className="card">
+        <h2>🧑‍🎤 Фото стримера — для ИИ-обложек</h2>
+        <p className="hint">
+          Загрузите одно хорошее фото лица (анфас, хороший свет). Для каждого ролика ИИ будет создавать обложку
+          с нуля: ваше узнаваемое лицо крупным планом, новая эмоция под тему, драматичный сюжетный фон и крупный
+          заголовок. Нужен ключ Runway. Чтобы обновить лицо — просто замените фото. Без фото обложка делается из
+          кадра видео.
+        </p>
+        <div className="row" style={{ marginTop: 10 }}>
+          {s.face ? (
+            <>
+              <img
+                src={`/api/settings/face?t=${Date.now()}`}
+                alt="Фото стримера"
+                style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 12, border: "1px solid var(--border)" }}
+              />
+              <span className="badge success">Фото загружено ✓</span>
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={async () => {
+                  await fetch("/api/settings/face", { method: "DELETE" });
+                  setS((prev) => (prev ? { ...prev, face: false } : prev));
+                }}
+              >
+                Удалить
+              </button>
+            </>
+          ) : (
+            <span className="badge">Фото нет — обложки из кадра видео</span>
+          )}
+          <label className="btn btn-secondary btn-sm" style={{ margin: 0, cursor: "pointer" }}>
+            📷 {s.face ? "Заменить фото" : "Загрузить фото"}
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const form = new FormData();
+                form.append("file", file);
+                const res = await fetch("/api/settings/face", { method: "POST", body: form });
+                if (res.ok) setS((prev) => (prev ? { ...prev, face: true } : prev));
+                else setError("Не удалось загрузить фото");
+              }}
+            />
+          </label>
+        </div>
       </div>
 
       <div className="card">

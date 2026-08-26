@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "worker": "tsx worker/index.ts"
+    "worker": "tsx worker/index.ts",
+    "test": "tsx --test tests/editPlan.test.ts tests/subtitles.test.ts tests/speechCleanup.test.ts tests/fallbacks.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",

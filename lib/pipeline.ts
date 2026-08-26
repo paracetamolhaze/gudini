@@ -1,14 +1,16 @@
 import fs from "fs";
 import path from "path";
 import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE } from "./store";
+import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences } from "./ffmpeg";
 import {
-  probe,
-  probeDuration,
-  runFfmpeg,
-  extractAudio,
-  detectSilences,
-  buildKeepSegments,
-} from "./ffmpeg";
+  edgesFromSilences,
+  mechanicalCuts,
+  segmentsFromCuts,
+  remapWords,
+  validateCleanupActions,
+  CutRegion,
+} from "./speechCleanupPlan";
+import { planSpeechCleanup } from "./speechCleanupPlanner";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { buildAss, buildCalloutsAss } from "./subtitles";
 import { generateMeta } from "./ai";
@@ -18,7 +20,9 @@ import { generateCoverConcept, generateAiCover } from "./cover";
 import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE } from "./editPlan";
 
 const running = new Set<string>();
-const SMART_EDITING = process.env.SMART_EDITING !== "false";
+// флаги читаются в момент вызова — тестируемо и переключаемо без пересборки модуля
+const smartEditing = () => process.env.SMART_EDITING !== "false";
+const smartSpeechCleanup = () => process.env.SMART_SPEECH_CLEANUP !== "false";
 
 function setStep(id: string, step: string, progress: number) {
   updateProject(id, { processing: { state: "running", step, progress } });
@@ -48,62 +52,82 @@ export async function processProject(id: string): Promise<void> {
     if (!info.hasAudio) throw new Error("В видео нет звуковой дорожки — запишите с микрофоном");
 
     // --- Точная длительность по аудио (метаданным webm с камеры верить нельзя) ---
-    setStep(id, "Вырезка пауз", 6);
+    setStep(id, "Анализ звука", 6);
     await extractAudio(raw, "audio_full.wav", dir);
     const duration = (await probeDuration(path.join(dir, "audio_full.wav"))) || info.duration;
-
-    // --- Сегменты речи: края + вырезка длинных пауз внутри ---
     const silences = await detectSilences("audio_full.wav", dir, duration);
-    const segments = buildKeepSegments(silences, duration);
+    const edges = edgesFromSilences(silences, duration);
+
+    // --- Распознавание речи ДО вырезки (на полном таймлайне) ---
+    setStep(id, "Распознавание речи", 10);
+    const wav = path.join(dir, "audio_full.wav");
+    let rawWords: Word[] | null = null;
+    let subtitlesSource: "scribe" | "whisper" | "script" = "script";
+    try {
+      rawWords = await scribeTranscribe(wav);
+      if (rawWords) subtitlesSource = "scribe";
+    } catch (e) {
+      console.warn("Scribe недоступен:", e);
+    }
+    if (!rawWords) {
+      try {
+        rawWords = await whisperTranscribe(wav);
+        if (rawWords) subtitlesSource = "whisper";
+      } catch (e) {
+        console.warn("Whisper недоступен:", e);
+      }
+    }
+
+    // --- Speech Cleanup: запинки/повторы/фальстарты + умные паузы (только при реальном ASR) ---
+    setStep(id, "Чистка речи", 16);
+    let cuts: CutRegion[] | null = null;
+    if (rawWords && smartSpeechCleanup()) {
+      try {
+        const rawActions = await planSpeechCleanup(project.script, rawWords, silences);
+        if (rawActions) {
+          const validated = validateCleanupActions(rawActions, rawWords, silences, duration);
+          cuts = validated.cuts;
+          fs.writeFileSync(
+            path.join(dir, "speech-cleanup-plan.json"),
+            JSON.stringify(validated.plan, null, 2),
+            "utf8",
+          );
+        }
+      } catch (e) {
+        console.warn("Speech cleanup недоступен, работаем без него:", e);
+      }
+    }
+    if (!cuts) cuts = mechanicalCuts(silences, edges); // фолбэк: только механические паузы
+
+    const segments = segmentsFromCuts(edges, cuts);
     const effDur = segments.reduce((sum, s) => sum + (s.end - s.start), 0);
 
     // --- Чистый исходник: склейка сегментов с аудио-микрофейдами на границах ---
     let source = raw;
     if (segments.length > 1) {
-      setStep(id, `Вырезка пауз (${segments.length - 1} склеек)`, 9);
+      setStep(id, `Вырезка (${segments.length - 1} склеек)`, 20);
       await buildCleanSource(dir, raw, segments);
       source = "clean.mp4";
+    } else if (segments[0].start > 0.05 || segments[0].end < duration - 0.05) {
+      setStep(id, "Обрезка краёв", 20);
+      await runFfmpeg(
+        [
+          "-ss", String(segments[0].start), "-t", String(segments[0].end - segments[0].start),
+          "-i", raw,
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+          "-c:a", "aac", "-b:a", "192k",
+          "clean.mp4",
+        ],
+        { cwd: dir, totalDurationSec: effDur },
+      );
+      source = "clean.mp4";
+    }
+
+    // --- Слова на чистом таймлайне: пересчёт таймкодов (вырезанное выпадает и из субтитров) ---
+    let words: Word[];
+    if (rawWords) {
+      words = remapWords(rawWords, segments);
     } else {
-      // одна непрерывная часть — просто перекодируем края позже через -ss/-t? нет:
-      // для единообразия дальнейший рендер всегда работает от 0, поэтому тоже режем.
-      if (segments[0].start > 0.05 || segments[0].end < duration - 0.05) {
-        setStep(id, "Обрезка краёв", 9);
-        await runFfmpeg(
-          [
-            "-ss", String(segments[0].start), "-t", String(segments[0].end - segments[0].start),
-            "-i", raw,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-            "-c:a", "aac", "-b:a", "192k",
-            "clean.mp4",
-          ],
-          { cwd: dir, totalDurationSec: effDur },
-        );
-        source = "clean.mp4";
-      }
-    }
-
-    // --- Распознавание речи на чистом таймлайне ---
-    setStep(id, "Распознавание речи", 14);
-    const wav = path.join(dir, "audio.wav");
-    await extractAudio(source, "audio.wav", dir);
-
-    let words: Word[] | null = null;
-    let subtitlesSource: "scribe" | "whisper" | "script" = "script";
-    try {
-      words = await scribeTranscribe(wav);
-      if (words) subtitlesSource = "scribe";
-    } catch (e) {
-      console.warn("Scribe недоступен:", e);
-    }
-    if (!words) {
-      try {
-        words = await whisperTranscribe(wav);
-        if (words) subtitlesSource = "whisper";
-      } catch (e) {
-        console.warn("Whisper недоступен:", e);
-      }
-    }
-    if (!words) {
       if (!project.script) throw new Error("Нет ни распознавания речи, ни сценария для субтитров");
       words = alignScriptToDuration(project.script, effDur);
     }
@@ -123,7 +147,7 @@ export async function processProject(id: string): Promise<void> {
     // --- Монтажный план: ИИ-режиссёр → валидация → материалы; fallback — старый конвейер ---
     setStep(id, "Режиссёрский план", 24);
     let plan: EditPlan | null = null;
-    if (SMART_EDITING) {
+    if (smartEditing()) {
       try {
         plan = await planEdit(project.topic, project.script, words, effDur);
       } catch (e) {

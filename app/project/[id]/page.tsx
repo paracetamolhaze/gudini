@@ -195,12 +195,20 @@ function RecordStep({
     // потоковая загрузка: тело — сам файл, имя — в заголовке
     xhr.open("PUT", `/api/projects/${project.id}/upload`);
     xhr.setRequestHeader("x-filename", file.name || "record.webm");
+    xhr.setRequestHeader("x-file-size", String(file.size));
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) setUploadPct(Math.round((e.loaded / e.total) * 100));
     };
     xhr.onload = async () => {
       setUploading(false);
       if (xhr.status === 200) {
+        try {
+          const json = JSON.parse(xhr.responseText);
+          if (json.uploadedSize && json.uploadedSize !== file.size) {
+            setError(`Загрузка неполная: дошло ${json.uploadedSize} из ${file.size} байт — повторите`);
+            return;
+          }
+        } catch {}
         await reload();
         onNext();
       } else {

@@ -1,7 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings, ProjectMeta } from "./store";
 
-const MODEL = "claude-opus-5";
+// Opus — для сценариев (качество текста = лицо ролика); Sonnet — для утилитарных задач (в разы дешевле)
+const MODEL_SCRIPT = "claude-opus-5";
+const MODEL_UTIL = "claude-sonnet-5";
 
 function client(): Anthropic | null {
   const key = getSettings().anthropicKey;
@@ -30,7 +32,7 @@ export async function generateScript(topic: string): Promise<{ script: string; d
   const c = client();
   if (!c) return { script: demoScript(topic), demo: true };
   const response = await c.messages.create({
-    model: MODEL,
+    model: MODEL_SCRIPT,
     max_tokens: 16000,
     system: SCRIPT_SYSTEM,
     messages: [{ role: "user", content: `Напиши сценарий видео на тему: «${topic}»` }],
@@ -49,7 +51,7 @@ export async function generateMeta(topic: string, script: string): Promise<{ met
   const c = client();
   if (!c) return { meta: demoMeta(topic), demo: true };
   const response = await c.messages.create({
-    model: MODEL,
+    model: MODEL_UTIL,
     max_tokens: 16000,
     system: META_SYSTEM,
     messages: [{ role: "user", content: `Тема: ${topic}\n\nСценарий:\n${script}` }],
@@ -75,7 +77,7 @@ export async function generateMeta(topic: string, script: string): Promise<{ met
 export type BrollPlan = { from: number; to: number; query: string };
 
 const BROLL_SYSTEM = `Ты — монтажёр коротких вертикальных видео. Тебе дают слова речи с индексами.
-Выбери 4–6 фраз (4–10 подряд идущих слов), которые стоит проиллюстрировать видеоперебивкой (б-роллом):
+Выбери 5–8 фраз (4–12 подряд идущих слов), которые стоит проиллюстрировать видеоперебивкой (б-роллом):
 конкретные, визуализируемые вещи — места, животные, предметы, действия. Не выбирай абстракции и связки.
 Фразы не должны пересекаться и не должны стоять в самом начале ролика (первые 2 слова — лицо автора).
 Ответь СТРОГО валидным JSON-массивом без пояснений:
@@ -89,7 +91,7 @@ export async function planBrollSegments(
   if (!c) return null;
   const list = words.map((w, i) => `${i}:${w.word}`).join(" ");
   const response = await c.messages.create({
-    model: MODEL,
+    model: MODEL_UTIL,
     max_tokens: 16000,
     system: BROLL_SYSTEM,
     messages: [{ role: "user", content: `Тема видео: ${topic}\n\nСлова:\n${list}` }],

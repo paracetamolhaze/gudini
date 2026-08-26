@@ -46,7 +46,15 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     if (size < 10_000) {
       return NextResponse.json({ error: `Файл записался пустым (${size} байт) — запись с камеры не удалась` }, { status: 400 });
     }
-    return NextResponse.json(finalize(id, filename));
+    // контроль целостности: если соединение оборвалось, примем меньше байт, чем заявлено
+    const expected = Number(req.headers.get("x-file-size") ?? req.headers.get("content-length") ?? 0);
+    if (expected > 0 && size < expected) {
+      return NextResponse.json(
+        { error: `Загрузка оборвалась: получено ${Math.round(size / 1e6)} из ${Math.round(expected / 1e6)} МБ — попробуйте ещё раз` },
+        { status: 400 },
+      );
+    }
+    return NextResponse.json({ ...finalize(id, filename), uploadedSize: size });
   } catch (e: any) {
     return NextResponse.json({ error: `Сбой записи файла: ${String(e?.message ?? e)}` }, { status: 500 });
   }

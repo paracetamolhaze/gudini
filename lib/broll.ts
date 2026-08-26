@@ -6,8 +6,8 @@ import { Word } from "./transcribe";
 
 export type BrollClip = { start: number; end: number; file: string; query: string };
 
-const MIN_LEN = 2.0; // сек
-const MAX_LEN = 5.0;
+const MIN_LEN = 2.5; // сек
+const MAX_LEN = 7.0;
 
 /**
  * Готовит перебивки: ИИ (или эвристика) выбирает фразы, для каждой берётся ролик.
@@ -23,14 +23,14 @@ export async function prepareBroll(dir: string, words: Word[], topic: string): P
 
   // --- раскладка по времени без пересечений ---
   const segments: BrollClip[] = [];
-  for (const plan of plans.slice(0, 6)) {
+  for (const plan of plans.slice(0, 8)) {
     const from = Math.max(0, Math.min(plan.from, words.length - 1));
     const to = Math.max(from, Math.min(plan.to, words.length - 1));
     const start = words[from].start;
     let end = Math.min(words[to].end + 0.15, start + MAX_LEN);
     if (end - start < MIN_LEN) end = start + MIN_LEN;
     const prev = segments[segments.length - 1];
-    if (prev && start < prev.end + 0.8) continue;
+    if (prev && start < prev.end + 0.5) continue;
     segments.push({ start, end, file: `broll${segments.length}.mp4`, query: plan.query });
   }
 

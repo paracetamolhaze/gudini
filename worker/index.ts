@@ -114,7 +114,10 @@ async function runJob(id: string): Promise<void> {
 
 async function main() {
   if (!PASSWORD || PASSWORD.includes("ВПИШИТЕ")) {
-    console.error("Задайте GUDINI_PASSWORD в .env — это пароль входа на сайт (SITE_PASSWORD на Railway)");
+    console.error("⚠ Не задан GUDINI_PASSWORD — впишите в .env пароль входа на сайт (SITE_PASSWORD на Railway),");
+    console.error("  затем пересоздайте контейнер: docker compose up -d");
+    console.error("  Жду обновления настроек…");
+    await new Promise((r) => setTimeout(r, 10 * 60 * 1000));
     process.exit(1);
   }
   console.log(`Гудини-воркер запущен → ${SITE}`);

@@ -1,5 +1,7 @@
+import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSettings } from "@/lib/store";
+import { requestOrigin } from "@/lib/origin";
 
 type Ctx = { params: Promise<{ platform: string }> };
 
@@ -7,7 +9,7 @@ type Ctx = { params: Promise<{ platform: string }> };
 export async function GET(req: NextRequest, { params }: Ctx) {
   const { platform } = await params;
   const s = getSettings();
-  const origin = req.nextUrl.origin;
+  const origin = requestOrigin(req);
   const redirect = `${origin}/api/auth/${platform}/callback`;
 
   if (platform === "youtube") {
@@ -24,13 +26,20 @@ export async function GET(req: NextRequest, { params }: Ctx) {
 
   if (platform === "tiktok") {
     if (!s.tiktokClientKey) return missing("TikTok Client Key/Secret (developers.tiktok.com → Content Posting API)");
+    // TikTok требует PKCE: challenge = hex(sha256(verifier)), verifier запоминаем в cookie
+    const verifier = crypto.randomBytes(48).toString("base64url");
+    const challenge = crypto.createHash("sha256").update(verifier).digest("hex");
     const url = new URL("https://www.tiktok.com/v2/auth/authorize/");
     url.searchParams.set("client_key", s.tiktokClientKey);
     url.searchParams.set("redirect_uri", redirect);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", "user.info.basic,video.publish");
+    url.searchParams.set("scope", "user.info.basic,video.publish,video.upload");
     url.searchParams.set("state", "gudini");
-    return NextResponse.redirect(url);
+    url.searchParams.set("code_challenge", challenge);
+    url.searchParams.set("code_challenge_method", "S256");
+    const res = NextResponse.redirect(url);
+    res.cookies.set("ttk_verifier", verifier, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 600 });
+    return res;
   }
 
   if (platform === "instagram") {

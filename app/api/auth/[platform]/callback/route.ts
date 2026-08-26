@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSettings, saveSettings } from "@/lib/store";
+import { requestOrigin } from "@/lib/origin";
 
 type Ctx = { params: Promise<{ platform: string }> };
 
@@ -7,7 +8,7 @@ type Ctx = { params: Promise<{ platform: string }> };
 export async function GET(req: NextRequest, { params }: Ctx) {
   const { platform } = await params;
   const code = req.nextUrl.searchParams.get("code");
-  const origin = req.nextUrl.origin;
+  const origin = requestOrigin(req);
   const redirect = `${origin}/api/auth/${platform}/callback`;
   const s = getSettings();
 
@@ -36,16 +37,19 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         },
       });
     } else if (platform === "tiktok") {
+      const verifier = req.cookies.get("ttk_verifier")?.value;
+      const body = new URLSearchParams({
+        client_key: s.tiktokClientKey!,
+        client_secret: s.tiktokClientSecret!,
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: redirect,
+      });
+      if (verifier) body.set("code_verifier", verifier);
       const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          client_key: s.tiktokClientKey!,
-          client_secret: s.tiktokClientSecret!,
-          code,
-          grant_type: "authorization_code",
-          redirect_uri: redirect,
-        }),
+        body,
       });
       const json: any = await res.json();
       if (!json.access_token) throw new Error(JSON.stringify(json).slice(0, 300));

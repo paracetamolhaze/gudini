@@ -38,6 +38,8 @@ export type CoverConcept = {
   headlineLines: HeadlineLine[];
   /** 3 коротких варианта заголовка; победителя выбирает deterministic preflight */
   headlineCandidates?: string[];
+  /** 1–3 главных смысловых слова ролика: заголовок обязан сохранить хотя бы одно */
+  headlineAnchor?: string[];
   kicker?: string;
   /** направление типографики для full-AI обложки (текст рисует image-модель) */
   typographyDirection?: TypographyDirection;
@@ -78,6 +80,12 @@ HEADLINE — САМОЕ ВАЖНОЕ, его рисует сама image-мод�
 выражается словами — предпочитай слова («ДЕНЬГИ СГОРЕЛИ»). Грамматика безупречна («ВО ДВОРЕ»,
 не «В ДВОРЕ»). Варианты каждый раз НОВЫЕ, не повторяй структуру прошлых обложек.
 
+headlineAnchor — 1–3 главных смысловых слова ролика в начальной форме, строчными: то, без чего
+обложка теряет тему. Тигр → ["тигр"]; потеря денег → ["деньги","потеря"]; редактирование генов →
+["дети","гены"]. Система проверит, что победивший вариант сохранил хотя бы один якорь: заголовок
+вроде «НЕ БЕГИ» или «ВСЁ ПРОПАЛО» формально короткий, но предмет ролика в нём исчез. Не пиши в
+якоря служебные слова и общие абстракции («будущее», «шок», «правда»).
+
 kicker — верни null. Дополнительная мелкая надпись повышает риск, что генератор нарисует мусорный
 текст, а стиль строится композицией, цветом и типографикой, а не лишними словами.
 
@@ -101,7 +109,8 @@ typographyDirection — выбери направление типографик
   forehead, pointing, open palms и прочие типовые жесты тумбнейлов.
 
 Ответь СТРОГО валидным JSON:
-{"headlineCandidates":["РАВЕНСТВО КОНЧИЛОСЬ","ГЕНЫ НА ЗАКАЗ","БОГАТЫЕ ВЫБИРАЮТ"],
+{"headlineCandidates":["ДЕТИ НА ЗАКАЗ","ГЕНЫ НА ЗАКАЗ","РАВЕНСТВО КОНЧИЛОСЬ"],
+"headlineAnchor":["дети","гены"],
 "kicker":null,"typographyDirection":"BOTTOM_MASSIVE","emotion":"...",
 "scene":{"mainSubject":"...","storyObject":"...","environment":"..."},
 "composition":{"facePosition":"center","faceScale":"very_large","allowHands":false},
@@ -169,6 +178,10 @@ export async function generateCoverConcept(
       headline,
       headlineLines,
       headlineCandidates: candidates.length ? candidates : undefined,
+      headlineAnchor: (Array.isArray(json.headlineAnchor) ? json.headlineAnchor : [])
+        .map((a: unknown) => String(a ?? "").trim().toLowerCase())
+        .filter((a: string) => a.length > 1)
+        .slice(0, 3),
       // kicker необязателен и рискован (лишний текст → брак QC): принимаем только 1–2 коротких слова
       kicker: acceptKicker(json.kicker),
       typographyDirection: (["BOTTOM_MASSIVE", "SIDE_STACK", "ONE_WORD_DOMINANT", "ACCENT_BOX", "INTEGRATED_POSTER"] as const).includes(json.typographyDirection)

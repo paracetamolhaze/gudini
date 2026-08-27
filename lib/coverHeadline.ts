@@ -33,11 +33,34 @@ export type HeadlineScore = {
   serviceWords: number;
   /** слова, несущие смысл (не служебные) — по ним разрешается ничья */
   contentWords: number;
+  /** сохранён ли главный предмет ролика (если якоря заданы) */
+  anchorHit: boolean;
+  matchedAnchors: string[];
   penalties: string[];
 };
 
-/** Детерминированная оценка «насколько безопасно это рисовать image-моделью». */
-export function scoreHeadline(input: string): HeadlineScore {
+const ANCHOR_MISS_PENALTY = 45;
+
+/** Морфология по-простому: сравниваем по усечённой основе, чтобы «тигр» ловил «ТИГРА». */
+function stem(word: string): string {
+  const w = word.toUpperCase().replace(/Ё/g, "Е");
+  return w.slice(0, Math.max(3, w.length - 2));
+}
+
+/** Якорь найден, если основа якоря и основа слова заголовка совпадают по началу. */
+export function matchAnchors(headline: string, anchors: string[]): string[] {
+  const words = headline.toUpperCase().replace(/Ё/g, "Е").split(/[^А-ЯA-Z0-9]+/).filter(Boolean);
+  return anchors.filter((anchor) => {
+    const a = stem(anchor);
+    return words.some((w) => w.startsWith(a) || stem(w).length >= 3 && a.startsWith(stem(w)));
+  });
+}
+
+/**
+ * Детерминированная оценка: насколько безопасно это рисовать image-моделью И
+ * сохранился ли предмет ролика. Форма без смысла не считается хорошим заголовком.
+ */
+export function scoreHeadline(input: string, anchors: string[] = []): HeadlineScore {
   const headline = String(input ?? "").replace(/\s+/g, " ").trim().toUpperCase();
   const words = headline.split(" ").filter(Boolean);
   const chars = headline.replace(/\s/g, "").length;
@@ -73,6 +96,11 @@ export function scoreHeadline(input: string): HeadlineScore {
   if (punctuation) hit(punctuation * 6, `пунктуации: ${punctuation}`);
   if (serviceWords > FREE_SERVICE_WORDS) hit((serviceWords - FREE_SERVICE_WORDS) * 10, `служебных слов: ${serviceWords}`);
 
+  // главный критерий смысла: заголовок обязан сохранить предмет ролика
+  const matchedAnchors = anchors.length ? matchAnchors(headline, anchors) : [];
+  const anchorHit = anchors.length === 0 || matchedAnchors.length > 0;
+  if (!anchorHit) hit(ANCHOR_MISS_PENALTY, `потерян предмет ролика (${anchors.join(", ")})`);
+
   return {
     headline,
     score,
@@ -84,6 +112,8 @@ export function scoreHeadline(input: string): HeadlineScore {
     punctuation,
     serviceWords,
     contentWords: words.length - serviceWords,
+    anchorHit,
+    matchedAnchors,
     penalties,
   };
 }
@@ -96,26 +126,35 @@ export type HeadlineSelection = {
 };
 
 /**
- * Выбирает самый безопасный вариант. При равных баллах побеждает более информативный
- * (больше смысловых слов), и только затем более короткий: иначе из равных вариантов
- * «ТИГР ВО ДВОРЕ» и «НЕ БЕГИ» выигрывал бы второй, теряющий сам сюжет обложки.
+ * Выбирает вариант, который сохраняет предмет ролика И безопаснее всего рисуется.
+ * Смысл важнее формы: если хотя бы один кандидат держит якорь, кандидаты без якоря
+ * не побеждают никогда — иначе выигрывало бы «НЕ БЕГИ», из которого исчез тигр.
+ * Дальше — баллы формы, затем информативность, затем краткость.
  */
-export function selectHeadline(candidates: string[]): HeadlineSelection {
+export function selectHeadline(candidates: string[], anchors: string[] = []): HeadlineSelection {
   const cleaned = candidates.map((c) => String(c ?? "").trim()).filter(Boolean);
   if (!cleaned.length) throw new Error("HEADLINE_PREFLIGHT: нет вариантов заголовка");
 
-  const scores = cleaned.map(scoreHeadline);
+  const scores = cleaned.map((c) => scoreHeadline(c, anchors));
+  const anyAnchor = scores.some((s) => s.anchorHit);
   const better = (b: HeadlineScore, a: HeadlineScore) => {
+    if (anyAnchor && b.anchorHit !== a.anchorHit) return b.anchorHit;
     if (b.score !== a.score) return b.score > a.score;
     if (b.contentWords !== a.contentWords) return b.contentWords > a.contentWords;
     return b.chars < a.chars;
   };
   const best = scores.reduce((a, b) => (better(b, a) ? b : a));
-  const tie = scores.filter((s) => s.score === best.score).length > 1;
+  const tie = scores.filter((s) => s.score === best.score && s.anchorHit === best.anchorHit).length > 1;
+  const anchorNote = anchors.length
+    ? best.matchedAnchors.length
+      ? `; предмет ролика сохранён (${best.matchedAnchors.join(", ")})`
+      : `; ВНИМАНИЕ: ни один вариант не удержал якоря (${anchors.join(", ")})`
+    : "";
   const reason = best.penalties.length
-    ? `${best.score} баллов — лучший из ${scores.length}; замечания: ${best.penalties.join(", ")}`
+    ? `${best.score} баллов — лучший из ${scores.length}; замечания: ${best.penalties.join(", ")}${anchorNote}`
     : `${best.score} баллов — ${best.words} слова, ${best.chars} букв, без цифр и спецсимволов` +
-      (tie ? `; при равном счёте выбран самый информативный (${best.contentWords} смысловых слова)` : "");
+      (tie ? `; при равном счёте выбран самый информативный (${best.contentWords} смысловых слова)` : "") +
+      anchorNote;
 
   return { headlineCandidates: scores.map((s) => s.headline), scores, selectedHeadline: best.headline, reason };
 }
@@ -127,7 +166,7 @@ export function selectHeadline(candidates: string[]): HeadlineSelection {
 export function applyHeadlinePreflight(concept: CoverConcept, dir?: string): HeadlineSelection {
   const fromLines = concept.headlineLines.map((l) => l.text).join(" ");
   const candidates = concept.headlineCandidates?.length ? concept.headlineCandidates : [fromLines];
-  const selection = selectHeadline(candidates);
+  const selection = selectHeadline(candidates, concept.headlineAnchor ?? []);
 
   concept.headlineLines = breakHeadline(null, selection.selectedHeadline);
   concept.headline = concept.headlineLines.map((l) => l.text).join("\n");
@@ -139,6 +178,7 @@ export function applyHeadlinePreflight(concept: CoverConcept, dir?: string): Hea
         {
           headlineCandidates: selection.headlineCandidates,
           scores: selection.scores.map((s) => s.score),
+          headlineAnchor: concept.headlineAnchor ?? [],
           selectedHeadline: selection.selectedHeadline,
           reason: selection.reason,
           details: selection.scores,

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { scoreHeadline, selectHeadline, applyHeadlinePreflight } from "../lib/coverHeadline";
+import { scoreHeadline, selectHeadline, applyHeadlinePreflight, matchAnchors } from "../lib/coverHeadline";
 import { buildCover } from "../lib/coverPipeline";
 import type { CoverConcept } from "../lib/cover";
 import type { CoverQcResult } from "../lib/coverQc";
@@ -48,6 +48,37 @@ test("Preflight 3: короткий вариант выигрывает, а пр
   // случай из E2E: все три по 100 баллов, но «НЕ БЕГИ» теряет сам сюжет обложки
   assert.equal(selectHeadline(["ТИГР ВО ДВОРЕ", "ЗВЕРЬ НА СВОБОДЕ", "НЕ БЕГИ"]).selectedHeadline, "ТИГР ВО ДВОРЕ");
   assert.equal(scoreHeadline("ГЕНЫ ПОД ЗАКАЗ").contentWords, 2, "«ПОД» — служебное слово");
+});
+
+test("Anchor: заголовок обязан сохранить предмет ролика", () => {
+  // тигр: формально идеальное «НЕ БЕГИ» теряет сам предмет
+  const tiger = selectHeadline(["НЕ БЕГИ", "ТИГР ВО ДВОРЕ", "ТИГР У ДОМА"], ["тигр"]);
+  assert.equal(tiger.selectedHeadline, "ТИГР У ДОМА");
+  assert.equal(tiger.scores.find((s) => s.headline === "НЕ БЕГИ")!.anchorHit, false);
+
+  // деньги: «ВСЁ ПРОПАЛО» непонятно о чём
+  const money = selectHeadline(["ВСЁ ПРОПАЛО", "ДЕНЬГИ СГОРЕЛИ"], ["деньги", "потеря"]);
+  assert.equal(money.selectedHeadline, "ДЕНЬГИ СГОРЕЛИ");
+
+  // генетика: «БУДУЩЕЕ НАСТАЛО» слишком абстрактно
+  const genes = selectHeadline(["БУДУЩЕЕ НАСТАЛО", "ДЕТИ НА ЗАКАЗ"], ["дети", "гены"]);
+  assert.equal(genes.selectedHeadline, "ДЕТИ НА ЗАКАЗ");
+
+  // якорь ловится и в косвенной форме
+  assert.deepEqual(matchAnchors("ДЕТЕЙ РЕДАКТИРУЮТ", ["дети"]), ["дети"]);
+  assert.deepEqual(matchAnchors("ТИГРА ВЫПУСТИЛИ", ["тигр"]), ["тигр"]);
+  assert.deepEqual(matchAnchors("ВСЁ ПРОПАЛО", ["деньги"]), []);
+});
+
+test("Anchor: якорь сильнее формы, но не ломает отбор, если его не удержал никто", () => {
+  // кандидат с якорем побеждает, даже будучи длиннее и «хуже» по форме
+  const r = selectHeadline(["НЕ БЕГИ", "ОПАСНЫЙ ТИГР ОКАЗАЛСЯ У ДОМА"], ["тигр"]);
+  assert.equal(r.selectedHeadline, "ОПАСНЫЙ ТИГР ОКАЗАЛСЯ У ДОМА");
+
+  // если якорь потеряли все — выбираем лучший по форме и предупреждаем в reason
+  const none = selectHeadline(["ВСЁ ПРОПАЛО", "КОНЕЦ ИСТОРИИ НАСТУПИЛ БЫСТРО"], ["деньги"]);
+  assert.equal(none.selectedHeadline, "ВСЁ ПРОПАЛО");
+  assert.ok(none.reason.includes("ни один вариант не удержал якоря"));
 });
 
 test("Preflight 4: после отбора image-генератор вызывается ровно один раз", async () => {

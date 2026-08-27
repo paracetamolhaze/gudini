@@ -78,3 +78,55 @@ test("Веса: релевантность важнее техники (0.7 пр
   const technical = combineScores(0, 3.5);
   assert.ok(semantic > technical * 2);
 });
+
+test("Test 5: конкретная сущность не иллюстрируется общим кадром по теме", () => {
+  const henderson: VisualIntent = {
+    subject: "football player on the substitutes bench",
+    action: "sitting and watching the match",
+    environment: "stadium bench area",
+    mood: "tense",
+    mustHave: ["football player"],
+    avoid: ["cartoon"],
+  };
+  const genericPitch: AssetAnalysis = {
+    description: "players run on an empty green football field",
+    objects: ["football", "soccer", "player", "pitch", "grass", "stadium"],
+    environment: "football stadium",
+    action: "playing football",
+    updatedAt: "2026",
+  };
+
+  // без сущности это нормальный тематический кадр
+  const plain = scoreRelevance(henderson, genericPitch);
+  assert.ok(plain.relevance > 0.5, `обычный сток должен проходить: ${plain.relevance}`);
+
+  // но для названного человека — жёсткое отклонение, даже при хорошей технике
+  const person = scoreRelevance(henderson, genericPitch, {
+    sourceIntent: "PERSON",
+    entityName: "Jordan Henderson",
+  });
+  assert.equal(person.specificityFail, true, "generic football field не может представлять Хендерсона");
+  assert.equal(person.relevance, 0);
+
+  // матчап тоже: пустой стадион не равен «Англия против Мексики»
+  const matchup = scoreRelevance(henderson, genericPitch, {
+    sourceIntent: "TEAM_MATCHUP",
+    entityName: "England vs Mexico",
+  });
+  assert.equal(matchup.specificityFail, true);
+
+  // а кадр, где сущность реально видна, проходит
+  const realMatch: AssetAnalysis = {
+    description: "England and Mexico national teams play a World Cup match",
+    objects: ["england", "mexico", "national team", "football", "player", "stadium"],
+    environment: "world cup stadium",
+    action: "playing football",
+    updatedAt: "2026",
+  };
+  const ok = scoreRelevance(henderson, realMatch, {
+    sourceIntent: "TEAM_MATCHUP",
+    entityName: "England vs Mexico",
+  });
+  assert.equal(ok.specificityFail, false);
+  assert.ok(ok.relevance > 0.5);
+});

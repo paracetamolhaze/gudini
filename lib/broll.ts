@@ -6,6 +6,7 @@ import { planBrollSegments } from "./ai";
 import { Word } from "./transcribe";
 import { EditEvent, VisualIntent } from "./editPlan";
 import { analyzeAsset, scoreRelevance, combineScores, VisualRelevanceScore } from "./brollRelevance";
+import { buildPersonClip, buildGraphicClip } from "./brollEntity";
 
 export type BrollClip = { start: number; end: number; file: string; query: string };
 
@@ -37,15 +38,76 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
   const brolls = events.filter((e) => e.type === "B_ROLL");
   const used = new Set<string>(); // не ставить один и тот же сток дважды в ролик
   const trace: BrollTrace[] = [];
+
+  // Материалы прошлого монтажа удаляем: при повторном запуске план другой, и старый
+  // файл под новым событием — это чужая перебивка (скачивание всё равно берётся из кэша).
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (/^broll\d+\.mp4$/.test(f) || /^entity-broll/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
+    }
+  } catch {}
+
   await Promise.all(
     brolls.map(async (event, k) => {
       const file = `broll${k}.mp4`;
       const full = path.join(dir, file);
-      if (fs.existsSync(full)) {
-        event.file = file;
+      const queries = [event.query!, ...(event.altQueries ?? [])].filter(Boolean);
+      const duration = event.end - event.start;
+
+      // --- конкретные сущности: свой источник, generic-сток тут не годится ---
+      if (event.sourceIntent === "PERSON" && event.entityName) {
+        try {
+          const person = await buildPersonClip(event.entityName, full, duration);
+          if (person.ok) {
+            event.file = file;
+            trace.push({
+              query: event.query ?? event.entityName,
+              intent: event.visualIntent,
+              candidates: [],
+              mode: "entity",
+              sourceIntent: "PERSON",
+              entityName: event.entityName,
+              winner: `wikimedia:${person.source}`,
+              note: `лицензия: ${person.license}`,
+            });
+            return;
+          }
+          // подходящего фото нет — случайного футболиста НЕ подставляем, останется A-roll
+          console.log(`B-roll «${event.entityName}»: свободного фото нет → A-roll`);
+          trace.push({
+            query: event.query ?? event.entityName,
+            candidates: [],
+            mode: "entity",
+            sourceIntent: "PERSON",
+            entityName: event.entityName,
+            note: "свободного фото не нашлось — оставляем лицо автора",
+          });
+          return;
+        } catch (e) {
+          console.warn(`Wikimedia «${event.entityName}»:`, e);
+          return;
+        }
+      }
+
+      if (event.sourceIntent === "GRAPHIC" && event.graphicLines?.length) {
+        try {
+          if (await buildGraphicClip(event.graphicLines, full, duration)) {
+            event.file = file;
+            trace.push({
+              query: event.graphicLines.join(" / "),
+              candidates: [],
+              mode: "graphic",
+              sourceIntent: "GRAPHIC",
+              winner: "generated",
+            });
+            return;
+          }
+        } catch (e) {
+          console.warn(`Графика «${event.graphicLines.join("/")}»:`, e);
+        }
         return;
       }
-      const queries = [event.query!, ...(event.altQueries ?? [])];
+
       // приоритет источников: по умолчанию сток (семантический отбор, дёшево);
       // Runway (~$0.30/клип) — последний фолбэк, либо первым при BROLL_SOURCE=runway
       const runwayFirst = process.env.BROLL_SOURCE === "runway";
@@ -59,13 +121,37 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
       };
       const tryStock = async () => {
         try {
-          return await fetchStockVideo(queries, event.end - event.start, full, used, event.visualIntent, trace);
+          return await fetchStockVideo(queries, duration, full, used, event.visualIntent, trace, {
+            sourceIntent: event.sourceIntent,
+            entityName: event.entityName,
+          });
         } catch (e) {
           console.warn(`Сток «${event.query}»:`, e);
           return false;
         }
       };
-      const ok = runwayFirst ? (await tryRunway()) || (await tryStock()) : (await tryStock()) || (await tryRunway());
+      let ok = runwayFirst ? (await tryRunway()) || (await tryStock()) : (await tryStock()) || (await tryRunway());
+
+      // матчап без подходящего реального материала — рисуем свою графику,
+      // а не ставим случайный стадион «потому что тоже футбол»
+      if (!ok && event.sourceIntent === "TEAM_MATCHUP" && event.graphicLines?.length) {
+        try {
+          ok = await buildGraphicClip(event.graphicLines, full, duration);
+          if (ok) {
+            trace.push({
+              query: event.graphicLines.join(" / "),
+              candidates: [],
+              mode: "graphic",
+              sourceIntent: "TEAM_MATCHUP",
+              entityName: event.entityName,
+              winner: "generated",
+              note: "реального материала матча нет — своя графика вместо общего стока",
+            });
+          }
+        } catch (e) {
+          console.warn(`Графика матчапа «${event.entityName}»:`, e);
+        }
+      }
       if (ok) event.file = file;
     }),
   );
@@ -149,7 +235,10 @@ export type BrollTrace = {
   intent?: VisualIntent;
   candidates: CandidateTrace[];
   winner?: string;
-  mode: "semantic" | "technical";
+  mode: "semantic" | "technical" | "entity" | "graphic";
+  sourceIntent?: string;
+  entityName?: string;
+  note?: string;
 };
 
 /**
@@ -165,6 +254,7 @@ export async function fetchStockVideo(
   used: Set<string> = new Set(),
   intent?: VisualIntent,
   trace?: BrollTrace[],
+  entity?: { sourceIntent?: string; entityName?: string },
 ): Promise<boolean> {
   const clean = queries.map((q) => q.trim()).filter(Boolean);
   if (!clean.length) return false;
@@ -198,7 +288,14 @@ export async function fetchStockVideo(
     .map((c) => ({ c, technical: scoreCandidate(c) }))
     .sort((a, b) => b.technical - a.technical);
 
-  const record: BrollTrace = { query: clean[0], intent, candidates: [], mode: intent ? "semantic" : "technical" };
+  const record: BrollTrace = {
+    query: clean[0],
+    intent,
+    candidates: [],
+    mode: intent ? "semantic" : "technical",
+    sourceIntent: entity?.sourceIntent,
+    entityName: entity?.entityName,
+  };
   const push = (c: StockCandidate, technical: number, extra: Partial<CandidateTrace> = {}) =>
     record.candidates.push({
       provider: c.provider,
@@ -225,9 +322,10 @@ export async function fetchStockVideo(
           continue;
         }
         visionWorked = true;
-        const rel = scoreRelevance(intent, analysis);
-        if (rel.avoidViolation || rel.subjectMatch === 0) {
-          push(c, technical, { relevance: rel, rejected: rel.avoidViolation ? rel.reason : "mustHave не найден" });
+        const rel = scoreRelevance(intent, analysis, entity);
+        if (rel.avoidViolation || rel.specificityFail || rel.subjectMatch === 0) {
+          const why = rel.specificityFail ? rel.reason : rel.avoidViolation ? rel.reason : "mustHave не найден";
+          push(c, technical, { relevance: rel, rejected: why });
           continue;
         }
         const final = combineScores(rel.relevance, technical);

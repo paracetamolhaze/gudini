@@ -19,9 +19,22 @@ const PLANNER_SYSTEM = `Ты — режиссёр монтажа коротки�
    zoo cage/cartoon/логотипы и т.п."]}
 - PUNCH_IN — лёгкое приближение кадра автора на сильной фразе, scale 1.04–1.08, не чаще чем раз в ~10 секунд.
 - TEXT_CALLOUT — крупный текст поверх: важная цифра, цена, дата, имя ("500 000 ЧЕЛОВЕК", "$5,000").
+  ЗАПРЕЩЕНО дублировать то, что человек произносит в этот момент: субтитры это уже показывают.
+  Каллаут нужен, только если добавляет то, чего в речи нет в таком виде (сумма цифрами, год, счёт).
 
-Отдельно highlights: индексы слов для смыслового акцента в субтитрах — ТОЛЬКО действительно сильные
-(цифры, суммы, имена, панч-слова, контраст). Большинство фраз остаются без акцента; 0–6 слов на ролик.
+ГЛАВНОЕ ПРО B_ROLL — sourceIntent. Общий сток по теме («просто футбольное поле», когда речь про
+конкретный матч) — плохая перебивка. Для каждого B_ROLL укажи sourceIntent:
+- PERSON — назван конкретный человек. entity — его имя латиницей ("Jordan Henderson").
+  Мы ищем свободное фото этого человека; если не найдём — оставим лицо автора, и это нормально.
+- TEAM_MATCHUP — противостояние команд/стран. entity — "England vs Mexico",
+  graphic — строки нашей графики: ["АНГЛИЯ","VS","МЕКСИКА"].
+- SPECIFIC_EVENT — конкретное событие (матч, церемония). entity — его название.
+- LOCATION — конкретное место.
+- GRAPHIC — визуализируется только текстом: graphic — 1–3 КОРОТКИЕ строки ("1/8 ФИНАЛА",
+  "ЖЁЛТАЯ КАРТОЧКА"). query можно не давать. Строки НЕ должны повторять субтитры дословно.
+- GENERIC_STOCK — обычный визуал (толпа болельщиков, носилки, руки в гипсе) — тогда всё как раньше.
+Если сущность конкретная, а подходящего материала может не быть — лучше GRAPHIC или вообще
+не ставить перебивку. Лицо автора лучше случайного кадра «по теме».
 
 Правила режиссуры:
 - Лицо автора ОСТАВЛЯТЬ на: хуке, эмоциях, личной истории, шутке, панчлайне, призыве. Хук (начало) не закрывать.
@@ -31,7 +44,11 @@ const PLANNER_SYSTEM = `Ты — режиссёр монтажа коротки�
 - Для цифр и цен предпочитай TEXT_CALLOUT, а не случайный сток.
 
 Ответь СТРОГО валидным JSON без пояснений:
-{"events":[{"type":"B_ROLL","from":12,"to":19,"query":"...","alt":["..."],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["..."],"avoid":["..."]}},{"type":"PUNCH_IN","from":30,"to":36,"scale":1.06},{"type":"TEXT_CALLOUT","from":44,"to":47,"text":"..."}],"highlights":[42,87]}`;
+{"events":[
+ {"type":"B_ROLL","from":12,"to":19,"sourceIntent":"PERSON","entity":"Jordan Henderson","query":"Jordan Henderson England football","alt":["..."],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["..."],"avoid":["..."]}},
+ {"type":"B_ROLL","from":24,"to":30,"sourceIntent":"TEAM_MATCHUP","entity":"England vs Mexico","graphic":["АНГЛИЯ","VS","МЕКСИКА"],"query":"England Mexico football match","intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["..."],"avoid":["..."]}},
+ {"type":"PUNCH_IN","from":30,"to":36,"scale":1.06},
+ {"type":"TEXT_CALLOUT","from":44,"to":47,"text":"..."}]}`;
 
 /** Строит валидированный монтажный план. Возвращает null, если ИИ недоступен/упал. */
 export async function planEdit(
@@ -68,18 +85,13 @@ export async function planEdit(
     .replace(/```$/m, "")
     .trim();
 
-  let parsed: { events?: RawPlanEvent[]; highlights?: unknown[] };
+  let parsed: { events?: RawPlanEvent[] };
   try {
     parsed = JSON.parse(raw);
   } catch {
     return null;
   }
   const events = validatePlan(parsed.events ?? [], words, duration);
-  const captionHighlights = Array.isArray(parsed.highlights)
-    ? parsed.highlights
-        .map((h) => Math.trunc(Number(h)))
-        .filter((h) => Number.isFinite(h) && h >= 0 && h < words.length)
-        .slice(0, 8)
-    : [];
-  return { version: 1, duration, events, captionStyle: { ...DEFAULT_CAPTION_STYLE }, captionHighlights };
+  // смысловых жёлтых акцентов в субтитрах больше нет — только белый текст
+  return { version: 1, duration, events, captionStyle: { ...DEFAULT_CAPTION_STYLE } };
 }

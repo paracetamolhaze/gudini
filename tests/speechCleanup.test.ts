@@ -98,7 +98,7 @@ test("Cleanup: длинный «полноценный» кусок (>12 сло�
   assert.equal(plan.actions.length, 0);
 });
 
-test("Cleanup: суммарная вырезка ограничена (15% / 12с)", () => {
+test("Cleanup: суммарная вырезка ограничена (20% / 15с)", () => {
   const many = Array.from({ length: 10 }, (_, i) => ({
     type: "REMOVE_FRAGMENT",
     fromWord: 10 + i * 12,
@@ -108,7 +108,24 @@ test("Cleanup: суммарная вырезка ограничена (15% / 12�
   }));
   const { plan } = validateCleanupActions(many as any, words, [], duration);
   const total = plan.actions.reduce((s, a) => s + (a.end - a.start), 0);
-  assert.ok(total <= Math.min(duration * 0.15, 12) + 0.01, `вырезано слишком много: ${total}`);
+  assert.ok(total <= Math.min(duration * 0.2, 15) + 0.01, `вырезано слишком много: ${total}`);
+});
+
+test("Test 4: неудачный дубль (RETAKE) вырезается целиком, чистая версия остаётся", () => {
+  // два соседних фрагмента читают одно предложение сценария: первый оборван, второй чистый
+  const retake = [
+    { type: "REMOVE_FRAGMENT", fromWord: 30, toWord: 45, reason: "RETAKE", confidence: 0.9 },
+  ];
+  const { plan, cuts } = validateCleanupActions(retake as any, words, [], duration);
+  assert.equal(plan.actions.length, 1, "RETAKE должен приниматься как причина вырезки");
+  assert.equal(plan.actions[0].reason, "RETAKE");
+  const removed = plan.actions[0].end - plan.actions[0].start;
+  assert.ok(removed > 4, `дубль длиннее обычной запинки, вырезано ${removed.toFixed(2)}с`);
+  assert.equal(cuts.length, 1);
+
+  // но неуверенный RETAKE отклоняется: удалить целую мысль по ошибке — дорого
+  const shaky = [{ type: "REMOVE_FRAGMENT", fromWord: 30, toWord: 45, reason: "RETAKE", confidence: 0.75 }];
+  assert.equal(validateCleanupActions(shaky as any, words, [], duration).plan.actions.length, 0);
 });
 
 test("Cleanup: INTENTIONAL-пауза не трогается, UNNECESSARY ужимается", () => {

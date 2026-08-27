@@ -2,17 +2,19 @@ import { Word } from "./transcribe";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE, EditEvent } from "./editPlan";
 
 /**
- * Фразовые субтитры: 2–5 слов на экране, фиксированная позиция (не «прыгают»),
- * события не пересекаются во времени (не накладываются друг на друга),
- * белый аккуратный шрифт с чёрной обводкой, без знаков препинания.
+ * Субтитры: РОВНО ОДНО слово на экране, одна строка, фиксированная позиция.
+ * События строго не пересекаются (prev.end <= next.start) — это защита от старого
+ * бага, когда libass складывал наложенные события в две «прыгающие» строки.
+ * Цвет всегда белый с чёрной обводкой: смысловых жёлтых акцентов в речи нет,
+ * жёлтый остался только для обложек.
  */
-export function buildAss(
-  words: Word[],
-  styleOverride?: Partial<CaptionStyle>,
-  highlightIndices?: number[],
-): string {
+
+const HOLD = 0.1; // естественная задержка после слова
+const GAP = 0.01; // гарантированный зазор между событиями
+const MIN_DUR = 0.08;
+
+export function buildAss(words: Word[], styleOverride?: Partial<CaptionStyle>): string {
   const style: CaptionStyle = { ...DEFAULT_CAPTION_STYLE, ...styleOverride };
-  const highlights = new Set(highlightIndices ?? []);
   const marginV = style.position === "center" ? 900 : 560;
 
   const header = `[Script Info]
@@ -30,68 +32,24 @@ Style: Caption,Arial,${style.fontSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&H780000
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  const phrases = groupPhrases(words, style.maxWords);
-  const lines: string[] = [];
-  for (let i = 0; i < phrases.length; i++) {
-    const phrase = phrases[i];
-    const start = phrase[0].start;
-    // фраза висит чуть дольше последнего слова, но никогда не наезжает на следующую
-    let end = phrase[phrase.length - 1].end + 0.35;
-    const next = phrases[i + 1];
-    if (next) end = Math.min(end, next[0].start - 0.02);
-    end = Math.max(end, start + 0.35);
+  const items = words
+    .map((w) => ({ start: w.start, end: w.end, text: displayWord(w.word, style.uppercase) }))
+    .filter((w) => w.text);
 
-    const text = renderPhrase(phrase, style, highlights);
-    if (!text) continue;
-    lines.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,${text}`);
+  const lines: string[] = [];
+  let prevEnd = -Infinity;
+  for (let i = 0; i < items.length; i++) {
+    const w = items[i];
+    const next = items[i + 1];
+    // старт никогда не раньше конца предыдущего события — пересечений быть не может
+    const start = Math.max(w.start, prevEnd + GAP);
+    let end = Math.min(w.end + HOLD, next ? next.start - GAP : Infinity);
+    if (end < start + MIN_DUR) end = start + MIN_DUR;
+    lines.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,${w.text}`);
+    prevEnd = end;
   }
 
   return header + lines.join("\n") + "\n";
-}
-
-type IndexedWord = Word & { idx: number };
-
-/** Группирует слова во фразы: по количеству, длине строки, паузам и знакам конца предложения. */
-function groupPhrases(words: Word[], maxWords: number): IndexedWord[][] {
-  const phrases: IndexedWord[][] = [];
-  let current: IndexedWord[] = [];
-  let chars = 0;
-  words.forEach((w, idx) => {
-    const clean = cleanWord(w.word);
-    if (!clean) return;
-    const gap = current.length ? w.start - current[current.length - 1].end : 0;
-    if (current.length && (current.length >= maxWords || chars + clean.length > 22 || gap > 0.6)) {
-      phrases.push(current);
-      current = [];
-      chars = 0;
-    }
-    current.push({ ...w, idx });
-    chars += clean.length + 1;
-    // конец предложения в исходном слове — закрываем фразу
-    if (/[.!?…]$/.test(w.word.trim()) && current.length >= 2) {
-      phrases.push(current);
-      current = [];
-      chars = 0;
-    }
-  });
-  if (current.length) phrases.push(current);
-  return phrases;
-}
-
-/**
- * Акцент — только по смысловому решению планировщика (цифры/имена/панч-слова).
- * Большинство фраз остаются полностью белыми. Эвристики «самое длинное слово» больше нет.
- */
-function renderPhrase(phrase: IndexedWord[], style: CaptionStyle, highlights: Set<number>): string {
-  return phrase
-    .map((w) => {
-      let c = cleanWord(w.word);
-      if (!c) return "";
-      if (style.uppercase) c = c.toUpperCase();
-      return highlights.has(w.idx) ? `{\\c&H00D7FF&}${c}{\\c&H00FFFFFF&}` : c;
-    })
-    .filter(Boolean)
-    .join(" ");
 }
 
 /** TEXT_CALLOUT-события: крупный акцентный текст в верхней части кадра. */
@@ -119,12 +77,55 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   return header + lines.join("\n") + "\n";
 }
 
-/** Убирает знаки препинания, оставляя буквы/цифры и дефис внутри слова. */
-function cleanWord(word: string): string {
-  return escapeAss(word)
-    .replace(/[.,!?:;…"'«»“”„()\[\]<>*+=/|№#%&@^~`]/g, "")
-    .replace(/^[-–—]+|[-–—]+$/g, "")
-    .trim();
+/**
+ * Убирает каллауты, дублирующие произносимую в этот момент речь.
+ * Каллаут ценен только когда добавляет то, чего нет в субтитрах (сумма, число,
+ * дата, имя). «РУКА В ГИПСЕ» поверх тех же слов в субтитрах выглядит как баг.
+ */
+export function dropDuplicateCallouts(events: EditEvent[], words: Word[], window = 0.8): EditEvent[] {
+  return events.filter((e) => {
+    if (e.type !== "TEXT_CALLOUT" || !e.text) return true;
+    const tokens = e.text.split(/\s+/).map(normToken).filter(Boolean);
+    if (!tokens.length) return true;
+    const spoken = words
+      .filter((w) => w.end > e.start - window && w.start < e.end + window)
+      .map((w) => normToken(w.word))
+      .filter(Boolean);
+    const hits = tokens.filter((t) => spoken.some((s) => sameStem(s, t))).length;
+    const duplicate = hits / tokens.length >= 0.7;
+    if (duplicate) console.log(`Каллаут «${e.text}» убран: дублирует речь в этом же месте`);
+    return !duplicate;
+  });
+}
+
+/** Нормализация токена для сравнения: регистр, Ё, пунктуация, пробелы. */
+function normToken(word: string): string {
+  return word
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+/** Сравнение с терпимостью к окончаниям: «гипсе» ≈ «гипс». */
+function sameStem(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const cut = (s: string) => s.slice(0, Math.max(3, s.length - 2));
+  return a.startsWith(cut(b)) || b.startsWith(cut(a));
+}
+
+/**
+ * Слово для показа. Висячая пунктуация убирается, но СМЫСЛОВАЯ сохраняется:
+ * «1/8», «$5000», «50%», «2:0», «2025/26» должны остаться как есть —
+ * раньше слэш вырезался и «1/8 финала» превращалось в «18 финала».
+ */
+export function displayWord(word: string, uppercase = true): string {
+  const edge = /^[.,!?:;…"'«»“”„()\[\]<>*+=|`~^@\-–—]+|[.,!?:;…"'«»“”„()\[\]<>*+=|`~^@\-–—]+$/g;
+  let w = escapeAss(word).trim().replace(edge, "").trim();
+  if (!w) return "";
+  // всё, что содержит цифру, — потенциально смысловая запись: не трогаем внутренности
+  if (!/\d/.test(w)) w = w.replace(/[.,!?:;…"'«»“”„()\[\]<>*+=/|№#%&@^~`]/g, "").trim();
+  return uppercase ? w.toUpperCase() : w;
 }
 
 function assTime(sec: number): string {

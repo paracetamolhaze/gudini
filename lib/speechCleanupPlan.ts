@@ -12,7 +12,7 @@ export type SpeechCleanupAction =
       type: "REMOVE_FRAGMENT";
       start: number;
       end: number;
-      reason: "REPEATED_WORDS" | "FALSE_START" | "FILLER" | "SELF_CORRECTION";
+      reason: "REPEATED_WORDS" | "FALSE_START" | "FILLER" | "SELF_CORRECTION" | "RETAKE";
       confidence: number;
     }
   | {
@@ -45,12 +45,16 @@ export type CutRegion = { start: number; end: number };
 const MIN_CONFIDENCE = 0.7;
 const MAX_FRAGMENT_SEC = 4.0;
 const MAX_FRAGMENT_WORDS = 12;
+// неудачный дубль — это целая попытка произнести фразу, она длиннее обычной запинки
+const MAX_RETAKE_SEC = 9.0;
+const MAX_RETAKE_WORDS = 30;
+const MIN_RETAKE_CONFIDENCE = 0.8;
 const HOOK_GUARD_SEC = 2.0; // начало ролика не трогаем вслепую
 const PAUSE_KEEP_DEFAULT = 0.45;
 const PAUSE_MIN_LEN = 0.8; // паузы короче — естественное дыхание, не трогаем
 const AUTO_SHORTEN_UNCLASSIFIED = 2.5; // так долго «драматично» не молчат
 
-const FRAGMENT_REASONS = new Set(["REPEATED_WORDS", "FALSE_START", "FILLER", "SELF_CORRECTION"]);
+const FRAGMENT_REASONS = new Set(["REPEATED_WORDS", "FALSE_START", "FILLER", "SELF_CORRECTION", "RETAKE"]);
 
 /**
  * Валидация плана чистки: только уверенные и безопасные действия.
@@ -65,7 +69,8 @@ export function validateCleanupActions(
   const actions: SpeechCleanupAction[] = [];
   const cuts: CutRegion[] = [];
   let removedTotal = 0;
-  const removedCap = Math.min(duration * 0.15, 12);
+  // запас чуть шире прежнего: неудачный дубль сам по себе занимает несколько секунд
+  const removedCap = Math.min(duration * 0.2, 15);
   const classified = new Set<number>();
 
   for (const a of raw ?? []) {
@@ -73,13 +78,14 @@ export function validateCleanupActions(
     if (!Number.isFinite(confidence)) continue;
 
     if (String(a.type) === "REMOVE_FRAGMENT") {
-      if (confidence < MIN_CONFIDENCE) continue;
       const reason = FRAGMENT_REASONS.has(String(a.reason)) ? (a.reason as any) : null;
       if (!reason) continue;
+      const retake = reason === "RETAKE";
+      if (confidence < (retake ? MIN_RETAKE_CONFIDENCE : MIN_CONFIDENCE)) continue;
       const from = Math.trunc(Number(a.fromWord));
       const to = Math.trunc(Number(a.toWord));
       if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < from) continue;
-      if (to >= words.length || to - from + 1 > MAX_FRAGMENT_WORDS) continue;
+      if (to >= words.length || to - from + 1 > (retake ? MAX_RETAKE_WORDS : MAX_FRAGMENT_WORDS)) continue;
 
       // границы — по стыкам с соседними словами, с запасом (не съедать согласные)
       const prevEnd = from > 0 ? words[from - 1].end : 0;
@@ -87,7 +93,7 @@ export function validateCleanupActions(
       const start = Math.max(prevEnd + 0.02, words[from].start - 0.05);
       const end = Math.min(nextStart - 0.02, words[to].end + 0.05);
       if (end - start < 0.12) continue;
-      if (end - start > MAX_FRAGMENT_SEC) continue;
+      if (end - start > (retake ? MAX_RETAKE_SEC : MAX_FRAGMENT_SEC)) continue;
       // хук защищён от вырезки — кроме СТОПРОЦЕНТНЫХ коротких филлеров («эээ», «ну эээ»)
       if (start < HOOK_GUARD_SEC) {
         const shortObviousFiller = reason === "FILLER" && confidence >= 0.92 && end - start <= 1.2;

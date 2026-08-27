@@ -18,6 +18,18 @@ export type VisualIntent = {
   avoid: string[]; // с этим кандидат отклоняется
 };
 
+/**
+ * Откуда брать визуал. Для конкретных сущностей generic-сток — почти последний
+ * вариант: «Англия играет с Мексикой» не иллюстрируется случайным стадионом.
+ */
+export type VisualSourceIntent =
+  | "GENERIC_STOCK"
+  | "PERSON"
+  | "TEAM_MATCHUP"
+  | "SPECIFIC_EVENT"
+  | "LOCATION"
+  | "GRAPHIC";
+
 export type EditEvent = {
   type: EditEventType;
   start: number; // сек на чистом (после вырезки пауз) таймлайне
@@ -26,6 +38,9 @@ export type EditEvent = {
   query?: string;
   altQueries?: string[];
   visualIntent?: VisualIntent;
+  sourceIntent?: VisualSourceIntent;
+  entityName?: string; // «Jordan Henderson», «England vs Mexico»
+  graphicLines?: string[]; // текст для собственной motion-графики
   file?: string; // заполняется после подбора материала
   // PUNCH_IN
   scale?: number;
@@ -42,7 +57,7 @@ export type CaptionStyle = {
 };
 
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
-  maxWords: 3,
+  maxWords: 1, // одно слово на экране
   uppercase: true,
   highlightKeyword: false,
   position: "lower",
@@ -75,7 +90,19 @@ export type RawPlanEvent = {
   };
   scale?: number;
   text?: string;
+  sourceIntent?: string;
+  entity?: string;
+  graphic?: string[];
 };
+
+const SOURCE_INTENTS: VisualSourceIntent[] = [
+  "GENERIC_STOCK",
+  "PERSON",
+  "TEAM_MATCHUP",
+  "SPECIFIC_EVENT",
+  "LOCATION",
+  "GRAPHIC",
+];
 
 const LIMITS: Record<string, { min: number; max: number; count: number }> = {
   B_ROLL: { min: 2.0, max: 7.0, count: 8 },
@@ -110,8 +137,19 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
     const event: EditEvent = { type, start: round2(start), end: round2(end) };
     if (type === "B_ROLL") {
       const query = String(raw.query ?? "").trim();
-      if (!query || start < 1.2) continue;
+      const sourceIntent = SOURCE_INTENTS.includes(raw.sourceIntent as VisualSourceIntent)
+        ? (raw.sourceIntent as VisualSourceIntent)
+        : "GENERIC_STOCK";
+      const graphicLines = Array.isArray(raw.graphic)
+        ? raw.graphic.map((g) => String(g).trim().toUpperCase()).filter(Boolean).slice(0, 4)
+        : [];
+      // графике запрос не нужен — она рисуется нами; остальным без запроса делать нечего
+      if ((!query && sourceIntent !== "GRAPHIC") || start < 1.2) continue;
+      if (sourceIntent === "GRAPHIC" && !graphicLines.length) continue;
       event.query = query;
+      event.sourceIntent = sourceIntent;
+      if (raw.entity) event.entityName = String(raw.entity).slice(0, 60);
+      if (graphicLines.length) event.graphicLines = graphicLines;
       event.altQueries = Array.isArray(raw.alt) ? raw.alt.map(String).filter(Boolean).slice(0, 3) : [];
       if (raw.intent && typeof raw.intent === "object") {
         event.visualIntent = {

@@ -12,7 +12,8 @@ import {
 } from "./speechCleanupPlan";
 import { planSpeechCleanup } from "./speechCleanupPlanner";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
-import { buildAss, buildCalloutsAss } from "./subtitles";
+import { buildAss, buildCalloutsAss, dropDuplicateCallouts } from "./subtitles";
+import { applyScriptFormatting } from "./scriptFormat";
 import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
 import { planEdit } from "./editPlanner";
@@ -135,6 +136,8 @@ export async function processProject(id: string): Promise<void> {
       if (!project.script) throw new Error("Нет ни распознавания речи, ни сценария для субтитров");
       words = alignScriptToDuration(project.script, effDur);
     }
+    // каноническая запись из сценария: «18» → «1/8», «5000» → «$5000», имена с большой буквы
+    words = applyScriptFormatting(words, project.script);
 
     // --- Метаданные (нужны до обложки) ---
     setStep(id, "Описание и хэштеги", 20);
@@ -178,11 +181,13 @@ export async function processProject(id: string): Promise<void> {
         })),
       };
     }
+    // каллаут, повторяющий произносимые в этот момент слова, — визуальный шум
+    plan.events = dropDuplicateCallouts(plan.events, words);
     fs.writeFileSync(path.join(dir, "edit-plan.json"), JSON.stringify(plan, null, 2), "utf8");
 
     // --- Субтитры и текстовые акценты ---
     setStep(id, "Субтитры", 34);
-    fs.writeFileSync(path.join(dir, "subs.ass"), buildAss(words, plan.captionStyle, plan.captionHighlights), "utf8");
+    fs.writeFileSync(path.join(dir, "subs.ass"), buildAss(words, plan.captionStyle), "utf8");
     const callouts = plan.events.filter((e) => e.type === "TEXT_CALLOUT");
     if (callouts.length) {
       fs.writeFileSync(path.join(dir, "callouts.ass"), buildCalloutsAss(callouts), "utf8");

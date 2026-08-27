@@ -27,9 +27,16 @@ export type VisualRelevanceScore = {
   subjectMatch: number;
   environmentMatch: number;
   actionMatch: number;
+  /** совпала ли КОНКРЕТНАЯ сущность (человек, матч, событие), если она заявлена */
+  specificityMatch: number;
   avoidViolation: boolean;
+  /** кандидат слишком общий для конкретной сущности — жёсткое отклонение */
+  specificityFail: boolean;
   reason: string;
 };
+
+/** Для этих намерений «просто похожий по теме» сток не годится. */
+const SPECIFIC_INTENTS = new Set(["PERSON", "TEAM_MATCHUP", "SPECIFIC_EVENT"]);
 
 const ANALYSIS_FILE = path.join(process.cwd(), "data", "broll-cache", "analysis.json");
 
@@ -104,8 +111,16 @@ export async function analyzeAsset(
   }
 }
 
-/** Детерминированный матчинг анализа против intent — без LLM, бесплатно. */
-export function scoreRelevance(intent: VisualIntent, analysis: AssetAnalysis): VisualRelevanceScore {
+/**
+ * Детерминированный матчинг анализа против intent — без LLM, бесплатно.
+ * Если заявлена конкретная сущность (Jordan Henderson, England vs Mexico), общий
+ * кадр по теме отклоняется: семантическая точность важнее вертикальности и 1080p.
+ */
+export function scoreRelevance(
+  intent: VisualIntent,
+  analysis: AssetAnalysis,
+  entity?: { sourceIntent?: string; entityName?: string },
+): VisualRelevanceScore {
   const haystack = `${analysis.description} ${analysis.objects.join(" ")} ${analysis.environment} ${analysis.action}`.toLowerCase();
 
   const termHit = (term: string): boolean => {
@@ -123,9 +138,34 @@ export function scoreRelevance(intent: VisualIntent, analysis: AssetAnalysis): V
       subjectMatch: 0,
       environmentMatch: 0,
       actionMatch: 0,
+      specificityMatch: 0,
       avoidViolation: true,
+      specificityFail: false,
       reason: `нарушен avoid: «${violated}»`,
     };
+  }
+
+  // конкретная сущность обязана быть видна на кадре, иначе это просто «что-то по теме»
+  const needsEntity = SPECIFIC_INTENTS.has(String(entity?.sourceIntent)) && Boolean(entity?.entityName);
+  if (needsEntity) {
+    const parts = String(entity!.entityName)
+      .split(/\s+|vs\.?|против/i)
+      .map((p) => p.trim().toLowerCase())
+      .filter((p) => p.length > 2);
+    const hits = parts.filter((p) => haystack.includes(stem(p))).length;
+    const specificityMatch = parts.length ? hits / parts.length : 0;
+    if (specificityMatch < 0.5) {
+      return {
+        relevance: 0,
+        subjectMatch: 0,
+        environmentMatch: 0,
+        actionMatch: 0,
+        specificityMatch: round2(specificityMatch),
+        avoidViolation: false,
+        specificityFail: true,
+        reason: `слишком общий кадр для «${entity!.entityName}» (совпало ${hits}/${parts.length})`,
+      };
+    }
   }
 
   const mustTerms = intent.mustHave.length ? intent.mustHave : [intent.subject];
@@ -140,7 +180,9 @@ export function scoreRelevance(intent: VisualIntent, analysis: AssetAnalysis): V
     subjectMatch: round2(subjectMatch),
     environmentMatch: round2(environmentMatch),
     actionMatch: round2(actionMatch),
+    specificityMatch: needsEntity ? 1 : 1,
     avoidViolation: false,
+    specificityFail: false,
     reason: `subject ${mustHits}/${mustTerms.length}, env ${round2(environmentMatch)}, action ${round2(actionMatch)}`,
   };
 }

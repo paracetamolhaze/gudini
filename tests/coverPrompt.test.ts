@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildCoverImagePrompt } from "../lib/coverPrompt";
+import { buildCoverImagePrompt, buildFullCoverPrompt } from "../lib/coverPrompt";
 import type { CoverConcept } from "../lib/cover";
 
 function concept(overrides: Partial<CoverConcept["composition"]> = {}): CoverConcept {
@@ -71,6 +71,48 @@ test("Prompt v4: запреты стиля и текста присутству�
   for (const banned of ["no neon", "plastic skin", "no text", "watermarks"]) {
     assert.ok(p.toLowerCase().includes(banned.toLowerCase()), `нет запрета: ${banned}`);
   }
+});
+
+test("Full-cover: секции в порядке IDENTITY→STORY→COMPOSITION→EXPRESSION→PHOTO→TYPOGRAPHY→EXACT TEXT→ANATOMY→NEG", () => {
+  const c = concept();
+  c.typographyDirection = "ACCENT_BOX";
+  const p = buildFullCoverPrompt(c);
+  const order = [
+    "IDENTITY reference",
+    "Story:",
+    "Vertical 9:16 viral cover",
+    "Expression:",
+    "photorealistic editorial photograph",
+    "integral part of this thumbnail composition",
+    "exact Russian headline",
+    "Correct human anatomy",
+    "Strictly not",
+  ];
+  let last = -1;
+  for (const marker of order) {
+    const idx = p.indexOf(marker);
+    assert.ok(idx > last, `«${marker}» не на месте (idx=${idx})`);
+    last = idx;
+  }
+});
+
+test("Full-cover: точный headline дословно, направление типографики вставлено, старых запретов текста нет", () => {
+  const c = concept();
+  c.typographyDirection = "ONE_WORD_DOMINANT";
+  const p = buildFullCoverPrompt(c);
+  assert.ok(p.includes('"ГЕНЫ\nНА ЗАКАЗ"'), "headline должен быть дословно");
+  assert.ok(p.includes("gigantic and dominant"), "направление ONE_WORD_DOMINANT");
+  assert.ok(p.includes("do not misspell Cyrillic"));
+  assert.ok(!p.includes("Lower 35%"), "safe-area в full-режиме отсутствует");
+  assert.ok(!p.includes("no text, numbers"), "запрет текста в full-режиме отсутствует");
+});
+
+test("Full-cover: руки запрещены по умолчанию, kicker попадает в EXACT TEXT", () => {
+  const c = concept();
+  c.kicker = "Генный шок";
+  const p = buildFullCoverPrompt(c);
+  assert.ok(p.includes("NO HANDS OR FINGERS"));
+  assert.ok(p.includes('"ГЕННЫЙ ШОК"'));
 });
 
 test("Prompt v4: длинные значения от Claude обрезаются, лимит не пробивается", () => {

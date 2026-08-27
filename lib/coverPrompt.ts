@@ -155,6 +155,88 @@ export function buildCoverImagePromptFull(concept: CoverConcept): string {
   );
 }
 
+// ===== Full-AI Cover: image-модель рисует ГОТОВУЮ обложку, включая типографику =====
+
+const TYPOGRAPHY_DIRECTIONS: Record<string, string> = {
+  BOTTOM_MASSIVE:
+    "Stack the headline as a massive multi-line block across the lower third, nearly full width of the frame.",
+  SIDE_STACK:
+    "Stack the headline vertically beside the face, filling the empty side of the composition.",
+  ONE_WORD_DOMINANT:
+    "Make one word of the headline gigantic and dominant, with the remaining words much smaller near it.",
+  ACCENT_BOX:
+    "Set one key word of the headline in black letters on a warm-yellow box; the other words in white.",
+  INTEGRATED_POSTER:
+    "Integrate the headline into the scene like designed poster art; letters may pass partially behind the person.",
+};
+
+/**
+ * Промпт полной обложки: FACE + SCENE + TYPOGRAPHY одной генерацией.
+ * Секции: IDENTITY → STORY → COMPOSITION → EXPRESSION → PHOTOGRAPHY → TYPOGRAPHY →
+ * EXACT TEXT → ANATOMY → NEGATIVES. Запрет текста и safe-area здесь НЕ используются.
+ */
+export function buildFullCoverPrompt(concept: CoverConcept): string {
+  const pos =
+    concept.composition.facePosition === "center"
+      ? "centered"
+      : `positioned slightly to the ${concept.composition.facePosition}`;
+  const scale = concept.composition.faceScale === "very_large" ? "approximately 65%" : "approximately 55%";
+  const headline = concept.headlineLines.map((l) => l.text).join("\n");
+
+  const identity =
+    "Use the attached reference photo strictly as the IDENTITY reference for the main person: preserve the " +
+    "recognizable identity — facial structure, eyes, eyebrows, nose, lips, jawline, skin tone, hairstyle, " +
+    "hair color, approximate age and defining features. The person must clearly remain the same individual. " +
+    "Do NOT copy the reference photo's expression, pose, clothing, lighting or composition.";
+
+  const story =
+    `Story: exactly one main story object — ${concept.scene.storyObject} — in one environment: ${concept.scene.environment}. ` +
+    "The background must read as a believable photographed place, slightly out of focus, never louder than the face.";
+
+  const composition =
+    `Vertical 9:16 viral cover. Very large chest-up portrait, head and upper torso only, the person occupies ${scale} ` +
+    `of the frame, ${pos}` +
+    (concept.scene.mainSubject ? `; ${concept.scene.mainSubject}` : "") +
+    ". The face and the headline are the two dominant visual elements.";
+
+  const expression =
+    `Expression: ${concept.emotion || "tense realization"} — a real photographed human reaction, natural muscle ` +
+    "tension, no cartoon exaggeration.";
+
+  const photography =
+    "Highly photorealistic editorial photograph: premium portrait photography, real skin texture with visible " +
+    "pores, sharp eyelashes, individual hair strands, tack-sharp eyes, realistic optics and shadows, 85mm lens, " +
+    "shallow depth of field, professional key-art retouch.";
+
+  const typography =
+    "Design the headline as an integral part of this thumbnail composition — custom-designed for THIS image, " +
+    "not a pasted template. Extremely bold, condensed display typography; massive, aggressive, editorial; it must " +
+    "compete visually with the face. Large Cyrillic capital letters, very tight line spacing, strong contrast " +
+    "against the background. Main text colors: white and warm yellow; black shadow/outline allowed for separation. " +
+    (TYPOGRAPHY_DIRECTIONS[concept.typographyDirection ?? "BOTTOM_MASSIVE"] ?? TYPOGRAPHY_DIRECTIONS.BOTTOM_MASSIVE);
+
+  const exactText =
+    `The cover MUST contain the following exact Russian headline:\n"${headline}"\n` +
+    "Render the text exactly as written: do not change wording, do not translate, do not add extra words, " +
+    "do not misspell Cyrillic characters." +
+    (concept.kicker ? ` Optional small kicker label: "${concept.kicker.toUpperCase()}".` : "") +
+    " No other readable text, watermarks or logos anywhere.";
+
+  const anatomy =
+    "Correct human anatomy: no extra, fused or malformed fingers, no extra limbs, no warped eyes, no malformed " +
+    "teeth, no duplicated features." +
+    (concept.composition.allowHands
+      ? ""
+      : " NO HANDS OR FINGERS VISIBLE IN FRAME — crop the composition so hands are outside; do not invent gestures.");
+
+  const negatives =
+    "Strictly not: digital painting, illustration, CGI, 3D render, video game poster, fantasy artwork, comic or " +
+    "anime style, plastic or waxy skin, beauty filter, excessive HDR, neon, glow, cyberpunk, floating particles, " +
+    "fake HUD or random interface elements.";
+
+  return [identity, story, composition, expression, photography, typography, exactText, anatomy, negatives].join(" ");
+}
+
 /** Обрезка по границе слова (не режем слова посередине). */
 function clipWords(text: string | undefined, max: number): string {
   const t = String(text ?? "").trim();

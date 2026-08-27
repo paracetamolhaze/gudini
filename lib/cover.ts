@@ -26,10 +26,19 @@ import { buildCoverImagePrompt } from "./coverPrompt";
  * RUNWAY_ERROR | DOWNLOAD_FAILED; при любом сбое пайплайн откатится на кадр из видео.
  */
 
+export type TypographyDirection =
+  | "BOTTOM_MASSIVE"
+  | "SIDE_STACK"
+  | "ONE_WORD_DOMINANT"
+  | "ACCENT_BOX"
+  | "INTEGRATED_POSTER";
+
 export type CoverConcept = {
   headline: string;
   headlineLines: HeadlineLine[];
   kicker?: string;
+  /** направление типографики для full-AI обложки (текст рисует image-модель) */
+  typographyDirection?: TypographyDirection;
   emotion: string; // правдоподобная фотографическая реакция (en)
   scene: {
     mainSubject: string; // кто в кадре и что делает корпусом/головой (без рук)
@@ -57,6 +66,14 @@ headlineLines: 2–4 строки по 1–3 КОРОТКИХ слова, сти
 «РАВЕНСТВО / КОНЧИЛОСЬ». Грамматика обязана быть безупречной («ВО ДВОРЕ», не «В ДВОРЕ»).
 accent одной смысловой строки: "yellow" (жёлтые буквы) или "box" (жёлтая плашка, чёрные буквы —
 для самого ударного короткого слова), остальные false (белые). kicker — микро-метка 1-2 слова.
+Headline каждый раз НОВЫЙ, из конфликта/поворота ИМЕННО этого сценария (2–6 слов): не повторяй
+структуру предыдущих обложек и не строй всё по одной формуле.
+
+typographyDirection — выбери направление типографики ПОД этот headline и сцену (для обложек, где
+текст рисует image-модель): BOTTOM_MASSIVE (огромный многострочник снизу) | SIDE_STACK (столбик
+сбоку от лица) | ONE_WORD_DOMINANT (одно гигантское слово + маленькая вторая строка) | ACCENT_BOX
+(ключевое слово на жёлтой плашке) | INTEGRATED_POSTER (текст вплетён в сцену, может заходить за
+человека). Разные ролики — разные направления.
 
 Ты отвечаешь ТОЛЬКО за режиссуру. Фотографичность, анатомию, запреты стиля и текста добавляет система —
 НЕ пиши промпт сам. Верни структурные поля (на английском, кратко):
@@ -73,7 +90,8 @@ accent одной смысловой строки: "yellow" (жёлтые бук
 
 Ответь СТРОГО валидным JSON:
 {"headlineLines":[{"text":"РАВЕНСТВО","accent":false},{"text":"КОНЧИЛОСЬ","accent":"yellow"}],
-"kicker":"РАЗБОР","emotion":"...","scene":{"mainSubject":"...","storyObject":"...","environment":"..."},
+"kicker":"РАЗБОР","typographyDirection":"BOTTOM_MASSIVE","emotion":"...",
+"scene":{"mainSubject":"...","storyObject":"...","environment":"..."},
 "composition":{"facePosition":"center","faceScale":"very_large","allowHands":false},
 "design_notes":["..."]}`;
 
@@ -121,6 +139,9 @@ export async function generateCoverConcept(
       headline,
       headlineLines,
       kicker: json.kicker ? String(json.kicker).slice(0, 24) : undefined,
+      typographyDirection: (["BOTTOM_MASSIVE", "SIDE_STACK", "ONE_WORD_DOMINANT", "ACCENT_BOX", "INTEGRATED_POSTER"] as const).includes(json.typographyDirection)
+        ? json.typographyDirection
+        : "BOTTOM_MASSIVE",
       emotion: String(json.emotion ?? "").slice(0, 120),
       scene: {
         mainSubject: String(json.scene.mainSubject ?? "").slice(0, 100),

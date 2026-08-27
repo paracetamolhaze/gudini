@@ -29,8 +29,13 @@ export type FetchResult = {
 const UA = "Gudini/1.0 (short-video editor)";
 /** JS-движок для разбора плеера YouTube: node уже установлен в образе воркера. */
 const JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node";
-/** Только видеодорожка: звук внешнего материала в ролик не попадает никогда. */
-const VIDEO_ONLY = "bv*[height<=1080][ext=mp4]/bv*[height<=1080]/bv*[ext=mp4]/bv*/best";
+/**
+ * Только видеодорожка: звук внешнего материала в ролик не попадает никогда.
+ * Потолок 720p — не экономия, а необходимость: при 1080p сюжет на несколько минут
+ * весит больше лимита в 90 МБ, скачивание обрывается на середине и материал теряется.
+ * Из 720p вертикальный кадр 1080×1920 всё равно режется по центру.
+ */
+const VIDEO_ONLY = "bv*[height<=720][ext=mp4]/bv*[height<=720]/bv*[ext=mp4]/bv*/best";
 const MAX_BYTES = 90_000_000;
 
 async function hasExtractor(): Promise<boolean> {
@@ -100,6 +105,11 @@ async function viaExtractor(pageUrl: string, out: string): Promise<FetchResult> 
       .join(" ")
       .replace(/\s+/g, " ")
       .trim();
+    for (const junk of [out, `${out}.part`]) {
+      try {
+        fs.rmSync(junk, { force: true });
+      } catch {}
+    }
     return { ok: false, reason: (msg || String(e?.message ?? e)).slice(0, 140) };
   }
 }
@@ -174,12 +184,17 @@ export async function probeVideo(pageUrl: string): Promise<ProbeInfo> {
     addCost({ ytdlpSuccesses: 1 });
     return info;
   } catch (e: any) {
+    // Настоящий текст ошибки, без пересказа: подстановка про «вход/подпись» уже
+    // однажды выдала обычный промах с форматом за защиту площадки.
     const msg = String(e?.stderr ?? e?.message ?? e);
-    const reason = /cookies|sign in|log in|login|private|DRM|PO Token|not available|age|bot/i.test(msg)
-      ? "поток недоступен без входа/подписи"
-      : /Unsupported URL/i.test(msg)
-        ? "площадка не поддерживается экстрактором"
-        : msg.replace(/\s+/g, " ").slice(0, 110);
+    const reason =
+      msg
+        .split(/\r?\n/)
+        .filter((l) => /ERROR|WARNING/i.test(l))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120) || msg.replace(/\s+/g, " ").slice(0, 120);
     const info = { url: pageUrl, platform, ok: false, reason };
     probeLog.push(info);
     return info;

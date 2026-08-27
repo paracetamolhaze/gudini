@@ -1,5 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { getSettings } from "./store";
+import { mediaComplete, parseJson, mediaLlmAvailable } from "./mediaLlm";
 import { Word } from "./transcribe";
 import { StoryResearchPack } from "./storyResearch";
 import { ScriptBeat } from "./scriptBeats";
@@ -18,8 +17,6 @@ import { addCost } from "./pipelineCost";
  * Один смысловой блок может закрываться последовательностью из 2–3 коротких
  * кадров (человек → событие → последствие) — это даёт динамику без подмены смысла.
  */
-
-const MODEL = "claude-sonnet-5";
 
 export type MontageEventType = "EXTERNAL_VIDEO" | "EXTERNAL_IMAGE";
 export type Layout = "fullscreen" | "smart_crop" | "fit_blurred";
@@ -133,8 +130,11 @@ export async function directMontage(
   duration: number,
   speechCuts: number[] = [],
 ): Promise<MontagePlan | null> {
-  const key = getSettings().anthropicKey;
-  if (!key || !pack.assets.length || words.length < 10) return null;
+  if (!mediaLlmAvailable()) {
+    throw new Error("Режиссёр монтажа не запущен: нет доступного LLM-провайдера");
+  }
+  if (!pack.assets.length) throw new Error("Режиссёр монтажа не запущен: медиатека пуста");
+  if (words.length < 10) throw new Error("Режиссёр монтажа не запущен: транскрипция слишком короткая");
   const T = taste();
 
   const catalogue = pack.assets
@@ -149,41 +149,21 @@ export async function directMontage(
     .join("\n");
   const transcript = words.map((w) => w.word).join(" ");
 
-  const client = new Anthropic({ apiKey: key });
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
+  const raw = await mediaComplete({
     system: systemPrompt(),
-    messages: [
-      {
-        role: "user",
-        content:
-          `История: ${research.canonicalEvent}\n\n` +
-          `Блоки сценария:\n${beatList}\n\n` +
-          `Медиатека:\n${catalogue}\n\n` +
-          (speechCuts.length
-            ? `Склейки речи на ${speechCuts.map((s) => s.toFixed(1)).join(", ")} сек — вставку рядом ставить особенно полезно.\n\n`
-            : "") +
-          `Транскрипция (${duration.toFixed(0)} сек):\n${transcript}`,
-      },
-    ],
+    maxTokens: 8000,
+    user:
+      `История: ${research.canonicalEvent}\n\n` +
+      `Блоки сценария:\n${beatList}\n\n` +
+      `Медиатека:\n${catalogue}\n\n` +
+      (speechCuts.length
+        ? `Склейки речи на ${speechCuts.map((s) => s.toFixed(1)).join(", ")} сек — вставку рядом ставить особенно полезно.\n\n`
+        : "") +
+      `Транскрипция (${duration.toFixed(0)} сек):\n${transcript}`,
   });
   addCost({ editPlannerCalls: 1 });
 
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .replace(/^```(json)?/m, "")
-    .replace(/```$/m, "")
-    .trim();
-
-  let placements: RawPlacement[];
-  try {
-    placements = JSON.parse(raw).placements ?? [];
-  } catch {
-    return null;
-  }
+  const placements: RawPlacement[] = parseJson<any>(raw, "Режиссёр монтажа").placements ?? [];
 
   const byId = new Map(pack.assets.map((a) => [a.id, a]));
   const used = new Set<string>();

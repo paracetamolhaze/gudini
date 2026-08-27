@@ -28,6 +28,8 @@ export type MontageTaste = {
   beat_video_queries: number;
   beat_image_queries: number;
   core_video_queries: number;
+  /** сколько лучших по метаданным кандидатов реально качать */
+  core_download_shortlist: number;
   max_source_videos: number;
   segments_per_source_video: number;
   min_usable_video_segments: number;
@@ -56,6 +58,7 @@ const DEFAULTS: MontageTaste = {
   beat_video_queries: 3,
   beat_image_queries: 2,
   core_video_queries: 6,
+  core_download_shortlist: 10,
   max_source_videos: 4,
   segments_per_source_video: 6,
   min_usable_video_segments: 6,

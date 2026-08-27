@@ -1,8 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import Anthropic from "@anthropic-ai/sdk";
-import { getSettings } from "./store";
+import { mediaComplete, parseJson, mediaLlmAvailable } from "./mediaLlm";
 import { StoryResearchPack } from "./storyResearch";
 import { ScriptBeat, MediaResearchNeed } from "./scriptBeats";
 import { braveVideos, braveImages } from "./braveSearch";
@@ -14,6 +13,12 @@ import { probe, runFfmpeg } from "./ffmpeg";
 import { taste } from "./montageTaste";
 
 const rank = (i: string) => (i === "HIGH" ? 0 : i === "MEDIUM" ? 1 : 2);
+/**
+ * Потолок длительности исходника. Перебивки берутся из новостных сюжетов на
+ * одну-пять минут; получасовое шоу и полный матч не влезают в лимит скачивания,
+ * обрываются на середине и просто съедают время.
+ */
+const MAX_SOURCE_SEC = 600;
 const domainOf = (u: string) => {
   try {
     return new URL(u).hostname.replace(/^www\./, "");
@@ -52,13 +57,26 @@ export type StageCounts = {
   imagesAccepted: number;
   beforeBeatMatch: number;
   beatCompatible: number;
+  /** сколько кандидатов дошло до шорт-листа на скачивание */
+  shortlisted: number;
+  /** отдельно по YouTube — площадка долго не работала, за ней нужен свой счёт */
+  ytUrlsDiscovered: number;
+  ytDownloadAttempted: number;
+  ytDownloadOk: number;
+  ytSourceVideosAccepted: number;
+  ytSegments: number;
 };
 export const stages: StageCounts = {
   videoResults: 0, sourceVerifyPass: 0, probeAttempted: 0, probeOk: 0,
   downloadAttempted: 0, downloadOk: 0, sourceVideosAccepted: 0, framesSampled: 0,
   segmentsExtracted: 0, imageResults: 0, imageVerifyPass: 0, imagesAccepted: 0,
-  beforeBeatMatch: 0, beatCompatible: 0,
+  beforeBeatMatch: 0, beatCompatible: 0, shortlisted: 0,
+  ytUrlsDiscovered: 0, ytDownloadAttempted: 0, ytDownloadOk: 0,
+  ytSourceVideosAccepted: 0, ytSegments: 0,
 };
+
+/** YouTube считаем отдельно: именно он раньше давал 45 находок и 0 скачиваний. */
+export const isYoutube = (u: string) => /(^|\.)(youtube\.com|youtu\.be)$/i.test(domainOf(u));
 export function resetStages(): void {
   for (const k of Object.keys(stages) as (keyof StageCounts)[]) stages[k] = 0;
 }
@@ -119,6 +137,50 @@ function coreVideoQueries(r: StoryResearchPack): string[] {
   ].filter((q) => q.trim().length > 6);
 }
 
+/**
+ * Оценка кандидата ПО МЕТАДАННЫМ, до всякого скачивания.
+ *
+ * Смысл: находок обычно несколько десятков, а качать имеет смысл единицы.
+ * Порядок выдачи Brave к сюжету отношения не имеет, поэтому сначала считаем,
+ * насколько заголовок/описание/канал совпадают с историей, и грузим только верх списка.
+ */
+export function scoreCandidate(
+  c: { title?: string; description?: string; publisher?: string; url: string; age?: string },
+  r: StoryResearchPack,
+): number {
+  const hay = `${c.title ?? ""} ${c.description ?? ""} ${c.publisher ?? ""}`.toLowerCase();
+  if (!hay.trim()) return 0;
+  let score = 0;
+
+  // участники истории — самый сильный признак
+  for (const e of r.entities) {
+    const names = [e.name, ...(e.aliases ?? [])].map((n) => n.toLowerCase()).filter((n) => n.length > 2);
+    if (names.some((n) => hay.includes(n))) score += e.type === "PERSON" ? 3 : 2;
+  }
+
+  // слова канонического события
+  const evWords = r.canonicalEvent
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w.length > 3);
+  const hits = evWords.filter((w) => hay.includes(w)).length;
+  score += Math.min(4, hits);
+
+  // год события в заголовке — сильный сигнал против «похожего, но другого» матча
+  if (r.eventYear) {
+    const y = String(r.eventYear);
+    if (hay.includes(y)) score += 3;
+    const otherYear = hay.match(/\b(19|20)\d{2}\b/g)?.some((m) => m !== y);
+    if (otherYear && !hay.includes(y)) score -= 2;
+  }
+
+  // тип материала: нужен сюжет, а не разбор/подкаст/нарезка приколов
+  if (/highlights?|full match|documentary|interview|analysis|reaction|podcast|compilation|top \d+/i.test(hay)) score -= 1;
+  if (/news|report|moment|footage|clip|live/i.test(hay)) score += 1;
+
+  return score;
+}
+
 /** Запрос под конкретный блок: контекст истории + что нужно показать. */
 function beatQueries(r: StoryResearchPack, need: MediaResearchNeed): string[] {
   const year = r.eventYear ? String(r.eventYear) : "";
@@ -152,6 +214,7 @@ async function cutSegments(
   const samples = Math.min(wanted, Math.max(3, Math.floor(duration / 8)));
   const out: Omit<PackAsset, "compatibleBeatIds" | "relatedFactIds" | "role">[] = [];
   const seenDesc: string[] = [];
+  const failures: string[] = [];
 
   for (let i = 0; i < samples; i++) {
     const at = ((i + 0.5) / samples) * Math.max(0, duration - 3);
@@ -164,7 +227,8 @@ async function cutSegments(
       stages.framesSampled++;
       const an = await analyzeAsset(`seg:${videoId}:${i}`, "", fs.readFileSync(frame));
       addCost({ visionCalls: 1 });
-      if (!an || an.isScreenshot || an.hasLargeWatermark) continue;
+      if (!an) throw new Error("зрение не описало кадр");
+      if (an.isScreenshot || an.hasLargeWatermark) continue;
       // почти одинаковые кадры не плодим: сегменты должны отличаться
       if (seenDesc.some((d) => similar(d, an.description))) continue;
       seenDesc.push(an.description);
@@ -194,12 +258,19 @@ async function cutSegments(
         verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
       });
       stages.segmentsExtracted++;
-    } catch {
+    } catch (e: any) {
+      // Отказ отдельного кадра — нормальная жизнь (битый кадр, неудачная нарезка).
+      // А вот отказ ВСЕХ кадров означает сломанную стадию, и делать вид,
+      // что материала просто нет, нельзя — это уже уничтожило готовые сегменты.
+      failures.push(String(e?.message ?? e).slice(0, 120));
     } finally {
       try {
         fs.rmSync(frame, { force: true });
       } catch {}
     }
+  }
+  if (!out.length && failures.length === samples) {
+    throw new Error(`Разбор исходного видео не выполнен ни на одном кадре: ${failures[0]}`);
   }
   return { assets: out, duration };
 }
@@ -233,8 +304,10 @@ async function matchToBeats(
   beats: ScriptBeat[],
   research: StoryResearchPack,
 ): Promise<PackAsset[]> {
-  const key = getSettings().anthropicKey;
-  if (!key || !assets.length) return assets;
+  if (!assets.length) return assets;
+  if (!mediaLlmAvailable()) {
+    throw new Error("Сопоставление с блоками невозможно: нет доступного LLM-провайдера");
+  }
   const beatList = beats
     .filter((b) => b.visualNeed !== "NONE")
     .map((b) => `[${b.id}] (${b.visualNeed}) ${b.text}`)
@@ -242,29 +315,15 @@ async function matchToBeats(
   const assetList = assets.map((a) => `id=${a.id} [${a.kind}] ${a.description.slice(0, 120)}`).join("\n");
 
   try {
-    const client = new Anthropic({ apiKey: key });
-    const response = await client.messages.create({
-      model: "claude-sonnet-5",
-      max_tokens: 6000,
+    const raw = await mediaComplete({
       system: MATCH_SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content:
-            `История: ${research.canonicalEvent}\nУчастники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
-            `Блоки сценария:\n${beatList}\n\nМатериалы:\n${assetList}`,
-        },
-      ],
+      maxTokens: 6000,
+      user:
+        `История: ${research.canonicalEvent}\nУчастники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
+        `Блоки сценария:\n${beatList}\n\nМатериалы:\n${assetList}`,
     });
     addCost({ researchLlmCalls: 1 });
-    const raw = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
-      .replace(/^```(json)?/m, "")
-      .replace(/```$/m, "")
-      .trim();
-    const json = JSON.parse(raw);
+    const json = parseJson<any>(raw, "Сопоставление с блоками");
     const byId = new Map<string, any>((Array.isArray(json.items) ? json.items : []).map((i: any) => [String(i.id), i]));
     const beatIds = new Set(beats.map((b) => b.id));
     const factIds = new Set(research.facts.map((f) => f.id));
@@ -300,6 +359,7 @@ export async function buildAssetPack(
   needs: MediaResearchNeed[],
   dir: string,
 ): Promise<StoryAssetPackV2> {
+  const T0 = taste();
   const mediaDir = path.join(dir, "story-assets");
   fs.mkdirSync(mediaDir, { recursive: true });
   const assets: PackAsset[] = [];
@@ -309,61 +369,90 @@ export async function buildAssetPack(
   console.log(`Медиатека: экстрактор видео ${(await extractorReady()) ? "доступен" : "не установлен"}`);
 
   // ---------- CORE: главное видео истории ----------
-  const coreQueries = coreVideoQueries(research);
-  let coreSegments = 0;
-  for (const q of coreQueries) {
-    if (coreSegments >= 10) break;
+  // Сперва собираем ВСЕХ кандидатов по всем запросам, потом ранжируем по метаданным
+  // и качаем только верх списка. Качать всё подряд в порядке выдачи — трата времени:
+  // из полусотни находок полезны единицы, и порядок Brave их не выделяет.
+  const pool = new Map<string, { v: any; score: number }>();
+  for (const q of coreVideoQueries(research)) {
     for (const v of await braveVideos(q)) {
-      if (coreSegments >= 10) break;
       stages.videoResults++;
+      if (isYoutube(v.url)) stages.ytUrlsDiscovered++;
       const vid = sid(v.url);
-      if (seenVideo.has(vid)) continue;
-      const src = verifySource({ title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher }, research);
+      if (pool.has(vid)) continue;
+      const src = verifySource(
+        { title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher },
+        research,
+      );
       if (!src.ok) continue;
       stages.sourceVerifyPass++;
-      seenVideo.add(vid);
+      pool.set(vid, { v, score: scoreCandidate(v, research) });
+    }
+  }
 
-      // разведка: доступен ли поток и какой длины ролик — до скачивания
-      if (!v.directUrl) {
-        stages.probeAttempted++;
-        const pr = await probeVideo(v.url);
-        if (pr.ok) stages.probeOk++;
-        console.log(`  probe ${pr.platform} ${pr.ok ? `OK ${pr.durationSec ?? "?"}с (${pr.extractor})` : `— ${pr.reason}`}`);
-        if (!pr.ok) continue;
-      }
-      const raw = path.join(mediaDir, `src-${vid}.mp4`);
-      stages.downloadAttempted++;
-      const got = await fetchVideo(v.directUrl, v.url, raw);
-      if (got.ok) stages.downloadOk++;
-      if (!got.ok) {
-        console.log(`  скачивание ${v.url.slice(0, 55)} → ${got.reason}`);
+  const shortlist = [...pool.entries()]
+    .sort((a, b) => b[1].score - a[1].score)
+    .slice(0, T0.core_download_shortlist);
+  stages.shortlisted = shortlist.length;
+  console.log(
+    `CORE: кандидатов ${pool.size} → в шорт-лист ${shortlist.length} ` +
+      `(лучший балл ${shortlist[0]?.[1].score ?? 0}, худший ${shortlist[shortlist.length - 1]?.[1].score ?? 0})`,
+  );
+
+  let coreSegments = 0;
+  for (const [vid, { v, score }] of shortlist) {
+    if (coreSegments >= 12) break;
+    seenVideo.add(vid);
+    const yt = isYoutube(v.url);
+
+    // разведка: доступен ли поток и какой длины ролик — до скачивания
+    if (!v.directUrl) {
+      stages.probeAttempted++;
+      const pr = await probeVideo(v.url);
+      if (pr.ok) stages.probeOk++;
+      console.log(
+        `  [${score}] probe ${pr.platform} ${pr.ok ? `OK ${pr.durationSec ?? "?"}с (${pr.extractor})` : `— ${pr.reason}`}`,
+      );
+      if (!pr.ok) continue;
+      // многочасовые трансляции и полные матчи для перебивок бесполезны
+      if (pr.durationSec && pr.durationSec > MAX_SOURCE_SEC) {
+        console.log(`  пропуск: длительность ${Math.round(pr.durationSec / 60)} мин — это не новостной сюжет`);
         continue;
       }
-      const cut = await cutSegments(raw, mediaDir, vid, 6);
-      if (!cut.assets.length) continue;
-      stages.sourceVideosAccepted++;
-      sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
-      for (const a of cut.assets) {
-        assets.push({
-          ...a,
-          sourceUrl: v.url,
-          sourceDomain: (() => {
-            try {
-              return new URL(v.url).hostname.replace(/^www\./, "");
-            } catch {
-              return "unknown";
-            }
-          })(),
-          compatibleBeatIds: [],
-          relatedFactIds: [],
-          role: "CONTEXT",
-        });
-      }
-      coreSegments += cut.assets.length;
-      try {
-        fs.rmSync(raw, { force: true });
-      } catch {}
     }
+    const raw = path.join(mediaDir, `src-${vid}.mp4`);
+    stages.downloadAttempted++;
+    if (yt) stages.ytDownloadAttempted++;
+    const got = await fetchVideo(v.directUrl, v.url, raw);
+    if (!got.ok) {
+      console.log(`  скачивание ${v.url.slice(0, 55)} → ${got.reason}`);
+      continue;
+    }
+    stages.downloadOk++;
+    if (yt) stages.ytDownloadOk++;
+
+    const cut = await cutSegments(raw, mediaDir, vid, 6);
+    try {
+      fs.rmSync(raw, { force: true });
+    } catch {}
+    if (!cut.assets.length) continue;
+    stages.sourceVideosAccepted++;
+    if (yt) {
+      stages.ytSourceVideosAccepted++;
+      stages.ytSegments += cut.assets.length;
+    }
+    sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
+    console.log(`  ПРИНЯТО ${domainOf(v.url)} ${cut.duration.toFixed(0)}с → ${cut.assets.length} сегментов`);
+    for (const a of cut.assets) {
+      assets.push({
+        ...a,
+        sourceUrl: v.url,
+        sourceDomain: domainOf(v.url),
+        compatibleBeatIds: [],
+        relatedFactIds: [],
+        role: "CONTEXT",
+      });
+    }
+    coreSegments += cut.assets.length;
   }
 
   // ---------- BEAT: добор под блоки. VIDEO-FIRST: видео ищется раньше картинок ----------
@@ -384,25 +473,40 @@ export async function buildAssetPack(
       for (const v of (await braveVideos(q)).slice(0, 6)) {
         if (gotVideo || assets.length >= 30) break;
         stages.videoResults++;
+        if (isYoutube(v.url)) stages.ytUrlsDiscovered++;
         const vid = sid(v.url);
         if (seenVideo.has(vid)) continue;
         const src = verifySource({ title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher }, research);
         if (!src.ok) continue;
         seenVideo.add(vid);
 
+        stages.sourceVerifyPass++;
         if (!v.directUrl) {
+          stages.probeAttempted++;
           const pr = await probeVideo(v.url);
+          if (pr.ok) stages.probeOk++;
           if (!pr.ok) continue;
+          if (pr.durationSec && pr.durationSec > MAX_SOURCE_SEC) continue;
         }
         const raw = path.join(mediaDir, `src-${vid}.mp4`);
+        const ytB = isYoutube(v.url);
+        stages.downloadAttempted++;
+        if (ytB) stages.ytDownloadAttempted++;
         const got = await fetchVideo(v.directUrl, v.url, raw);
         if (!got.ok) continue;
+        stages.downloadOk++;
+        if (ytB) stages.ytDownloadOk++;
         const cut = await cutSegments(raw, mediaDir, vid, 4);
         try {
           fs.rmSync(raw, { force: true });
         } catch {}
         if (!cut.assets.length) continue;
-
+        stages.sourceVideosAccepted++;
+        if (ytB) {
+          stages.ytSourceVideosAccepted++;
+          stages.ytSegments += cut.assets.length;
+        }
+        console.log(`  ПРИНЯТО ${domainOf(v.url)} ${cut.duration.toFixed(0)}с → ${cut.assets.length} сегментов`);
         sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
         for (const a of cut.assets) {
           assets.push({

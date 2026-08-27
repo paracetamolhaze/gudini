@@ -1,6 +1,5 @@
 import crypto from "crypto";
-import Anthropic from "@anthropic-ai/sdk";
-import { getSettings } from "./store";
+import { mediaComplete, parseJson, mediaLlmAvailable } from "./mediaLlm";
 import { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
 
@@ -35,8 +34,6 @@ export type MediaResearchNeed = {
   importance: "HIGH" | "MEDIUM" | "LOW";
 };
 
-const MODEL = "claude-sonnet-5";
-
 const BEATS_SYSTEM = `Ты — режиссёр монтажа. Тебе дают историю (событие, дату, участников, факты)
 и готовый текст озвучки. Раздели текст на ВИЗУАЛЬНЫЕ БЛОКИ по 2–6 секунд речи.
 
@@ -70,39 +67,25 @@ const bid = (s: string, i: number) => `b${i}_${crypto.createHash("sha1").update(
 export async function buildScriptBeats(
   script: string,
   research: StoryResearchPack,
-): Promise<{ beats: ScriptBeat[]; needs: MediaResearchNeed[] } | null> {
-  const key = getSettings().anthropicKey;
-  if (!key || !script.trim()) return null;
+): Promise<{ beats: ScriptBeat[]; needs: MediaResearchNeed[] }> {
+  if (!mediaLlmAvailable() || !script.trim()) {
+    throw new Error("Разбор сценария на блоки невозможен: нет доступного LLM-провайдера");
+  }
 
   const facts = research.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");
-  const client = new Anthropic({ apiKey: key });
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
+  const raw = await mediaComplete({
     system: BEATS_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content:
-          `История: ${research.canonicalEvent}\n` +
-          (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
-          `Участники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
-          `Факты:\n${facts}\n\nТекст озвучки:\n${script}`,
-      },
-    ],
+    maxTokens: 8000,
+    user:
+      `История: ${research.canonicalEvent}\n` +
+      (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
+      `Участники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
+      `Факты:\n${facts}\n\nТекст озвучки:\n${script}`,
   });
   addCost({ researchLlmCalls: 1 });
 
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .replace(/^```(json)?/m, "")
-    .replace(/```$/m, "")
-    .trim();
-
-  try {
-    const json = JSON.parse(raw);
+  {
+    const json = parseJson<any>(raw, "Разбор сценария на блоки");
     const known = new Set(research.facts.map((f) => f.id));
     const beats: ScriptBeat[] = [];
     const needs: MediaResearchNeed[] = [];
@@ -132,8 +115,7 @@ export async function buildScriptBeats(
       });
     });
 
-    return beats.length ? { beats, needs } : null;
-  } catch {
-    return null;
+    if (!beats.length) throw new Error("Разбор сценария на блоки: модель не вернула ни одного блока");
+    return { beats, needs };
   }
 }

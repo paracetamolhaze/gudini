@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import Anthropic from "@anthropic-ai/sdk";
+import { mediaVision, mediaLlmAvailable } from "./mediaLlm";
 import { getSettings } from "./store";
 import { VisualIntent } from "./editPlan";
 import { detectImageMediaType } from "./coverQc";
@@ -81,37 +81,17 @@ export async function analyzeAsset(
   const cache = readAnalysisCache();
   if (cache[cacheKey]) return cache[cacheKey];
 
-  const key = getSettings().anthropicKey;
-  if (!key || (!thumbnailUrl && !buffer)) return null;
+  if (!mediaLlmAvailable() || (!thumbnailUrl && !buffer)) return null;
 
-  const client = new Anthropic({ apiKey: key });
-  const response = await client.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 2000,
-    system: VISION_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content: [
-          buffer
-            ? {
-                type: "image" as const,
-                source: {
-                  type: "base64" as const,
-                  media_type: detectImageMediaType(buffer),
-                  data: buffer.toString("base64"),
-                },
-              }
-            : { type: "image" as const, source: { type: "url" as const, url: thumbnailUrl } },
-          { type: "text", text: "Describe this preview frame." },
-        ],
-      },
-    ],
-  });
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
+  const raw = (
+    await mediaVision({
+      system: VISION_SYSTEM,
+      user: "Describe this preview frame.",
+      image: buffer
+        ? { base64: buffer.toString("base64"), mediaType: detectImageMediaType(buffer) }
+        : { url: thumbnailUrl },
+    })
+  )
     .replace(/^```(json)?/m, "")
     .replace(/```$/m, "")
     .trim();

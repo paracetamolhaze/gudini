@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
-import { extractMediaFromHtml, isProtectedPlatform } from "../lib/brollVideo";
+import { extractMediaFromHtml, isProtectedPlatform, isDirectMedia } from "../lib/brollVideo";
 import { scoreRelevance, AssetAnalysis } from "../lib/brollRelevance";
 import type { VisualIntent } from "../lib/editPlan";
 
@@ -68,19 +68,14 @@ test("3: внешнее видео кодируется без звука и с 
   assert.ok(src.includes('segmentStart > 0 ? ["-ss"'), "сегмент вырезается со смещением");
 });
 
-test("4: платформы с защищённым потоком не запрашиваются", () => {
-  for (const u of [
-    "https://www.youtube.com/watch?v=x",
-    "https://youtu.be/x",
-    "https://www.tiktok.com/@a/video/1",
-    "https://www.instagram.com/p/x/",
-    "https://x.com/a/status/1",
-  ]) {
-    assert.equal(isProtectedPlatform(u), true, `должна пропускаться: ${u}`);
-  }
-  for (const u of ["https://apnews.com/article/x", "https://archive.org/details/x", "https://commons.wikimedia.org/x"]) {
-    assert.equal(isProtectedPlatform(u), false, `должна обрабатываться: ${u}`);
-  }
+test("4: платформы не блокируются по домену — решает конкретная ссылка", () => {
+  assert.equal(isProtectedPlatform(), false, "блок-листа доменов больше нет");
+  // годится всё, что отдаётся обычным запросом как медиафайл
+  assert.equal(isDirectMedia("https://v.redd.it/abc/DASH_720.mp4"), true);
+  assert.equal(isDirectMedia("https://cdn.news.com/clip.webm?ts=1"), true);
+  // ссылка на страницу плеера сама по себе визуалом не является
+  assert.equal(isDirectMedia("https://www.youtube.com/watch?v=x"), false);
+  assert.equal(isDirectMedia("https://example.com/article"), false);
 });
 
 test("5: видео приоритетнее фото при равной релевантности", () => {

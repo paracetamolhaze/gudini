@@ -1,4 +1,4 @@
-import { mediaFromPage, searchArchiveOrg, isProtectedPlatform } from "./brollVideo";
+import { mediaFromPage, searchArchiveOrg, searchReddit } from "./brollVideo";
 /**
  * Публичные источники визуала для фактических перебивок.
  *
@@ -28,6 +28,12 @@ export type WebAsset = {
   retrievalQuery: string;
   retrievedAt: string;
   localPath?: string;
+  // журнал по каждому видео: откуда, каким способом, какой фрагмент взят
+  sourceDurationSec?: number;
+  segmentStart?: number;
+  segmentEnd?: number;
+  downloadMethod?: string;
+  audioRemoved?: boolean;
 };
 
 const UA = { "User-Agent": "Gudini/1.0 (short-video editor; contact via site)" };
@@ -300,7 +306,7 @@ export async function searchWebPages(query: string): Promise<string[]> {
     const json: any = await res.json();
     return (json.web?.results ?? [])
       .map((r: any) => String(r.url ?? ""))
-      .filter((u: string) => u && !isProtectedPlatform(u));
+      .filter((u: string) => Boolean(u));
   } catch {
     return [];
   }
@@ -345,6 +351,9 @@ export async function findWebAssets(
     } catch {}
     try {
       add(await searchArchiveOrg(q));
+    } catch {}
+    try {
+      add(await searchReddit(q));
     } catch {}
     // страницы из веб-поиска — это точка обнаружения: достаём из них вложенное медиа,
     // а не вставляем скриншот страницы

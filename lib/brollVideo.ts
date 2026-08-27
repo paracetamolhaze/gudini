@@ -15,19 +15,23 @@ import { WebAsset } from "./brollWeb";
 
 const UA = { "User-Agent": "Gudini/1.0 (short-video editor)" };
 
-/** Платформы, чей поток без обхода защиты не забрать — не тратим на них время. */
-const PROTECTED_HOSTS =
-  /(^|\.)(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|facebook\.com|fb\.watch|x\.com|twitter\.com|vimeo\.com|dailymotion\.com)$/i;
+const DIRECT_VIDEO = /\.(mp4|webm|mov|m4v)(\?|$)/i;
 
-export function isProtectedPlatform(url: string): boolean {
-  try {
-    return PROTECTED_HOSTS.test(new URL(url).hostname);
-  } catch {
-    return false;
-  }
+/**
+ * Домены НЕ блокируются. Проверка идёт по конкретному URL: пробуем забрать медиа
+ * обычным HTTP-запросом. Если файл отдаётся штатно (прямой mp4/webm, открытый CDN,
+ * плеер новостного сайта, v.redd.it) — используем. Если для получения потока нужен
+ * логин, cookies, платная подписка или расшифровка подписи в плеере — пропускаем
+ * ЭТОТ ролик и идём к следующему кандидату, а не отключаем платформу целиком.
+ */
+export function isProtectedPlatform(): boolean {
+  return false;
 }
 
-const DIRECT_VIDEO = /\.(mp4|webm|mov|m4v)(\?|$)/i;
+/** Ссылка ведёт на файл, который можно скачать обычным запросом. */
+export function isDirectMedia(url: string): boolean {
+  return DIRECT_VIDEO.test(url);
+}
 
 function absolute(url: string, base: string): string | null {
   try {
@@ -95,7 +99,6 @@ export function extractMediaFromHtml(html: string, pageUrl: string): { video?: s
 
 /** Открывает страницу-источник и вытаскивает из неё пригодное медиа. */
 export async function mediaFromPage(pageUrl: string, query: string): Promise<WebAsset[]> {
-  if (isProtectedPlatform(pageUrl)) return [];
   try {
     const res = await fetch(pageUrl, { headers: UA, redirect: "follow" });
     if (!res.ok) return [];
@@ -129,6 +132,41 @@ export async function mediaFromPage(pageUrl: string, query: string): Promise<Web
       });
     }
     return assets;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Reddit: публичный JSON-API без ключа и без логина. Видео с v.redd.it отдаётся
+ * обычным MP4 по прямой ссылке (DASH-дорожка), поэтому источник полностью пригоден.
+ */
+export async function searchReddit(query: string): Promise<WebAsset[]> {
+  try {
+    const url = new URL("https://www.reddit.com/search.json");
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", "15");
+    url.searchParams.set("sort", "relevance");
+    const res = await fetch(url, { headers: UA });
+    if (!res.ok) return [];
+    const json: any = await res.json();
+    const out: WebAsset[] = [];
+    for (const child of json.data?.children ?? []) {
+      const d = child.data ?? {};
+      const rv = d.secure_media?.reddit_video ?? d.media?.reddit_video ?? d.preview?.reddit_video_preview;
+      const fallback = String(rv?.fallback_url ?? "");
+      if (!fallback) continue;
+      out.push({
+        sourceUrl: `https://www.reddit.com${d.permalink ?? ""}`,
+        sourceDomain: "reddit.com",
+        directUrl: fallback.split("?")[0], // прямая mp4-дорожка без параметров
+        title: String(d.title ?? ""),
+        mediaType: "video",
+        retrievalQuery: query,
+        retrievedAt: new Date().toISOString(),
+      });
+    }
+    return out;
   } catch {
     return [];
   }

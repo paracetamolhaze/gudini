@@ -208,7 +208,14 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
               continue;
             }
             event.file = file;
-            sources.push({ ...asset, localPath: file });
+            sources.push({
+              ...asset,
+              localPath: file,
+              segmentStart: built.segmentStart ?? 0,
+              segmentEnd: (built.segmentStart ?? 0) + duration,
+              downloadMethod: "http",
+              audioRemoved: asset.mediaType === "video",
+            });
             // одобренный визуал сущности сохраняем, чтобы не потерять при перепланировании
             if (event.entityName && bytes && hash) {
               try {

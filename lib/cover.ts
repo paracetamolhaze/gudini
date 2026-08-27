@@ -36,6 +36,8 @@ export type TypographyDirection =
 export type CoverConcept = {
   headline: string;
   headlineLines: HeadlineLine[];
+  /** 3 коротких варианта заголовка; победителя выбирает deterministic preflight */
+  headlineCandidates?: string[];
   kicker?: string;
   /** направление типографики для full-AI обложки (текст рисует image-модель) */
   typographyDirection?: TypographyDirection;
@@ -62,19 +64,22 @@ const CONCEPT_SYSTEM = `Ты — арт-директор viral short-form кон
 Анализ: вытащи конфликт/hook/claim (НЕ первые слова сценария), одну эмоцию лица, один сильный
 визуальный символ для фона.
 
-HEADLINE — САМОЕ ВАЖНОЕ. Его рисует сама image-модель, поэтому он должен быть предельно коротким:
-жёстко максимум 5 слов, идеально 2–4; максимум 3 строки по 1–3 слова. Это не пересказ сценария,
-а ударная обложечная формула: конфликт, неожиданный факт, опасность, потеря, абсурд, шок, поворот.
-Плохо → хорошо: «ТИГР / ВО ДВОРЕ / НЕ БЕГИ» → «ТИГР / У ДОМА»; «5000$ / СТАЛИ / 300$» →
-«ДЕНЬГИ / СГОРЕЛИ» или «ПОТЕРЯЛ / $5000»; «ДЕТЕЙ / РЕДАКТИРУЮТ / ДО / РОЖДЕНИЯ» → «ДЕТИ / НА ЗАКАЗ».
-Максимум ОДНА служебная связка (НА/ВО/НЕ/У…). Избегай стрелок, процентов, нескольких валют, длинных
-чисел и длинной пунктуации; одно число можно, если оно и есть hook. Грамматика безупречна
-(«ВО ДВОРЕ», не «В ДВОРЕ»). Headline каждый раз НОВЫЙ, не повторяй структуру прошлых обложек.
-accent одной смысловой строки: "yellow" (жёлтые буквы) или "box" (жёлтая плашка, чёрные буквы),
-остальные false (белые); одна акцентная строка, не больше.
+HEADLINE — САМОЕ ВАЖНОЕ, его рисует сама image-модель. Предложи РОВНО 3 РАЗНЫХ коротких
+варианта в headlineCandidates (одной строкой каждый, БЕЗ переносов). Финальный выберет система,
+поэтому все три должны быть самодостаточными и передавать главный смысл.
 
-kicker ПО УМОЛЧАНИЮ НЕ НУЖЕН — верни null. Каждое лишнее слово повышает риск, что генератор
-нарисует мусорный текст. Добавляй kicker (1–2 слова) только если он реально усиливает дизайн.
+Каждый вариант: идеально 2–3 слова, максимум 4; короткие простые русские слова; читается за секунду;
+смысл понятен без пояснений. Это не пересказ сценария, а ударная обложечная формула: конфликт,
+неожиданный факт, опасность, потеря, абсурд, шок, поворот.
+Хорошо: «ТИГР У ДОМА», «ДЕТИ НА ЗАКАЗ», «ДЕНЬГИ СГОРЕЛИ», «ПИЛОТ ВЫПРЫГНУЛ», «РАВЕНСТВО КОНЧИЛОСЬ».
+Плохо: «ТИГР ВО ДВОРЕ НЕ БЕГИ», «5000$ СТАЛИ 300$», «ДЕТЕЙ РЕДАКТИРУЮТ ДО РОЖДЕНИЯ».
+Максимум ОДНА служебная связка (НА/ВО/НЕ/У…). Без стрелок, процентов, валют, длинных чисел и
+пунктуации; число оставляй, только если оно САМО и есть hook («ПОТЕРЯЛ $5000»), а если смысл
+выражается словами — предпочитай слова («ДЕНЬГИ СГОРЕЛИ»). Грамматика безупречна («ВО ДВОРЕ»,
+не «В ДВОРЕ»). Варианты каждый раз НОВЫЕ, не повторяй структуру прошлых обложек.
+
+kicker — верни null. Дополнительная мелкая надпись повышает риск, что генератор нарисует мусорный
+текст, а стиль строится композицией, цветом и типографикой, а не лишними словами.
 
 typographyDirection — выбери направление типографики ПОД этот headline и сцену (для обложек, где
 текст рисует image-модель): BOTTOM_MASSIVE (огромный многострочник снизу) | SIDE_STACK (столбик
@@ -96,7 +101,7 @@ typographyDirection — выбери направление типографик
   forehead, pointing, open palms и прочие типовые жесты тумбнейлов.
 
 Ответь СТРОГО валидным JSON:
-{"headlineLines":[{"text":"РАВЕНСТВО","accent":false},{"text":"КОНЧИЛОСЬ","accent":"yellow"}],
+{"headlineCandidates":["РАВЕНСТВО КОНЧИЛОСЬ","ГЕНЫ НА ЗАКАЗ","БОГАТЫЕ ВЫБИРАЮТ"],
 "kicker":null,"typographyDirection":"BOTTOM_MASSIVE","emotion":"...",
 "scene":{"mainSubject":"...","storyObject":"...","environment":"..."},
 "composition":{"facePosition":"center","faceScale":"very_large","allowHands":false},
@@ -145,16 +150,25 @@ export async function generateCoverConcept(
     .trim();
   try {
     const json = JSON.parse(raw);
+    // основной формат — 3 варианта заголовка (победителя выберет preflight);
+    // старый формат headlineLines/headline поддерживается как один вариант
+    const candidates = (Array.isArray(json.headlineCandidates) ? json.headlineCandidates : [])
+      .map((c: unknown) => String(c ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .slice(0, 3);
     const rawLines = Array.isArray(json.headlineLines) ? json.headlineLines : null;
-    const headline = rawLines?.length
-      ? rawLines.map((l: any) => String(l.text ?? "")).join("\n")
-      : String(json.headline ?? "");
-    const headlineLines = breakHeadline(rawLines as HeadlineLine[] | null, headline);
+    const headline = candidates[0]
+      ? candidates[0]
+      : rawLines?.length
+        ? rawLines.map((l: any) => String(l.text ?? "")).join("\n")
+        : String(json.headline ?? "");
+    const headlineLines = breakHeadline(candidates[0] ? null : (rawLines as HeadlineLine[] | null), headline);
     if (!headlineLines.length || !json.scene?.storyObject || !json.scene?.environment) return null;
     const fp = String(json.composition?.facePosition ?? "center");
     return {
       headline,
       headlineLines,
+      headlineCandidates: candidates.length ? candidates : undefined,
       // kicker необязателен и рискован (лишний текст → брак QC): принимаем только 1–2 коротких слова
       kicker: acceptKicker(json.kicker),
       typographyDirection: (["BOTTOM_MASSIVE", "SIDE_STACK", "ONE_WORD_DOMINANT", "ACCENT_BOX", "INTEGRATED_POSTER"] as const).includes(json.typographyDirection)

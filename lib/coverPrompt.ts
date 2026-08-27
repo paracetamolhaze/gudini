@@ -219,13 +219,13 @@ export function buildFullCoverPrompt(concept: CoverConcept): string {
     (TYPOGRAPHY_DIRECTIONS[concept.typographyDirection ?? "BOTTOM_MASSIVE"] ?? TYPOGRAPHY_DIRECTIONS.BOTTOM_MASSIVE);
 
   const exactText =
-    `The exact Russian headline is:\n"${headline}"\n` +
-    "You MUST render these exact words. Do not replace words, do not invent additional headline words, " +
-    "do not translate, do not misspell Cyrillic, do not generate pseudo-text." +
-    (concept.kicker ? ` One small kicker label is also allowed: "${concept.kicker.toUpperCase()}".` : "") +
-    " Do not generate ANY other readable text anywhere in the image except the exact headline" +
-    (concept.kicker ? " and that kicker" : "") +
-    ": no captions, signs, labels, fake UI, random numbers, logos, watermarks or Russian-looking pseudo-words.";
+    `The ONLY readable text allowed anywhere in the image is:\n"${headline}"\n` +
+    (concept.kicker ? `plus one small kicker: "${concept.kicker.toUpperCase()}"\n` : "") +
+    "Render these exact Russian words correctly. The line breaks above are preferred, but you may adjust " +
+    "the layout as long as every word stays exactly as written. Do not replace words, do not invent " +
+    "additional words, do not translate, do not misspell Cyrillic.\n" +
+    "Do not add any other readable words, letters, labels, captions, signs, badges, logos, numbers, " +
+    "fake interface elements or pseudo-text anywhere in the image.";
 
   const anatomy =
     "Correct human anatomy: no extra, fused or malformed fingers, no extra limbs, no warped eyes, no malformed " +

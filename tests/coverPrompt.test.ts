@@ -84,7 +84,7 @@ test("Full-cover: секции в порядке IDENTITY→STORY→COMPOSITION�
     "Expression:",
     "photorealistic editorial photograph",
     "integral part of the composition",
-    "The exact Russian headline is",
+    "The ONLY readable text allowed",
     "Correct human anatomy",
     "Strictly not",
   ];
@@ -119,11 +119,11 @@ test("Full-cover: без kicker разрешён ТОЛЬКО headline, layout �
   const c = concept();
   c.kicker = undefined;
   const p = buildFullCoverPrompt(c);
-  assert.ok(p.includes("Do not generate ANY other readable text"));
-  assert.ok(p.includes("fake UI"), "перечислены запрещённые виды лишнего текста");
+  assert.ok(p.includes("The ONLY readable text allowed anywhere in the image is"));
+  assert.ok(p.includes("badges"), "декоративные надписи и бейджи прямо запрещены");
   assert.ok(!p.includes("kicker"), "кикера нет — про него в промпте ни слова");
   assert.ok(p.includes("Do not force the same layout on every cover"));
-  assert.ok(p.includes("You MUST render these exact words"));
+  assert.ok(p.includes("Render these exact Russian words correctly"));
 });
 
 test("Prompt v4: длинные значения от Claude обрезаются, лимит не пробивается", () => {

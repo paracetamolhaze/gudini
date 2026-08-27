@@ -17,7 +17,7 @@ import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
 import { planEdit } from "./editPlanner";
 import { generateCoverConcept } from "./cover";
-import { breakHeadline } from "./coverLayout";
+import { applyHeadlinePreflight } from "./coverHeadline";
 import { buildCover } from "./coverPipeline";
 import { fullAiCoverEnabled } from "./coverProvider";
 import type { CoverStatus } from "./store";
@@ -254,11 +254,16 @@ export async function makeCover(
       console.warn("Cover: INVALID_CONCEPT — концепт не сгенерировался/не распарсился");
       return { cover: null, coverStatus: "failed" };
     }
-    // заголовок, заданный пользователем вручную, заменяет придуманный планировщиком
+    // заголовок, заданный пользователем вручную, побеждает без отбора
     if (headlineOverride?.trim()) {
-      concept.headlineLines = breakHeadline(null, headlineOverride.trim());
-      concept.headline = concept.headlineLines.map((l) => l.text).join("\n");
+      concept.headlineCandidates = [headlineOverride.trim()];
     }
+    // Headline Preflight: из 3 текстовых вариантов детерминированно выбираем самый
+    // безопасный для отрисовки — это дешевле, чем ловить брак после платной генерации
+    const preflight = applyHeadlinePreflight(concept, dir);
+    console.log(
+      `Cover preflight: ${preflight.headlineCandidates.map((h, i) => `«${h}» ${preflight.scores[i].score}`).join(" | ")} → «${preflight.selectedHeadline}»`,
+    );
     fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
     const r = await buildCover(dir, concept, {}, { manual });
     console.log(

@@ -14,6 +14,9 @@ export type CoverRun = {
   cost: number;
   manual?: boolean;
   error?: string;
+  /** длина отправленного заголовка — чтобы увидеть связь с провалами QC */
+  headlineWords?: number;
+  headlineChars?: number;
 };
 
 export type CoverStats = {
@@ -30,6 +33,8 @@ export type CoverStats = {
   qcUnavailable: number;
   errors: number;
   totalCost: number;
+  headlineAvgWords: number;
+  headlineAvgChars: number;
   updatedAt?: string;
 };
 
@@ -49,6 +54,8 @@ const EMPTY: CoverStats = {
   qcUnavailable: 0,
   errors: 0,
   totalCost: 0,
+  headlineAvgWords: 0,
+  headlineAvgChars: 0,
 };
 
 export function readCoverStats(file = STATS_FILE): CoverStats {
@@ -69,6 +76,13 @@ export function applyCoverRun(stats: CoverStats, run: CoverRun): CoverStats {
 
   if (run.status === "PASS") s.passedQc += 1;
   else if (run.status === "COVER_FAILED") s.failedQc += 1;
+
+  // скользящее среднее по длине заголовков (для связи «длина ↔ провалы QC»)
+  if (run.headlineWords !== undefined && run.headlineChars !== undefined) {
+    const round = (v: number) => Number(v.toFixed(2));
+    s.headlineAvgWords = round(s.headlineAvgWords + (run.headlineWords - s.headlineAvgWords) / s.generated);
+    s.headlineAvgChars = round(s.headlineAvgChars + (run.headlineChars - s.headlineAvgChars) / s.generated);
+  }
 
   switch (run.qc) {
     case "TEXT_MISMATCH": s.textMismatch += 1; break;

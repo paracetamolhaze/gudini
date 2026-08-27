@@ -46,6 +46,19 @@ export type Project = {
   publications: Publication[];
 };
 
+export type YoutubeTokens = { access_token: string; refresh_token?: string; expires_at?: number };
+export type TiktokTokens = { access_token: string; refresh_token?: string; expires_at?: number; open_id?: string };
+export type InstagramTokens = { access_token: string; ig_user_id?: string; via?: "ig" | "fb" };
+export type PlatformTokens = YoutubeTokens | TiktokTokens | InstagramTokens;
+
+/** Сохранённый аккаунт платформы. id — стабильный ключ, чтобы повторный вход обновлял, а не плодил. */
+export type SavedAccount = {
+  id: string;
+  label: string;
+  at: string;
+  tokens: PlatformTokens;
+};
+
 export type Settings = {
   anthropicKey?: string;
   openaiKey?: string;
@@ -64,10 +77,13 @@ export type Settings = {
   igAppId?: string;
   igAppSecret?: string;
   publicBaseUrl?: string;
-  // OAuth-токены подключённых аккаунтов
-  youtubeTokens?: { access_token: string; refresh_token?: string; expires_at?: number };
-  tiktokTokens?: { access_token: string; refresh_token?: string; expires_at?: number; open_id?: string };
-  instagramTokens?: { access_token: string; ig_user_id?: string; via?: "ig" | "fb" };
+  // OAuth-токены АКТИВНОГО аккаунта платформы (именно их читает публикация)
+  youtubeTokens?: YoutubeTokens;
+  tiktokTokens?: TiktokTokens;
+  instagramTokens?: InstagramTokens;
+  // Все когда-либо подключённые аккаунты: подключение нового больше не стирает предыдущий
+  savedAccounts?: Partial<Record<Platform, SavedAccount[]>>;
+  activeAccounts?: Partial<Record<Platform, string>>;
 };
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -226,6 +242,8 @@ export function getSettings(): Settings {
     youtubeTokens: saved.youtubeTokens,
     tiktokTokens: saved.tiktokTokens,
     instagramTokens: saved.instagramTokens,
+    savedAccounts: saved.savedAccounts,
+    activeAccounts: saved.activeAccounts,
   };
 }
 

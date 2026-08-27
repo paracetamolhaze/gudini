@@ -21,7 +21,7 @@ export async function publish(id: string, platform: Platform): Promise<Publicati
   try {
     if (platform === "youtube")
       result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? [], coverPath);
-    else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description, coverMs);
+    else if (platform === "tiktok") result = await publishTikTok(videoPath);
     else result = await publishInstagram(id, title, description, coverMs);
   } catch (e: any) {
     result = { platform, status: "error", message: String(e?.message ?? e) };
@@ -85,7 +85,8 @@ async function publishYouTube(
       tags: tags.map((t) => t.replace(/^#/, "")).slice(0, 30),
       categoryId: "22",
     },
-    status: { privacyStatus: "public", selfDeclaredMadeForKids: false },
+    // приватно = черновик: ролик виден только владельцу канала, публикует он сам из YouTube Studio
+    status: { privacyStatus: "private", selfDeclaredMadeForKids: false },
   };
 
   const boundary = "gudini" + Date.now();
@@ -120,51 +121,39 @@ async function publishYouTube(
       });
     } catch {}
   }
-  return { platform: "youtube", status: "published", url: `https://youtube.com/shorts/${json.id}` };
+  return {
+    platform: "youtube",
+    status: "published",
+    url: `https://youtube.com/shorts/${json.id}`,
+    message: "Залито приватным черновиком — откройте YouTube Studio, проверьте и опубликуйте.",
+  };
 }
 
 // ===== TikTok (Content Posting API) =====
 
-async function publishTikTok(videoPath: string, title: string, description: string, coverMs: number): Promise<PublishResult> {
+async function publishTikTok(videoPath: string): Promise<PublishResult> {
   const s = getSettings();
   const token = s.tiktokTokens?.access_token;
   if (!token) return demo("tiktok", "аккаунт TikTok не подключён");
 
   const video = fs.readFileSync(videoPath);
-  const initBody = (privacy: string) =>
-    JSON.stringify({
-      post_info: {
-        title: `${title}\n${description}`.slice(0, 2200),
-        privacy_level: privacy,
-        video_cover_timestamp_ms: coverMs,
-      },
+  // inbox = черновик: ролик приезжает в «Уведомления → Загрузки», подпись и обложку
+  // автор выбирает сам в приложении. В отличие от Direct Post не требует аудита
+  // Content Posting API и не упирается в принудительный SELF_ONLY.
+  const initRes = await fetch("https://open.tiktokapis.com/v2/post/publish/inbox/video/init/", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
       source_info: {
         source: "FILE_UPLOAD",
         video_size: video.length,
         chunk_size: video.length,
         total_chunk_count: 1,
       },
-    });
-  const initCall = (privacy: string) =>
-    fetch("https://open.tiktokapis.com/v2/post/publish/video/init/", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: initBody(privacy),
-    });
+    }),
+  });
+  if (!initRes.ok) throw new Error(`TikTok init: ${initRes.status} ${(await initRes.text()).slice(0, 300)}`);
 
-  let privacy = "PUBLIC_TO_EVERYONE";
-  let initRes = await initCall(privacy);
-  if (!initRes.ok) {
-    const text = await initRes.text();
-    // приложение без аудита TikTok может публиковать только приватно — пробуем SELF_ONLY
-    if (/unaudited|privacy_level/i.test(text)) {
-      privacy = "SELF_ONLY";
-      initRes = await initCall(privacy);
-      if (!initRes.ok) throw new Error(`TikTok init: ${initRes.status} ${(await initRes.text()).slice(0, 300)}`);
-    } else {
-      throw new Error(`TikTok init: ${initRes.status} ${text.slice(0, 300)}`);
-    }
-  }
   const init: any = await initRes.json();
   const uploadUrl = init?.data?.upload_url;
   if (!uploadUrl) throw new Error(`TikTok: ${JSON.stringify(init).slice(0, 300)}`);
@@ -178,13 +167,11 @@ async function publishTikTok(videoPath: string, title: string, description: stri
     body: new Uint8Array(video),
   });
   if (!putRes.ok) throw new Error(`TikTok upload: ${putRes.status}`);
+
   return {
     platform: "tiktok",
     status: "published",
-    message:
-      privacy === "SELF_ONLY"
-        ? "Видео загружено как приватное: приложение ещё не прошло аудит TikTok (Content Posting API). После аудита публикация станет публичной."
-        : "Видео отправлено в TikTok — проверьте вкладку «Черновики/Публикации» в приложении",
+    message: "Залито в черновики TikTok — откройте приложение: Уведомления → Загрузки, там подпись и публикация.",
   };
 }
 

@@ -88,6 +88,8 @@ export async function buildCover(
       cost: cost.total,
       manual: options.manual === true,
       error: result.reason,
+      headlineWords: headline.split(/\s+/).filter(Boolean).length,
+      headlineChars: headline.replace(/\s/g, "").length,
     });
     return { ok: result.status === "PASS", qc: qcStatus, cost, ...result } as CoverPipelineResult;
   };

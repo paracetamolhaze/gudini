@@ -1,5 +1,7 @@
 import fs from "fs";
 import path from "path";
+import type { StoryResearchPack } from "./storyResearch";
+import type { ScriptBeat } from "./ai";
 
 export type Platform = "tiktok" | "youtube" | "instagram";
 
@@ -48,6 +50,11 @@ export type Project = {
   brollCount?: number; // сколько б-ролл перебивок вошло в монтаж
   meta: ProjectMeta | null;
   publications: Publication[];
+  /** исследование истории: источники, участники, факты. Живёт весь цикл проекта. */
+  research?: StoryResearchPack;
+  /** ссылка на новость, если пользователь дал её сам */
+  sourceUrl?: string;
+  scriptBeats?: ScriptBeat[];
 };
 
 export type YoutubeTokens = { access_token: string; refresh_token?: string; expires_at?: number };

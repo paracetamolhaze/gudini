@@ -1,0 +1,410 @@
+{
+  "storyId": "b618fa26",
+  "verificationVersion": 1,
+  "assets": [
+    {
+      "id": "35d8a19f18",
+      "mediaType": "VIDEO",
+      "sourceUrl": "https://www.espn.com/soccer/story/_/id/49306669/england-jordan-henderson-undergoes-surgery-broken-arm-mexico-fifa-world-cup",
+      "sourceDomain": "espn.com",
+      "directUrl": "https://media.video-cdn.espn.com/motion/2026/0707/dm_260707_Gundogan_England_are_clear_favourites_vs_Norway/dm_260707_Gundogan_England_are_clear_favourites_vs_Norway_360p30_1464k.mp4",
+      "title": "England's Jordan Henderson has surgery, eyes return at World Cup - ESPN",
+      "localFile": "story-assets/35d8a19f18.mp4",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A bearded man wearing earphones speaks while looking slightly downward during a video call.",
+      "durationSec": 142.976167,
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      },
+      "videoSegments": [
+        {
+          "start": 42.29,
+          "end": 45.29,
+          "description": "A bearded man wearing earphones speaks while looking slightly downward during a video call."
+        },
+        {
+          "start": 70.49,
+          "end": 73.49,
+          "description": "A bearded man wearing earphones looks up and talks during a video call"
+        },
+        {
+          "start": 126.88,
+          "end": 129.88,
+          "description": "A man with a beard smiles while wearing white earbuds during a video call."
+        }
+      ]
+    },
+    {
+      "id": "dda6c605a5",
+      "mediaType": "VIDEO",
+      "sourceUrl": "https://www.the-independent.com/sport/football/jordan-henderson-injury-latest-england-norway-world-cup-b3013269.html",
+      "sourceDomain": "the-independent.com",
+      "directUrl": "https://cdn.jwplayer.com/videos/DcKI70mw-OhrQWqOm.mp4",
+      "title": "Jordan Henderson opens door to shock World Cup semi-final return after freak injury | The Independent",
+      "localFile": "story-assets/dda6c605a5.mp4",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A footballer speaks into a microphone during a post-match interview in front of a FIFA World Cup 2026 sponsor backdrop.",
+      "durationSec": 33.76,
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      },
+      "videoSegments": [
+        {
+          "start": 3.18,
+          "end": 6.18,
+          "description": "A footballer speaks into a microphone during a post-match interview in front of a FIFA World Cup 2026 sponsor backdrop."
+        },
+        {
+          "start": 9.53,
+          "end": 12.53,
+          "description": "Two men, one wearing an England shirt, stand talking on a soccer pitch before a match."
+        },
+        {
+          "start": 15.88,
+          "end": 18.88,
+          "description": "Two men, one wearing an England training shirt, stand talking on a soccer field."
+        },
+        {
+          "start": 22.23,
+          "end": 25.23,
+          "description": "A footballer is being interviewed with a microphone in front of a FIFA World Cup 2026 sponsor backdrop."
+        },
+        {
+          "start": 28.58,
+          "end": 31.58,
+          "description": "A man is being interviewed with a microphone in front of a FIFA World Cup 2026 sponsor backdrop."
+        }
+      ]
+    },
+    {
+      "id": "aa78950f3e",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://www.reddit.com/r/sports/comments/1uonqp7/englands_jordan_henderson_had_to_be_stretchered/",
+      "sourceDomain": "reddit.com",
+      "directUrl": "https://external-preview.redd.it/englands-jordan-henderson-had-to-be-stretchered-off-the-v0-cjV0YWJ3d3pqamJoMXn4qOGYu1MY0tocgr11SJZ8WTAT2Pzn4oNmU2tpQC5q.png?width=640&crop=smart&format=pjpg&auto=webp&s=e83bf76ff840dfd61c895101480a8e3f018f4f81",
+      "title": "media poster",
+      "localFile": "story-assets/aa78950f3e.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A large crowd of football fans and stewards celebrate near the pitch barrier at a stadium event.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "9110972b48",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://www.sportingnews.com/us/soccer/news/jordan-henderson-injured-england-celebration-world-cup/83339c33c5af6c91a01fe8d2",
+      "sourceDomain": "sportingnews.com",
+      "directUrl": "https://library.sportingnews.com/styles/crop_style_16_9_1200_webp/s3/2026-07/GettyImages-2284821814.jpg.webp?itok=sBoXEDLX",
+      "title": "How was Jordan Henderson injured? England veteran stretchered off during celebration after World Cup win vs. Mexico image",
+      "localFile": "story-assets/9110972b48.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A football team celebrates together, running hand in hand across the pitch after a victory.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "70d39fcf6b",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://www.indy100.com/sport/jordan-henderson-fall-yellow-card-2677165865",
+      "sourceDomain": "indy100.com",
+      "directUrl": "https://www.indy100.com/media-library/jordan-henderson-stretchered-off-with-freak-injury-following-mexico-win.jpg?id=67099741&width=1245&height=700&quality=50&coordinates=0,0,0,0",
+      "title": "How did Jordan Henderson fall? What happened after yellow card and Mexico World Cup celebrations",
+      "localFile": "story-assets/70d39fcf6b.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A soccer player speaks at a press conference in front of a sponsor backdrop with a football and microphone on the table.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "9b40a248e8",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://football360.com.au/jordan-henderson-injury-stretcher-england-mexico-fifa-world-cup-round-of-16/",
+      "sourceDomain": "football360.com.au",
+      "directUrl": "https://football360.com.au/wp-content/uploads/2026/07/GettyImages-2286988708-520x300.webp",
+      "title": "",
+      "localFile": "story-assets/9b40a248e8.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "Soccer players in red and pink uniforms stand near a fallen player on the pitch during a match.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "b7bba26f30",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://football360.com.au/jordan-henderson-injury-stretcher-england-mexico-fifa-world-cup-round-of-16/",
+      "sourceDomain": "football360.com.au",
+      "directUrl": "https://football360.com.au/wp-content/uploads/2026/06/GettyImages-2283365892-1-scaled-e1783058515608-568x320.webp",
+      "title": "",
+      "localFile": "story-assets/b7bba26f30.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "Two Australian soccer players in yellow jerseys celebrate excitedly on the pitch.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "734d8ac72c",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://football360.com.au/jordan-henderson-injury-stretcher-england-mexico-fifa-world-cup-round-of-16/",
+      "sourceDomain": "football360.com.au",
+      "directUrl": "https://football360.com.au/wp-content/uploads/2026/07/GettyImages-2287680804-520x300.webp",
+      "title": "",
+      "localFile": "story-assets/734d8ac72c.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A group of soccer players in gray uniforms celebrate together on the field at night.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "452c14277e",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://football360.com.au/jordan-henderson-injury-stretcher-england-mexico-fifa-world-cup-round-of-16/",
+      "sourceDomain": "football360.com.au",
+      "directUrl": "https://football360.com.au/wp-content/uploads/2026/07/Screenshot-2026-07-25-072242-568x320.jpg",
+      "title": "",
+      "localFile": "story-assets/452c14277e.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A group of male football players in green training kits stand together outdoors looking upward.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "4e57a9ca20",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://football360.com.au/jordan-henderson-injury-stretcher-england-mexico-fifa-world-cup-round-of-16/",
+      "sourceDomain": "football360.com.au",
+      "directUrl": "https://football360.com.au/wp-content/uploads/2026/07/Screenshot-2026-07-25-065153-568x320.jpg",
+      "title": "",
+      "localFile": "story-assets/4e57a9ca20.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A soccer player wearing a France jersey with number 26 points and shouts during a match.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "b62345d1bd",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://the-independent.com/sport/football/jordan-henderson-injury-latest-england-norway-world-cup-b3013269.html",
+      "sourceDomain": "the-independent.com",
+      "directUrl": "https://static.the-independent.com/2026/07/11/21/2026-07-11T204256Z_386925296_UP1EM7B1LJIPR_RTRMADP_3_SOCCER-WORLDCUP-NOR-ENG.JPG",
+      "title": "Jordan Henderson's arm in a cast before England's quarter-final against Norway",
+      "localFile": "story-assets/b62345d1bd.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "Close-up of two football players standing side by side, one with a bandaged arm and hand, wearing sports kits with a Nike logo.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "1456b23e12",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://www.yardbarker.com/soccer/articles/watch_how_jordan_henderson_injured_his_arm_as_england_celebrated_world_cup_win_over_mexico_with_brentford_midfielder_being_stretchered_from_the_field_taken_to_hospital/s1_17790_44031931",
+      "sourceDomain": "yardbarker.com",
+      "directUrl": "http://res.cloudinary.com/ybmedia/image/upload/c_crop,e_improve,h_1080,w_1920,x_0,y_0/c_fill,f_auto,h_900,q_auto,w_1600/v1/m/6/3/63abd5e412f702ee0059a8de0b9aa47204619450/GOAL_20-_20Blank_20WEB_20-_20Facebook_20-_202026-06-28T133400.964.jpg",
+      "title": "Watch: How Jordan Henderson injured his arm as England celebrated World Cup win over Mexico - with Brentford midfielder being stretchered from the field & taken to hospital",
+      "localFile": "story-assets/1456b23e12.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A footballer wearing an England kit stands on the pitch with a focused expression during a match.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "68f56ce70e",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://www.englandfootball.com/articles/2026/Jul/11/Jordan-henderson-back-in-matchday-squad-after-surgery-20261107",
+      "sourceDomain": "englandfootball.com",
+      "directUrl": "https://cdn.englandfootball.com/-/jssmedia/EnglandFootball/Article/england/mens-senior-team/World-Cup-2026/20261107-jordan-henderson-panama-952.jpg?h=536&iar=0&w=952&rev=cc9821d2ea314787abd1d21c9c2e6352&hash=A14E9ADBC41A80221FF62D256DDCAD2B",
+      "title": "Jordan Henderson has played in his fourth World Cup with this tournament",
+      "localFile": "story-assets/68f56ce70e.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "An England football player in a red jersey applauds while standing on the pitch with teammates nearby.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "eacad19968",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://foxnews.com/sports/englands-jordan-henderson-officially-ruled-out-freak-fall-causes-fracture-opts-surgery",
+      "sourceDomain": "foxnews.com",
+      "directUrl": "https://a57.foxnews.com/static.foxnews.com/foxnews.com/content/uploads/2026/07/1200/675/team-mexico-england-world-cup-jordan-henderson-1.jpg?ve=1&tl=1",
+      "title": "team-mexico-england-world-cup-jordan-henderson-1 - 1",
+      "localFile": "story-assets/eacad19968.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "An England football captain checks on a goalkeeper who is lying injured on the pitch while medical staff attend to him.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "90b9752e9a",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://www.englandfootball.com/england/mens-senior-team/squad/jordan-henderson",
+      "sourceDomain": "englandfootball.com",
+      "directUrl": "https://cdn.englandfootball.com/-/jssmedia/thefacom-new/Images/england/Mens-Senior/2017-18/world-cup/tunisia/jordan-800-henderson-tunisia.jpg?h=450&iar=0&w=800&rev=cdb47a03ef3541c3be756c29e7fda979&hash=767FC5B78B65806F4F9E13C59C30524B",
+      "title": "Jordan Henderson applauds the fans after England's win over Tunisia",
+      "localFile": "story-assets/90b9752e9a.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "England football players celebrate with clenched fists after a match at the World Cup.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "a9c04aa4be",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://www.englandfootball.com/england/mens-senior-team/squad/jordan-henderson",
+      "sourceDomain": "englandfootball.com",
+      "directUrl": "https://cdn.englandfootball.com/-/media/EnglandFootball/Article/england/mens-senior-team/2026/June/20261206-jordan-henderson-jude-bellingham-1440.jpg?h=810&iar=0&w=1440&rev=e80c8dbb118c4615b5b981efe6195ddb&hash=813B149E50AE083FDDC429FFEEB06956",
+      "title": "",
+      "localFile": "story-assets/a9c04aa4be.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "Two England football players pose smiling together in the locker room after a match.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    },
+    {
+      "id": "89ab169353",
+      "mediaType": "IMAGE",
+      "sourceUrl": "https://www.englandfootball.com/england/mens-senior-team/squad/jordan-henderson",
+      "sourceDomain": "englandfootball.com",
+      "directUrl": "https://cdn.englandfootball.com/-/media/EnglandFootball/Article/england/mens-senior-team/World-Cup-2026/20261107-jordan-henderson-arrival-norway-1440.jpg?h=810&iar=0&w=1440&rev=eb334e7fb3184793a0030b9ed15bc02a&hash=338D7A9274BCA8D3069387C32295249A",
+      "title": "",
+      "localFile": "story-assets/89ab169353.jpg",
+      "relatedEntityIds": [
+        "cb8a94c2"
+      ],
+      "relatedFactIds": [],
+      "eventDate": "2026-07-06",
+      "description": "A football player wearing an England training kit stands looking to the side at a stadium event.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "verificationVersion": 1,
+        "reasons": []
+      }
+    }
+  ],
+  "createdAt": "2026-08-27T17:36:42.365Z"
+}

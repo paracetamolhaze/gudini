@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, updateProject } from "@/lib/store";
-import { generateMeta, generateScript } from "@/lib/ai";
+import { generateMeta, generateScript, generateScriptFromResearch } from "@/lib/ai";
+import { buildStoryResearchPack } from "@/lib/storyResearch";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -16,6 +17,31 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       const { meta } = await generateMeta(project.topic, project.script ?? "");
       return NextResponse.json(updateProject(id, { meta }));
     }
+    // Новый путь: сначала исследуем историю по источникам, затем пишем сценарий
+    // из проверенных фактов. Пакет исследования остаётся в проекте и позже
+    // становится основой медиатеки для монтажа.
+    if (process.env.STORY_ASSET_PIPELINE === "true") {
+      const research = await buildStoryResearchPack(project.topic, project.sourceUrl);
+      if (!research) {
+        return NextResponse.json(
+          { error: "Не удалось исследовать историю: нет источников или ключа поиска" },
+          { status: 502 },
+        );
+      }
+      const written = await generateScriptFromResearch(research);
+      if (!written) {
+        return NextResponse.json({ error: "Сценарий по исследованию не сгенерировался" }, { status: 502 });
+      }
+      return NextResponse.json(
+        updateProject(id, {
+          script: written.script,
+          scriptDemo: false,
+          research,
+          scriptBeats: written.beats,
+        }),
+      );
+    }
+
     const { script, demo } = await generateScript(project.topic);
     return NextResponse.json(updateProject(id, { script, scriptDemo: demo }));
   } catch (e: any) {

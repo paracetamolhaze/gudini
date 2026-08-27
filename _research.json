@@ -1,0 +1,223 @@
+{
+  "storyId": "b618fa26",
+  "topic": "самая нелепая травма за всю историю чемпионатов мира",
+  "canonicalEvent": "England midfielder Jordan Henderson was stretchered off after injuring himself while celebrating on the touchline during England's Round of 16 win over Mexico at the 2026 FIFA World Cup, despite not playing in the match.",
+  "summary": "Полузащитник сборной Англии Джордан Хендерсон получил, по мнению СМИ, самую нелепую травму в истории чемпионатов мира — во время матча 1/8 финала ЧМ-2026 против Мексики он травмировался, празднуя победу команды с бровки, хотя сам на поле не выходил. Хендерсона пришлось уносить с носилками, и его участие в турнире было официально завершено.",
+  "eventDate": "2026-07-06",
+  "eventYear": 2026,
+  "location": "Мексика (или другая арена ЧМ-2026, точное место не указано в источниках)",
+  "language": "ru",
+  "entities": [
+    {
+      "id": "cb8a94c2",
+      "name": "Jordan Henderson",
+      "type": "PERSON",
+      "aliases": [
+        "Джордан Хендерсон"
+      ]
+    },
+    {
+      "id": "5655ffe4",
+      "name": "England national football team",
+      "type": "TEAM",
+      "aliases": [
+        "Сборная Англии по футболу"
+      ]
+    },
+    {
+      "id": "fd9b84e9",
+      "name": "Mexico national football team",
+      "type": "TEAM",
+      "aliases": [
+        "Сборная Мексики по футболу"
+      ]
+    },
+    {
+      "id": "4e5de80e",
+      "name": "FIFA World Cup 2026",
+      "type": "EVENT",
+      "aliases": [
+        "Чемпионат мира по футболу 2026",
+        "ЧМ-2026"
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "id": "66425c62",
+      "text": "Джордан Хендерсон получил травму, отмечая победу сборной Англии над Мексикой в матче 1/8 финала чемпионата мира 2026 года.",
+      "sourceUrls": [
+        "https://www.sport-express.ru/football/world/chempionat-mira-2026/reviews/dzhordan-henderson-poluchil-nelepuyu-travmu-prazdnuya-pobedu-anglii-nad-meksikoy-v-1-8-chm-po-futbolu-2026-video-i-kommentarii-2437114/"
+      ]
+    },
+    {
+      "id": "47c772fe",
+      "text": "Хендерсон в этом матче на поле не выходил, травма произошла во время празднования на бровке.",
+      "sourceUrls": [
+        "https://www.sport-express.ru/football/world/chempionat-mira-2026/reviews/dzhordan-henderson-poluchil-nelepuyu-travmu-prazdnuya-pobedu-anglii-nad-meksikoy-v-1-8-chm-po-futbolu-2026-video-i-kommentarii-2437114/"
+      ]
+    },
+    {
+      "id": "99f13f8c",
+      "text": "Игрока пришлось уносить с поля на носилках после инцидента.",
+      "sourceUrls": [
+        "https://sport.ru/football/henderson-poluchil-samuyu-nelepuyu-travmu-v-istorii-chempionatov-mira-po-futbolu/article652962"
+      ]
+    },
+    {
+      "id": "13135062",
+      "text": "СМИ назвали произошедшее самой нелепой травмой в истории чемпионатов мира по футболу.",
+      "sourceUrls": [
+        "https://sport.ru/football/henderson-poluchil-samuyu-nelepuyu-travmu-v-istorii-chempionatov-mira-po-futbolu/article652962",
+        "https://www.sport-express.ru/football/world/chempionat-mira-2026/reviews/dzhordan-henderson-poluchil-nelepuyu-travmu-prazdnuya-pobedu-anglii-nad-meksikoy-v-1-8-chm-po-futbolu-2026-video-i-kommentarii-2437114/"
+      ]
+    },
+    {
+      "id": "574df16c",
+      "text": "Турнир для Джордана Хендерсона на этом чемпионате мира официально завершён из-за полученной травмы.",
+      "sourceUrls": [
+        "https://sport.ru/football/henderson-poluchil-samuyu-nelepuyu-travmu-v-istorii-chempionatov-mira-po-futbolu/article652962"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://www.championat.com/football/article-3253129-10-samykh-strashnykh-travm-v-istorii-futbola.html",
+      "domain": "championat.com",
+      "title": "10 самых страшных травм в истории футбола - Чемпионат",
+      "publishedAt": "2015-01-23T15:00:03",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://tips.gg/ru/article/10-worst-soccer-injuries-in-history-from-career-enders-to-comebacks-common",
+      "domain": "tips.gg",
+      "title": "10 самых страшных футбольных травм в истории: от тех, что положили конец карьере... | Tips.GG",
+      "publishedAt": "2026-07-29T15:47:04",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://www.championat.com/football/article-3220461-samye-strashnye-travmy-v-mirovom-futbole.html",
+      "domain": "championat.com",
+      "title": "Самые страшные травмы в мировом футболе - Чемпионат",
+      "publishedAt": "2013-11-01T10:00:06",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://www.sports.ru/football/blogs/432273.html",
+      "domain": "sports.ru",
+      "title": "Самые ужасные травмы в истории футбола(18+) - Футбольное обозрение - Блоги Sports.ru",
+      "publishedAt": "2013-03-09T00:00:00",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://sport.ru/football/henderson-poluchil-samuyu-nelepuyu-travmu-v-istorii-chempionatov-mira-po-futbolu/article652962",
+      "domain": "sport.ru",
+      "title": "Хендерсон получил самую нелепую травму в истории чемпионатов мира по футболу - Sport.ru",
+      "publishedAt": "2026-07-06T04:30:05",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://isport.ua/football/europe/1116744-ne-dlya-slabonervnykh-top-10-uzhasnykh-travm-v-istorii-futbola",
+      "domain": "isport.ua",
+      "title": "Самые жуткие травмы в истории футбола - iSport.ua",
+      "publishedAt": "2019-11-06T13:00:00",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://m.sports.ru/tribuna/blogs/mama4h/3095652.html",
+      "domain": "m.sports.ru",
+      "title": "27 добавленных минут – рекорд чемпионатов мира! Из-за страшного столкновения вратаря Ирана и упертости судьи",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://legalbet.ru/prosport/10-samih-strashnih-travm-v-istorii-futbola/",
+      "domain": "legalbet.ru",
+      "title": "Самые жуткие травмы в футболе: переломы, удары и трагические случаи на поле",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://www.sport-express.ru/football/world/chempionat-mira-2026/reviews/dzhordan-henderson-poluchil-nelepuyu-travmu-prazdnuya-pobedu-anglii-nad-meksikoy-v-1-8-chm-po-futbolu-2026-video-i-kommentarii-2437114/",
+      "domain": "sport-express.ru",
+      "title": "Самая нелепая травма в истории ЧМ? Хендерсона утащили на носилках после матча, в котором он даже не играл",
+      "publishedAt": "2026-07-06T08:45:00",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://sports.ru/football/blogs/3420768.html",
+      "domain": "sports.ru",
+      "title": "Главные сенсации чемпионатов мира по футболу: от Сенегала-2002 до России-2018",
+      "publishedAt": "2026-07-20T00:00:00",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://shockinghistories.wordpress.com/%D1%81%D0%B0%D0%BC%D1%8B%D0%B5-%D1%88%D0%BE%D0%BA%D0%B8%D1%80%D1%83%D1%8E%D1%89%D0%B8%D0%B5-%D1%82%D1%80%D0%B0%D0%B2%D0%BC%D1%8B-%D0%B2-%D0%B8%D1%81%D1%82%D0%BE%D1%80%D0%B8%D0%B8-%D0%BC%D0%B8%D1%80/",
+      "domain": "shockinghistories.wordpress.com",
+      "title": "Самые шокирующие травмы в истории мирового футбола | shockinghistories",
+      "publishedAt": "2013-05-15T06:01:47",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://www.sports.ru/hockey/blogs/1250860.html",
+      "domain": "sports.ru",
+      "title": "ТОП 10 самых ужасных травм за всю историю хоккея - Лучшие хоккейные топы - Блоги Sports.ru",
+      "publishedAt": "2017-04-21T00:00:00",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://tips.gg/ru/article/10-worst-soccer-injuries-in-history-from-career-enders-to-comebacks-common",
+      "domain": "tips.gg",
+      "title": "10 самых страшных футбольных травм в истории: от тех, что положили конец карьере... | Tips.GG",
+      "publishedAt": "2026-07-29T15:47:04",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://www.championat.com/football/article-3253129-10-samykh-strashnykh-travm-v-istorii-futbola.html",
+      "domain": "championat.com",
+      "title": "10 самых страшных травм в истории футбола - Чемпионат",
+      "publishedAt": "2015-01-23T15:00:03",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://sport.ru/football/henderson-poluchil-samuyu-nelepuyu-travmu-v-istorii-chempionatov-mira-po-futbolu/article652962",
+      "domain": "sport.ru",
+      "title": "Хендерсон получил самую нелепую травму в истории чемпионатов мира по футболу - Sport.ru",
+      "publishedAt": "2026-07-06T04:30:05",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://www.sport-express.ru/football/world/chempionat-mira-2026/reviews/dzhordan-henderson-poluchil-nelepuyu-travmu-prazdnuya-pobedu-anglii-nad-meksikoy-v-1-8-chm-po-futbolu-2026-video-i-kommentarii-2437114/",
+      "domain": "sport-express.ru",
+      "title": "Самая нелепая травма в истории ЧМ? Хендерсона утащили на носилках после матча, в котором он даже не играл",
+      "publishedAt": "2026-07-06T08:45:00",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://legalbet.ru/prosport/10-samih-strashnih-travm-v-istorii-futbola/",
+      "domain": "legalbet.ru",
+      "title": "Самые жуткие травмы в футболе: переломы, удары и трагические случаи на поле",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://www.sports.ru/football/blogs/432273.html",
+      "domain": "sports.ru",
+      "title": "Самые ужасные травмы в истории футбола(18+) - Футбольное обозрение - Блоги Sports.ru",
+      "publishedAt": "2013-03-09T00:00:00",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://www.championat.com/football/article-3220461-samye-strashnye-travmy-v-mirovom-futbole.html",
+      "domain": "championat.com",
+      "title": "Самые страшные травмы в мировом футболе - Чемпионат",
+      "publishedAt": "2013-11-01T10:00:06",
+      "type": "NEWS"
+    },
+    {
+      "url": "https://isport.ua/football/europe/1116744-ne-dlya-slabonervnykh-top-10-uzhasnykh-travm-v-istorii-futbola",
+      "domain": "isport.ua",
+      "title": "Самые жуткие травмы в истории футбола - iSport.ua",
+      "publishedAt": "2019-11-06T13:00:00",
+      "type": "NEWS"
+    }
+  ],
+  "createdAt": "2026-08-27T17:31:03.852Z"
+}

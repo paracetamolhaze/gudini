@@ -1,5 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings, ProjectMeta } from "./store";
+import type { StoryResearchPack } from "./storyResearch";
+import { addCost } from "./pipelineCost";
+
+/** Блок сценария со ссылкой на факты, которые его подтверждают. */
+export type ScriptBeat = { text: string; factIds: string[] };
 
 // Opus — для сценариев (качество текста = лицо ролика); Sonnet — для утилитарных задач (в разы дешевле)
 const MODEL_SCRIPT = "claude-opus-5";
@@ -27,6 +32,61 @@ const SCRIPT_SYSTEM = `Ты — сценарист вирусных вертик
 - Разговорный язык, короткие фразы, обращение на «ты», без канцелярита.
 - Структура: хук → 3–4 содержательных пункта или история → вывод → призыв к действию (подписка/комментарий).
 - Никаких ремарок, заголовков и пояснений — только чистый текст для чтения вслух.`;
+
+const RESEARCH_SCRIPT_SYSTEM = `${SCRIPT_SYSTEM}
+
+ВАЖНО: тебе дают результаты исследования истории — событие, дату, участников и проверенные факты
+со ссылками. Пиши сценарий ТОЛЬКО по ним. Не добавляй существенных утверждений, которых нет в фактах:
+если детали не было в исследовании, её не должно быть в тексте. Имена, числа, даты и названия
+организаций бери из пакета дословно.
+
+Ответь СТРОГО валидным JSON:
+{"script":"полный текст для чтения вслух","beats":[{"text":"предложение из сценария","factIds":["id"]}]}
+beats — разбивка сценария на смысловые блоки в том же порядке, что и в тексте; factIds — какие факты
+подтверждают этот блок (пустой массив для хука, связки или призыва).`;
+
+/** Сценарий из исследования: факты, участники и даты берутся из пакета, а не из памяти модели. */
+export async function generateScriptFromResearch(
+  research: StoryResearchPack,
+): Promise<{ script: string; beats: ScriptBeat[]; demo: boolean } | null> {
+  const c = client();
+  if (!c) return null;
+  const facts = research.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");
+  const entities = research.entities.map((e) => `${e.name} (${e.type})`).join(", ");
+  const response = await c.messages.create({
+    model: MODEL_SCRIPT,
+    max_tokens: 16000,
+    system: RESEARCH_SCRIPT_SYSTEM,
+    messages: [
+      {
+        role: "user",
+        content:
+          `Событие: ${research.canonicalEvent}\n` +
+          (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
+          (research.location ? `Место: ${research.location}\n` : "") +
+          `Участники: ${entities}\n\nПроверенные факты:\n${facts}\n\n` +
+          `Краткое изложение: ${research.summary}`,
+      },
+    ],
+  });
+  addCost({ scriptLlmCalls: 1 });
+  const raw = textOf(response).replace(/^```(json)?/m, "").replace(/```$/m, "").trim();
+  try {
+    const json = JSON.parse(raw);
+    const script = String(json.script ?? "").trim();
+    if (!script) return null;
+    const known = new Set(research.facts.map((f) => f.id));
+    const beats: ScriptBeat[] = (Array.isArray(json.beats) ? json.beats : [])
+      .map((b: any) => ({
+        text: String(b.text ?? "").trim(),
+        factIds: (Array.isArray(b.factIds) ? b.factIds.map(String) : []).filter((id: string) => known.has(id)),
+      }))
+      .filter((b: ScriptBeat) => b.text.length > 3);
+    return { script, beats, demo: false };
+  } catch {
+    return null;
+  }
+}
 
 export async function generateScript(topic: string): Promise<{ script: string; demo: boolean }> {
   const c = client();

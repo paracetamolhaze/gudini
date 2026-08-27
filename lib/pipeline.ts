@@ -18,6 +18,9 @@ import { applyScriptFormatting } from "./scriptFormat";
 import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
 import { planEdit, planGapFillers } from "./editPlanner";
+import { buildStoryAssetPack } from "./storyAssets";
+import { planFromAssetPack } from "./editPlannerPack";
+import { resetCost, writeCost } from "./pipelineCost";
 import { generateCoverConcept } from "./cover";
 import { resolveHeadline } from "./coverHeadline";
 import { buildCover } from "./coverPipeline";
@@ -39,6 +42,8 @@ const running = new Set<string>();
 // флаги читаются в момент вызова — тестируемо и переключаемо без пересборки модуля
 const smartEditing = () => process.env.SMART_EDITING !== "false";
 const smartSpeechCleanup = () => process.env.SMART_SPEECH_CLEANUP !== "false";
+// новый конвейер: исследование -> медиатека истории -> монтаж только из неё
+const storyAssetPipeline = () => process.env.STORY_ASSET_PIPELINE === "true";
 
 function setStep(id: string, step: string, progress: number) {
   updateProject(id, { processing: { state: "running", step, progress } });
@@ -55,6 +60,7 @@ function setStep(id: string, step: string, progress: number) {
 export async function processProject(id: string): Promise<void> {
   if (running.has(id)) return;
   running.add(id);
+  resetCost();
   try {
     const project = getProject(id);
     if (!project) throw new Error("Проект не найден");
@@ -198,13 +204,37 @@ export async function processProject(id: string): Promise<void> {
       .slice(1)
       .map((_, i) => segments.slice(0, i + 1).reduce((sum, x) => sum + (x.end - x.start), 0))
       .filter((t) => t > 0.5 && t < effDur - 0.5);
-    if (smartEditing()) {
+    // НОВЫЙ ПУТЬ: медиатека истории собирается ДО монтажа, планировщик выбирает
+    // только из неё. Отката на слепой поиск по фразам здесь нет: если путь не
+    // отработал, ролик выходит без перебивок, а причина видна в логе.
+    if (storyAssetPipeline()) {
+      const research = getProject(id)?.research;
+      if (!research) {
+        console.warn("Story pipeline: исследование истории отсутствует — перебивок не будет");
+      } else {
+        setStep(id, "Медиатека истории", 26);
+        const pack = await buildStoryAssetPack(research, dir);
+        console.log(
+          `Медиатека: ${pack.assets.length} проверенных материалов ` +
+            `(видео ${pack.assets.filter((a) => a.mediaType === "VIDEO").length})`,
+        );
+        setStep(id, "Режиссёрский план", 30);
+        plan = await planFromAssetPack(dir, research, pack, words, effDur);
+        if (!plan) console.warn("Story pipeline: план не построен — ролик будет без перебивок");
+      }
+      if (!plan) plan = { version: 1, duration: effDur, events: [], captionStyle: { ...DEFAULT_CAPTION_STYLE } };
+      plan.events = coverSpeechCuts(plan.events, seamPoints, effDur);
+    } else if (smartEditing()) {
       try {
         plan = await planEdit(project.topic, project.script, words, effDur, seamPoints);
       } catch (e) {
         console.warn("Планировщик упал, fallback:", e);
       }
     }
+    if (plan && storyAssetPipeline()) {
+      // материалы уже собраны планировщиком пакета — старый подбор не нужен
+      fs.writeFileSync(path.join(dir, "edit-plan.json"), JSON.stringify(plan, null, 2), "utf8");
+    } else
     if (plan) {
       plan.events = coverSpeechCuts(plan.events, seamPoints, effDur);
       setStep(id, "Подбор перебивок", 28);
@@ -275,6 +305,14 @@ export async function processProject(id: string): Promise<void> {
       ...segments.slice(1).map((_, i) => segments.slice(0, i + 1).reduce((s, x) => s + (x.end - x.start), 0)),
     ].filter((t) => t > 0.2 && t < effDur - 0.2);
     await selfCheck(dir, effDur, checkPoints);
+
+    const cost = writeCost(dir);
+    console.log(
+      `Стоимость прогона: brave(news ${cost.braveNewsRequests}/video ${cost.braveVideoRequests}/img ` +
+        `${cost.braveImageRequests}/web ${cost.braveWebRequests}), страниц ${cost.pageFetches}, ` +
+        `видео скачано ${cost.videoDownloads}, vision ${cost.visionCalls}, LLM ` +
+        `${cost.researchLlmCalls + cost.scriptLlmCalls + cost.speechCleanupCalls + cost.editPlannerCalls}`,
+    );
 
     updateProject(id, {
       processedVideo: "out.mp4",

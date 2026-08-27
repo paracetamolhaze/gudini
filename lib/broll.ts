@@ -76,10 +76,13 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
           (a) => a.entity === event.entityName && !usedWeb.has(a.directUrl) && fs.existsSync(a.cacheFile),
         );
         if (saved) {
+          // бронируем СИНХРОННО, до await: перебивки резолвятся параллельно,
+          // иначе один и тот же кадр достаётся сразу нескольким событиям
+          usedWeb.add(saved.directUrl);
           const bytes = fs.readFileSync(saved.cacheFile);
           const built = await buildWebAssetClip(saved, full, duration, bytes);
+          if (!built.ok) usedWeb.delete(saved.directUrl);
           if (built.ok) {
-            usedWeb.add(saved.directUrl);
             event.file = file;
             sources.push({ ...saved, localPath: file });
             trace.push({
@@ -108,7 +111,10 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
           const verified = found.filter((a) => verifyEntity(a, event.entityName));
           let checked = 0;
           for (const asset of verified) {
-            if (usedWeb.has(asset.directUrl)) continue; // один ассет не может попасть дважды
+            // синхронная бронь ссылки: между проверкой и загрузкой есть await,
+            // а события подбираются параллельно
+            if (usedWeb.has(asset.directUrl)) continue;
+            usedWeb.add(asset.directUrl);
             if (checked >= 6) break; // дальше смотреть смысла нет
 
             // СМЫСЛОВАЯ ПРОВЕРКА кадра: имя в подписи ещё не значит, что на кадре нужное.
@@ -118,9 +124,15 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
             if (event.visualIntent && asset.mediaType === "image") {
               checked++;
               bytes = await fetchAsset(asset.directUrl);
-              if (!bytes) continue;
+              if (!bytes) {
+                usedWeb.delete(asset.directUrl);
+                continue;
+              }
               const analysis = await analyzeAsset(`web:${asset.directUrl}`, asset.directUrl, bytes).catch(() => null);
-              if (!analysis) continue;
+              if (!analysis) {
+                usedWeb.delete(asset.directUrl);
+                continue;
+              }
               // Личность здесь подтверждает ИСТОЧНИК (статья Wikipedia «Jordan Henderson» —
               // это точно он), а не зрение: модель видит «футболиста», имени она не знает.
               // Поэтому entity-проверку зрению не передаём, оно судит только о содержимом кадра.
@@ -147,6 +159,7 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
                   sourceUrl: asset.sourceUrl,
                   note: `отклонён: ${rel.reason}`,
                 });
+                usedWeb.delete(asset.directUrl);
                 continue;
               }
             }
@@ -154,11 +167,16 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
             // дедуп по содержимому: разные ссылки могут вести к одному и тому же кадру,
             // а разные кропы одной картинки — это один и тот же ассет
             const hash = bytes ? crypto.createHash("sha1").update(bytes).digest("hex") : null;
-            if (hash && usedWeb.has(hash)) continue;
-            usedWeb.add(asset.directUrl);
+            if (hash && usedWeb.has(hash)) {
+              usedWeb.delete(asset.directUrl);
+              continue;
+            }
             if (hash) usedWeb.add(hash);
             const built = await buildWebAssetClip(asset, full, duration, bytes ?? undefined);
-            if (!built.ok) continue;
+            if (!built.ok) {
+              usedWeb.delete(asset.directUrl);
+              continue;
+            }
             event.file = file;
             sources.push({ ...asset, localPath: file });
             // одобренный визуал сущности сохраняем, чтобы не потерять при перепланировании

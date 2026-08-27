@@ -231,7 +231,7 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
       const sourceIntent = SOURCE_INTENTS.includes(raw.sourceIntent as VisualSourceIntent)
         ? (raw.sourceIntent as VisualSourceIntent)
         : "GENERIC_STOCK";
-      if (!query || start < 1.2) continue;
+      if (!query || start < 1.8) continue; // первая фраза — лицо автора
       event.query = query;
       event.sourceIntent = sourceIntent;
       event.factualSpecificity = SPECIFICITY.includes(raw.factualSpecificity as FactualSpecificity)

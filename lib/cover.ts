@@ -2,56 +2,76 @@ import fs from "fs";
 import path from "path";
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings, FACE_FILE, hasFace } from "./store";
-import { runFfmpeg } from "./ffmpeg";
+import { runFfmpeg, probe } from "./ffmpeg";
+import {
+  HeadlineLine,
+  breakHeadline,
+  computeLayout,
+  buildCoverHeadlineAss,
+  CoverLayout,
+} from "./coverLayout";
 
 /**
- * ИИ-обложки: key art с нуля вместо стоп-кадра.
- * 1) Claude анализирует тему/сценарий и выдаёт концепт (headline, эмоция, сцена, image_prompt).
- * 2) Runway gen4_image строит вертикальный кадр с нуля, используя reference-фото стримера
- *    как identity reference (лицо/причёска/черты сохраняются, эмоция и фон — новые).
- * 3) Текст наносим сами (ASS): генеративные модели коверкают кириллицу, а читаемость
- *    заголовка в приоритетах выше красоты — поэтому модель оставляет нижнюю треть чистой,
- *    а headline (белая строка + жёлтая) и subheadline рендерятся детерминированно.
- * Любой сбой → фолбэк на обложку из кадра видео (старый путь) в pipeline.
+ * Gudini Cover Design System — ИИ-обложки с нуля в едином фирменном стиле.
+ * 1) Claude-концептор: анализ сценария → headline (2–4 КРИЧАЩИЕ строки, белый+жёлтый),
+ *    kicker, эмоция, сцена, image_prompt (только сюжетная часть).
+ * 2) Runway gen4_image: reference-фото стримера = identity (личность сохраняется,
+ *    поза/эмоция/одежда — новые), композиция под БОЛЬШОЙ заголовок (лицо в верхних 2/3,
+ *    нижние ~35% пригодны для текста). Фирменный стиль зашит константой, а не генерится заново.
+ * 3) Текст — наш детерминированный рендерер (coverLayout): Oswald Bold, динамический размер
+ *    по реальному измерению, 85–94% ширины. Модель НЕ рисует буквы.
+ * Ошибки логируются кодами: NO_REFERENCE | INVALID_CONCEPT | MODERATION_REJECT |
+ * RUNWAY_ERROR | DOWNLOAD_FAILED; при любом сбое пайплайн откатится на кадр из видео.
  */
 
 export type CoverConcept = {
-  headline: string; // 2–5 слов, можно \n на две строки
-  subheadline: string;
+  headline: string;
+  headlineLines: HeadlineLine[];
+  kicker?: string;
   emotion: string;
   visual_concept: string;
-  image_prompt: string;
+  image_prompt: string; // только сюжет; фирменный стиль добавляет код
+  composition: {
+    facePosition: "left" | "center" | "right";
+    faceScale: "large" | "very_large";
+    headlineArea: "lower";
+  };
   design_notes: string[];
 };
 
-const CONCEPT_SYSTEM = `Ты — арт-директор viral short-form контента. По теме и сценарию ролика придумай обложку
-в стиле драматичных вертикальных viral-covers (смесь viral YouTube cover, documentary/breaking-news poster,
-cinematic social thumbnail).
+// Фирменный стиль — ОДИН на все обложки (единый бренд, без случайного дизайна)
+const STYLE_SUFFIX =
+  "Cinematic editorial dramatic documentary photography, realistic, high contrast, moody atmospheric " +
+  "light, premium viral short-form cover aesthetic, clean composition. No glow, no neon, no cartoon, " +
+  "no plastic skin, no sci-fi UI unless the topic demands it. " +
+  "IMPORTANT: no text, letters or captions anywhere; the lower 35% of the frame must stay relatively " +
+  "clean and less detailed (a large headline will be placed there later), but not empty-looking; " +
+  "face and key story objects in the upper and middle sections.";
 
-Анализ: вытащи из сценария центральный конфликт/hook/claim — НЕ первые слова. Определи одну главную эмоцию
-лица (шок, тревога, напряжение, недоверие, серьёзность, страх, разоблачение, мрачная ирония...), один сильный
-визуальный символ темы для фона, один короткий headline.
+const CONCEPT_SYSTEM = `Ты — арт-директор viral short-form контента (Gudini Cover Design System).
+По теме и сценарию придумай обложку: ОГРОМНОЕ ЛИЦО + ЭМОЦИЯ + СЮЖЕТ + ОГРОМНЫЙ КРИЧАЩИЙ HEADLINE.
 
-Headline: 2–5 слов, ударный (шокирующее утверждение, разоблачение, угроза, поворот): «РАВЕНСТВО\\nКОНЧИЛОСЬ»,
-«ПИЛОТ ВЫПРЫГНУЛ», «ЭТО УЖЕ НАЧАЛОСЬ». Длинное — сокращай. Можно перенос \\n на 2 строки.
-Subheadline: одна короткая поясняющая строка.
+Анализ: вытащи конфликт/hook/claim (НЕ первые слова сценария), одну эмоцию лица, один сильный
+визуальный символ для фона.
 
-image_prompt — на английском, для image-модели, обязательно укажи:
-- create from scratch, vertical 9:16 thumbnail/key art;
-- the person @streamer from the reference photo is the identity reference: preserve likeness, facial structure,
-  hairstyle, age, defining features (glasses/beard/etc if present); emotion/pose/clothing/lighting may change;
-- large foreground portrait (chest-up or close-up), the face dominates the frame, экшн-эмоция по теме;
-- dramatic cinematic documentary-style background telling the story of the topic (конкретные объекты/символы);
-- high contrast, atmospheric light, polished, viral social cover aesthetic, clean composition;
-- IMPORTANT: no text, no letters, no captions anywhere in the image; keep the lower third relatively clean
-  and less detailed (text will be added later by the renderer).
-Весь image_prompt — НЕ ДЛИННЕЕ 900 символов.
-Формулируй image_prompt безопасно (PG-13), иначе image-модель отклонит генерацию: без насилия, крови,
-оружия у лица, животных, нападающих на людей. Угрозу передавай атмосферой: силуэт вдали, туман, свет,
-тревожный фон — а не прямой опасностью для человека в кадре.
+headlineLines: 2–4 строки по 1–3 КОРОТКИХ слова, стиль «80 ЛЕТ / СПУСТЯ», «ПРЫЖОК / ЦЕНОЙ / ЖИЗНИ»,
+«РАВЕНСТВО / КОНЧИЛОСЬ». Одна смысловая строка accent:true (будет жёлтой), остальные белые.
+Длинную мысль сокращай до удара. kicker — необязательная микро-метка 1-2 слова («РАЗБОР», «ШОК»).
 
-Ответь СТРОГО валидным JSON без пояснений:
-{"headline":"...", "subheadline":"...", "emotion":"...", "visual_concept":"...", "image_prompt":"...",
+image_prompt — на английском, ТОЛЬКО сюжетная часть (стиль добавит система): the person @streamer
+from the reference photo is the identity reference (preserve likeness, facial structure, hairstyle,
+age, defining features; expression/pose/clothing/lighting MUST change to fit the story — never copy
+the reference pose), large chest-up portrait with [эмоция], background story elements [конкретика темы].
+Безопасно (PG-13): угрозу передавай атмосферой (силуэт вдали, туман, свет), не прямой опасностью.
+Не длиннее 700 символов.
+
+composition: facePosition left|center|right (смещай от центра, если сюжету лучше), faceScale
+large|very_large, headlineArea всегда "lower".
+
+Ответь СТРОГО валидным JSON:
+{"headlineLines":[{"text":"РАВЕНСТВО","accent":false},{"text":"КОНЧИЛОСЬ","accent":true}],
+"kicker":"РАЗБОР","emotion":"...","visual_concept":"...","image_prompt":"...",
+"composition":{"facePosition":"center","faceScale":"very_large","headlineArea":"lower"},
 "design_notes":["..."]}`;
 
 export async function generateCoverConcept(
@@ -87,13 +107,25 @@ export async function generateCoverConcept(
     .trim();
   try {
     const json = JSON.parse(raw);
-    if (!json.headline || !json.image_prompt) return null;
+    const rawLines = Array.isArray(json.headlineLines) ? json.headlineLines : null;
+    const headline = rawLines?.length
+      ? rawLines.map((l: any) => String(l.text ?? "")).join("\n")
+      : String(json.headline ?? "");
+    const headlineLines = breakHeadline(rawLines as HeadlineLine[] | null, headline);
+    if (!headlineLines.length || !json.image_prompt) return null;
+    const fp = String(json.composition?.facePosition ?? "center");
     return {
-      headline: String(json.headline).slice(0, 60),
-      subheadline: String(json.subheadline ?? "").slice(0, 80),
+      headline,
+      headlineLines,
+      kicker: json.kicker ? String(json.kicker).slice(0, 24) : undefined,
       emotion: String(json.emotion ?? ""),
       visual_concept: String(json.visual_concept ?? ""),
-      image_prompt: String(json.image_prompt),
+      image_prompt: String(json.image_prompt).slice(0, 750),
+      composition: {
+        facePosition: fp === "left" || fp === "right" ? (fp as "left" | "right") : "center",
+        faceScale: json.composition?.faceScale === "large" ? "large" : "very_large",
+        headlineArea: "lower",
+      },
       design_notes: Array.isArray(json.design_notes) ? json.design_notes.map(String) : [],
     };
   } catch {
@@ -101,10 +133,28 @@ export async function generateCoverConcept(
   }
 }
 
-/** Генерирует key art через Runway gen4_image с reference-фото и накладывает текст. Возвращает true при успехе. */
-export async function generateAiCover(dir: string, concept: CoverConcept): Promise<boolean> {
+/** Генерирует key art (Runway, reference-лицо) и накладывает фирменный заголовок. */
+export async function generateAiCover(
+  dir: string,
+  concept: CoverConcept,
+): Promise<{ ok: boolean; layout?: CoverLayout; reason?: string }> {
   const key = getSettings().runwayKey;
-  if (!key || !hasFace()) return false;
+  if (!key) return { ok: false, reason: "NO_RUNWAY_KEY" };
+  if (!hasFace()) {
+    console.warn("Cover: NO_REFERENCE — reference-фото не загружено в Настройках");
+    return { ok: false, reason: "NO_REFERENCE" };
+  }
+
+  // --- лог reference-фото (доказательство, что используется именно сохранённое) ---
+  const faceStat = fs.statSync(FACE_FILE);
+  let faceDims = "?";
+  try {
+    const info = await probe(FACE_FILE);
+    faceDims = `${info.width}x${info.height}`;
+  } catch {}
+  console.log(
+    `Cover reference: source=${FACE_FILE} | size=${faceStat.size} bytes | dims=${faceDims} | loaded=ok`,
+  );
 
   const faceB64 = fs.readFileSync(FACE_FILE).toString("base64");
   const headers = {
@@ -113,10 +163,12 @@ export async function generateAiCover(dir: string, concept: CoverConcept): Promi
     "Content-Type": "application/json",
   };
 
-  // Runway ограничивает promptText 1000 символами — обрезаем по границе предложения
-  let promptText = concept.image_prompt.includes("@streamer")
-    ? concept.image_prompt
-    : `The main person is @streamer. ${concept.image_prompt}`;
+  // единый бренд-стиль + композиция под большой заголовок
+  const compositionNote =
+    ` Portrait positioned ${concept.composition.facePosition === "center" ? "centered" : `slightly to the ${concept.composition.facePosition}`},` +
+    ` ${concept.composition.faceScale === "very_large" ? "face very large, dominating the frame" : "face large"}.`;
+  let promptText = `${concept.image_prompt}${compositionNote} ${STYLE_SUFFIX}`;
+  if (!promptText.includes("@streamer")) promptText = `The main person is @streamer. ${promptText}`;
   if (promptText.length > 980) {
     const cut = promptText.slice(0, 980);
     promptText = cut.slice(0, Math.max(cut.lastIndexOf(". "), 600) + 1);
@@ -130,68 +182,52 @@ export async function generateAiCover(dir: string, concept: CoverConcept): Promi
       promptText,
       ratio: "1080:1920",
       referenceImages: [{ uri: `data:image/jpeg;base64,${faceB64}`, tag: "streamer" }],
+      // свои фото обычных людей: без этого строгий фильтр «public figure» режет реальные лица
+      contentModeration: { publicFigureThreshold: "low" },
     }),
   });
-  if (!res.ok) throw new Error(`Runway cover: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw new Error(`RUNWAY_ERROR: ${res.status} ${(await res.text()).slice(0, 300)}`);
   const task: any = await res.json();
-  if (!task.id) throw new Error("Runway cover: нет id задачи");
+  if (!task.id) throw new Error("RUNWAY_ERROR: нет id задачи");
 
-  // ждём результат (до 3 минут)
   let imageUrl: string | null = null;
   for (let i = 0; i < 36; i++) {
     await new Promise((r) => setTimeout(r, 5000));
     const check = await fetch(`https://api.dev.runwayml.com/v1/tasks/${task.id}`, { headers });
-    if (!check.ok) throw new Error(`Runway task: ${check.status}`);
+    if (!check.ok) throw new Error(`RUNWAY_ERROR: task ${check.status}`);
     const json: any = await check.json();
     if (json.status === "SUCCEEDED") {
       imageUrl = Array.isArray(json.output) ? json.output[0] : json.output;
       break;
     }
     if (json.status === "FAILED" || json.status === "CANCELLED") {
-      throw new Error(`Runway cover: ${json.status} ${json.failure ?? ""}`);
+      const failure = String(json.failure ?? "");
+      const code = /moderation/i.test(failure) ? "MODERATION_REJECT" : "RUNWAY_ERROR";
+      throw new Error(`${code}: ${failure}`);
     }
   }
-  if (!imageUrl) throw new Error("Runway cover: не дождались результата");
+  if (!imageUrl) throw new Error("RUNWAY_ERROR: не дождались результата");
 
   const download = await fetch(imageUrl);
-  if (!download.ok) throw new Error(`Runway cover download: ${download.status}`);
+  if (!download.ok) throw new Error(`DOWNLOAD_FAILED: ${download.status}`);
   fs.writeFileSync(path.join(dir, "cover_art.png"), Buffer.from(await download.arrayBuffer()));
 
-  // текстовый слой — наш (читаемая кириллица, белая + жёлтая строки)
-  fs.writeFileSync(path.join(dir, "cover-text.ass"), buildCoverTextAss(concept), "utf8");
+  // --- фирменный текстовый слой (шрифт кладём рядом: ass fontsdir) ---
+  const layout = computeLayout(concept.headlineLines);
+  fs.writeFileSync(path.join(dir, "cover-text.ass"), buildCoverHeadlineAss(layout, concept.kicker), "utf8");
+  fs.mkdirSync(path.join(dir, "fonts"), { recursive: true });
+  fs.copyFileSync(
+    path.join(process.cwd(), "fonts", "Oswald-Bold.ttf"),
+    path.join(dir, "fonts", "Oswald-Bold.ttf"),
+  );
   await runFfmpeg(
-    ["-i", "cover_art.png", "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,ass=cover-text.ass", "-frames:v", "1", "-q:v", "2", "cover.jpg"],
+    [
+      "-i", "cover_art.png",
+      "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,ass=cover-text.ass:fontsdir=fonts",
+      "-frames:v", "1", "-q:v", "2",
+      "cover.jpg",
+    ],
     { cwd: dir },
   );
-  return true;
-}
-
-/** Заголовок обложки: первая строка белая, вторая жёлтая, ниже — тонкий subheadline. */
-export function buildCoverTextAss(concept: CoverConcept): string {
-  const lines = concept.headline
-    .split(/\\n|\n/)
-    .map((l) => l.trim().replace(/[{}\\]/g, "").toUpperCase())
-    .filter(Boolean)
-    .slice(0, 2);
-  const yellow = "{\\c&H00D7FF&}";
-  const headline = lines.length === 2 ? `${lines[0]}\\N${yellow}${lines[1]}` : lines[0] ?? "";
-  const sub = concept.subheadline.replace(/[{}\\]/g, "").toUpperCase();
-
-  return `[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Head,Arial,150,&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,-1,0,0,0,100,100,2,0,1,12,5,2,50,50,300,1
-Style: Sub,Arial,58,&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,-1,0,0,0,100,100,1,0,1,6,3,2,60,60,190,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:00:10.00,Head,,0,0,0,,${headline}
-${sub ? `Dialogue: 0,0:00:00.00,0:00:10.00,Sub,,0,0,0,,${sub}` : ""}
-`;
+  return { ok: true, layout };
 }

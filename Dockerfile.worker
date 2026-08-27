@@ -13,5 +13,6 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY lib ./lib
 COPY worker ./worker
+COPY fonts ./fonts
 
 CMD ["npx", "tsx", "worker/index.ts"]

@@ -196,12 +196,17 @@ export async function processProject(id: string): Promise<void> {
     let cover: string | null = null;
     try {
       const concept = await generateCoverConcept(project.topic, project.script, meta.title);
-      if (concept) {
+      if (!concept) {
+        console.warn("Cover fallback: INVALID_CONCEPT — концепт не сгенерировался/не распарсился");
+      } else {
         fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
-        if (await generateAiCover(dir, concept)) cover = "cover.jpg";
+        const result = await generateAiCover(dir, concept);
+        if (result.ok) cover = "cover.jpg";
+        else console.warn(`Cover fallback: ${result.reason}`);
       }
-    } catch (e) {
-      console.warn("ИИ-обложка не сгенерировалась, фолбэк на кадр:", e);
+    } catch (e: any) {
+      // причины в кодах: NO_REFERENCE | RUNWAY_ERROR | MODERATION_REJECT | DOWNLOAD_FAILED
+      console.warn("Cover fallback:", String(e?.message ?? e).slice(0, 200));
     }
     if (!cover) {
       try {

@@ -11,6 +11,7 @@ import {
   resolveCoverFontFile,
   CoverLayout,
 } from "./coverLayout";
+import { buildCoverImagePrompt } from "./coverPrompt";
 
 /**
  * Gudini Cover Design System — ИИ-обложки с нуля в едином фирменном стиле.
@@ -29,28 +30,22 @@ export type CoverConcept = {
   headline: string;
   headlineLines: HeadlineLine[];
   kicker?: string;
-  emotion: string;
-  visual_concept: string;
-  image_prompt: string; // только сюжет; фирменный стиль добавляет код
+  emotion: string; // правдоподобная фотографическая реакция (en)
+  scene: {
+    mainSubject: string; // кто в кадре и что делает корпусом/головой (без рук)
+    storyObject: string; // ОДИН главный сюжетный объект
+    environment: string; // ОДНО окружение
+  };
   composition: {
     facePosition: "left" | "center" | "right";
     faceScale: "large" | "very_large";
     headlineArea: "lower";
+    allowHands: boolean; // руки запрещены по умолчанию
   };
   design_notes: string[];
 };
 
-// Фирменный стиль v3 — ОДИН на все обложки: настоящая фотография, не AI-арт
-const STYLE_SUFFIX =
-  "REAL PHOTOGRAPH: professional photo composite for a viral vertical thumbnail, shot on a cinema camera, " +
-  "85mm lens look, tack-sharp focus on the eyes, natural skin texture with visible pores, realistic " +
-  "individual hair strands, realistic dramatic lighting, professional key-art retouch, high local detail. " +
-  "Simple composition: one person, one main story object, one environment — nothing else. " +
-  "Strictly NOT: digital painting, illustration, CGI, fantasy AI art, videogame poster, HDR, glow, neon, " +
-  "plastic skin, particles, sci-fi UI. " +
-  "ABSOLUTELY NO readable text, letters, numbers, logos, labels, watermarks or UI elements anywhere. " +
-  "Face and story object in the upper and middle sections; the lower 35% of the frame relatively clean " +
-  "and less detailed (a large headline goes there later), but not empty-looking.";
+// Стиль/анатомия/запреты собираются детерминированно в lib/coverPrompt.ts (Prompt System v4)
 
 const CONCEPT_SYSTEM = `Ты — арт-директор viral short-form контента (Gudini Cover Design System).
 По теме и сценарию придумай обложку: ОГРОМНОЕ ЛИЦО + ЭМОЦИЯ + СЮЖЕТ + ОГРОМНЫЙ КРИЧАЩИЙ HEADLINE.
@@ -63,21 +58,23 @@ headlineLines: 2–4 строки по 1–3 КОРОТКИХ слова, сти
 accent одной смысловой строки: "yellow" (жёлтые буквы) или "box" (жёлтая плашка, чёрные буквы —
 для самого ударного короткого слова), остальные false (белые). kicker — микро-метка 1-2 слова.
 
-image_prompt — на английском, ТОЛЬКО сюжетная часть (стиль добавит система): the person @streamer
-from the reference photo is the identity reference (preserve likeness, facial structure, hairstyle,
-age, defining features, ethnicity; expression/pose/clothing/lighting MUST change to fit the story —
-never copy the reference pose), large chest-up portrait with [эмоция]. Сцена ПРОСТАЯ: ровно ОДИН
-главный сюжетный объект + одно окружение, без нагромождения символов.
-Безопасно (PG-13): угрозу передавай атмосферой (силуэт вдали, туман, свет), не прямой опасностью.
-Не длиннее 600 символов.
-
-composition: facePosition left|center|right (смещай от центра, если сюжету лучше), faceScale
-large|very_large, headlineArea всегда "lower".
+Ты отвечаешь ТОЛЬКО за режиссуру. Фотографичность, анатомию, запреты стиля и текста добавляет система —
+НЕ пиши промпт сам. Верни структурные поля (на английском, кратко):
+- emotion: правдоподобная фотографическая реакция, НЕ карикатура. Вместо "extreme shock, huge eyes" →
+  "disturbed realization, eyes slightly wider than normal, subtle brow tension, mouth slightly open".
+- scene.mainSubject: кто в кадре и что он делает корпусом/головой (БЕЗ рук), ≤5 слов.
+- scene.storyObject: РОВНО ОДИН главный сюжетный объект, ≤5 слов (не список символов).
+- scene.environment: РОВНО ОДНО окружение, ≤4 слов. Безопасно (PG-13): угроза — атмосферой.
+- emotion: ≤8 слов.
+- composition: facePosition left|center|right (в зависимости от объекта фона), faceScale large|very_large.
+- allowHands: РУКИ ЗАПРЕЩЕНЫ ПО УМОЛЧАНИЮ (false). true — только если без руки/действия сюжет
+  физически непонятен. Эмоциональный жест — НЕ причина. НИКОГДА не проси: hand near face, hand on
+  forehead, pointing, open palms и прочие типовые жесты тумбнейлов.
 
 Ответь СТРОГО валидным JSON:
-{"headlineLines":[{"text":"РАВЕНСТВО","accent":false},{"text":"КОНЧИЛОСЬ","accent":true}],
-"kicker":"РАЗБОР","emotion":"...","visual_concept":"...","image_prompt":"...",
-"composition":{"facePosition":"center","faceScale":"very_large","headlineArea":"lower"},
+{"headlineLines":[{"text":"РАВЕНСТВО","accent":false},{"text":"КОНЧИЛОСЬ","accent":"yellow"}],
+"kicker":"РАЗБОР","emotion":"...","scene":{"mainSubject":"...","storyObject":"...","environment":"..."},
+"composition":{"facePosition":"center","faceScale":"very_large","allowHands":false},
 "design_notes":["..."]}`;
 
 export async function generateCoverConcept(
@@ -118,19 +115,23 @@ export async function generateCoverConcept(
       ? rawLines.map((l: any) => String(l.text ?? "")).join("\n")
       : String(json.headline ?? "");
     const headlineLines = breakHeadline(rawLines as HeadlineLine[] | null, headline);
-    if (!headlineLines.length || !json.image_prompt) return null;
+    if (!headlineLines.length || !json.scene?.storyObject || !json.scene?.environment) return null;
     const fp = String(json.composition?.facePosition ?? "center");
     return {
       headline,
       headlineLines,
       kicker: json.kicker ? String(json.kicker).slice(0, 24) : undefined,
-      emotion: String(json.emotion ?? ""),
-      visual_concept: String(json.visual_concept ?? ""),
-      image_prompt: String(json.image_prompt).slice(0, 750),
+      emotion: String(json.emotion ?? "").slice(0, 120),
+      scene: {
+        mainSubject: String(json.scene.mainSubject ?? "").slice(0, 100),
+        storyObject: String(json.scene.storyObject).slice(0, 100),
+        environment: String(json.scene.environment).slice(0, 100),
+      },
       composition: {
         facePosition: fp === "left" || fp === "right" ? (fp as "left" | "right") : "center",
         faceScale: json.composition?.faceScale === "large" ? "large" : "very_large",
         headlineArea: "lower",
+        allowHands: json.composition?.allowHands === true, // руки запрещены по умолчанию
       },
       design_notes: Array.isArray(json.design_notes) ? json.design_notes.map(String) : [],
     };
@@ -169,16 +170,10 @@ export async function generateAiCover(
     "Content-Type": "application/json",
   };
 
-  // единый бренд-стиль + композиция под большой заголовок
-  const compositionNote =
-    ` Portrait positioned ${concept.composition.facePosition === "center" ? "centered" : `slightly to the ${concept.composition.facePosition}`},` +
-    ` ${concept.composition.faceScale === "very_large" ? "face very large, dominating the frame" : "face large"}.`;
-  let promptText = `${concept.image_prompt}${compositionNote} ${STYLE_SUFFIX}`;
-  if (!promptText.includes("@streamer")) promptText = `The main person is @streamer. ${promptText}`;
-  if (promptText.length > 980) {
-    const cut = promptText.slice(0, 980);
-    promptText = cut.slice(0, Math.max(cut.lastIndexOf(". "), 600) + 1);
-  }
+  // Prompt System v4: детерминированная сборка из фиксированных секций (Claude — только режиссура)
+  const promptText = buildCoverImagePrompt(concept);
+  fs.writeFileSync(path.join(dir, "cover-image-prompt.txt"), promptText, "utf8");
+  console.log(`Cover prompt: ${promptText.length} chars | allowHands=${concept.composition.allowHands}`);
 
   const res = await fetch("https://api.dev.runwayml.com/v1/text_to_image", {
     method: "POST",

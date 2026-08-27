@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "worker": "tsx worker/index.ts",
-    "test": "tsx --test tests/editPlan.test.ts tests/subtitles.test.ts tests/speechCleanup.test.ts tests/fallbacks.test.ts tests/brollRelevance.test.ts tests/coverLayout.test.ts",
+    "test": "tsx --test tests/editPlan.test.ts tests/subtitles.test.ts tests/speechCleanup.test.ts tests/fallbacks.test.ts tests/brollRelevance.test.ts tests/coverLayout.test.ts tests/coverPrompt.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

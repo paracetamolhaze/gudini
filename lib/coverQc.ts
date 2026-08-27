@@ -69,7 +69,7 @@ function words(text: string): string[] {
 
 /**
  * Пересчёт вердикта по ответу модели. Чистая функция — тестируется без сети.
- * Любой FAIL ведёт к повторной Full-AI генерации, а не к другому способу сборки обложки.
+ * FAIL означает COVER_FAILED: QC не имеет права инициировать новую генерацию.
  */
 export function evaluateQc(
   raw: CoverQcRaw,
@@ -162,6 +162,19 @@ function qcPrompt(headline: string, kicker?: string | null): string {
   );
 }
 
+/**
+ * Тип изображения по сигнатуре байтов, а не по расширению файла: генератор может
+ * вернуть JPEG в файле .png, и тогда заявленный media_type ломает запрос к QC.
+ */
+export function detectImageMediaType(buffer: Buffer): "image/png" | "image/jpeg" | "image/gif" | "image/webp" {
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer.toString("latin1", 1, 4) === "PNG") return "image/png";
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.length >= 6 && buffer.toString("latin1", 0, 3) === "GIF") return "image/gif";
+  if (buffer.length >= 12 && buffer.toString("latin1", 0, 4) === "RIFF" && buffer.toString("latin1", 8, 12) === "WEBP")
+    return "image/webp";
+  return "image/jpeg";
+}
+
 // Haiku 4.5 — дешёвый multimodal: QC не должен стоить как ещё одна генерация
 const QC_MODEL = "claude-haiku-4-5-20251001";
 const QC_PRICE_IN = 1 / 1_000_000;
@@ -179,7 +192,8 @@ export async function runCoverQc(
   }
   try {
     const client = new Anthropic({ apiKey: key });
-    const media = imageFile.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+    const buffer = fs.readFileSync(imageFile);
+    const media = detectImageMediaType(buffer);
     const response = await client.messages.create({
       model: QC_MODEL,
       max_tokens: 1000,
@@ -190,11 +204,7 @@ export async function runCoverQc(
           content: [
             {
               type: "image",
-              source: {
-                type: "base64",
-                media_type: media as "image/png",
-                data: fs.readFileSync(imageFile).toString("base64"),
-              },
+              source: { type: "base64", media_type: media, data: buffer.toString("base64") },
             },
             { type: "text", text: qcPrompt(expectedHeadline, expectedKicker) },
           ],
@@ -218,55 +228,5 @@ export async function runCoverQc(
       confidence: 0,
       cost: 0,
     };
-  }
-}
-
-/**
- * Корректирующая инструкция для СЛЕДУЮЩЕЙ Full-AI попытки (§22).
- * Меняется только она: концепт, сцена, эмоция, reference и headline остаются прежними.
- */
-export function buildRetryFeedback(
-  previous: CoverQcResult,
-  headline: string,
-  kicker?: string | null,
-): string {
-  const oneLine = headline.replace(/\n/g, " ");
-  const textRule =
-    `\n\nRegenerate the same cover. Keep the same identity, concept, story and exact headline.\n` +
-    `The ONLY readable text allowed anywhere in the image is:\n"${oneLine}"` +
-    (kicker ? `\nplus the short kicker: "${kicker}"` : "") +
-    "\nDo not generate any other letters or words anywhere.";
-
-  switch (previous.status) {
-    case "EXTRA_TEXT": {
-      const found = previous.extraText?.length ? ` (found: ${previous.extraText.join(", ")})` : "";
-      return (
-        `\n\nPrevious generation failed because extra Russian-like text appeared in the image${found}.` + textRule
-      );
-    }
-    case "TEXT_MISMATCH":
-      return `\n\nPrevious generation failed because the headline was misspelled or reworded.` + textRule;
-    case "UNREADABLE_TEXT":
-      return (
-        `\n\nPrevious generation failed because the lettering was not clearly legible at thumbnail size. ` +
-        `Make the headline larger, bolder and higher-contrast.` + textRule
-      );
-    case "IDENTITY_PROBLEM":
-      return (
-        `\n\nPrevious generation did not preserve the reference identity closely enough.\n\n` +
-        `Preserve the exact facial identity more faithfully. Do not change facial structure, eyes, nose, ` +
-        `jawline or hairstyle.` + textRule
-      );
-    case "ANATOMY_PROBLEM":
-      return (
-        `\n\nPrevious generation contained an anatomical defect. Render correct human anatomy; ` +
-        `keep hands and fingers out of frame.` + textRule
-      );
-    case "VISUAL_ARTIFACTS": {
-      const found = previous.visualArtifacts?.length ? ` (${previous.visualArtifacts.join(", ")})` : "";
-      return `\n\nPrevious generation contained severe visual artifacts${found}. Render a clean photographic image.` + textRule;
-    }
-    default:
-      return `\n\nPrevious generation failed quality control.` + textRule;
   }
 }

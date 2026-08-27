@@ -292,6 +292,13 @@ function Settings() {
         <input type="text" value={s.metaAppId} onChange={(e) => field("metaAppId", e.target.value)} />
         <label>Meta App Secret</label>
         <input type="password" value={s.metaAppSecret} onChange={(e) => field("metaAppSecret", e.target.value)} />
+        <label>Meta Configuration ID (для «Входа через Facebook для бизнеса»)</label>
+        <input type="text" value={s.metaConfigId} onChange={(e) => field("metaConfigId", e.target.value)} />
+        <p className="hint">
+          Приложение → «Вход через Facebook для бизнеса» → <b>Конфигурации</b> → ID конфигурации. Этот вход не
+          принимает список разрешений — только ID конфигурации. Чтобы использовать вход через Facebook, поля
+          Instagram App ID/Secret выше должны быть <b>пустыми</b>.
+        </p>
         <label>Публичный URL сервера (после деплоя, для Instagram)</label>
         <input type="text" value={s.publicBaseUrl} onChange={(e) => field("publicBaseUrl", e.target.value)} placeholder="https://mysite.com" />
       </div>

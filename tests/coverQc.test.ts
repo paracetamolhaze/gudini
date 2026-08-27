@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { evaluateQc, normalizeCoverText, buildRetryFeedback } from "../lib/coverQc";
-import { buildCover, MAX_COVER_ATTEMPTS } from "../lib/coverPipeline";
+import { evaluateQc, normalizeCoverText, detectImageMediaType } from "../lib/coverQc";
+import { buildCover } from "../lib/coverPipeline";
 import { applyCoverRun, readCoverStats } from "../lib/coverStats";
 import { acceptKicker } from "../lib/cover";
 import type { CoverConcept } from "../lib/cover";
@@ -69,7 +69,17 @@ test("QC: нечитаемость, лицо, анатомия, артефакт
   assert.equal(evaluateQc(qc({ visualArtifacts: ["шесть пальцев"] }), HEADLINE, KICKER).status, "VISUAL_ARTIFACTS");
 });
 
-// ===================== Пайплайн: только FULL_AI =====================
+test("QC: формат картинки определяется по байтам, а не по расширению (баг из E2E)", () => {
+  // генератор кладёт JPEG в файл .png — заявленный по расширению media_type ломал запрос
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  const png = Buffer.concat([Buffer.from([0x89]), Buffer.from("PNG\r\n\x1a\n", "latin1")]);
+  assert.equal(detectImageMediaType(jpeg), "image/jpeg");
+  assert.equal(detectImageMediaType(png), "image/png");
+  assert.equal(detectImageMediaType(Buffer.from("GIF89a....", "latin1")), "image/gif");
+  assert.equal(detectImageMediaType(Buffer.from("RIFF\0\0\0\0WEBPVP8 ", "latin1")), "image/webp");
+});
+
+// ===================== Пайплайн: ровно одна платная генерация =====================
 
 function concept(lines: { text: string; accent: false | "yellow" | "box" }[], kicker?: string): CoverConcept {
   return {
@@ -84,20 +94,19 @@ function concept(lines: { text: string; accent: false | "yellow" | "box" }[], ki
   };
 }
 
-const TIGER = () => concept([{ text: "ТИГР", accent: false }, { text: "У ДОМА", accent: "box" }], KICKER);
+const TIGER = () => concept([{ text: "ТИГР", accent: false }, { text: "У ДОМА", accent: "box" }]);
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "gudini-cover-"));
 }
 
-/** Счётчики доказывают, что никакой альтернативный путь не вызывается. */
+/** Мок генератора: считает КАЖДЫЙ платный вызов image-модели. */
 function stubDeps(qcResults: CoverQcResult[]) {
-  const calls = { prompts: [] as string[], generated: [] as string[], qc: 0, finished: 0, encoded: 0 };
+  const calls = { generated: [] as string[], qc: 0, finished: 0, encoded: 0 };
   return {
     calls,
     deps: {
-      generateImage: async (prompt: string, out: string) => {
-        calls.prompts.push(prompt);
+      generateImage: async (_prompt: string, out: string) => {
         calls.generated.push(path.basename(out));
         fs.writeFileSync(out, "png");
         return { cost: 0.068 };
@@ -129,145 +138,118 @@ const EXTRA: CoverQcResult = {
 const IDENTITY: CoverQcResult = { status: "IDENTITY_PROBLEM", pass: false, reasons: ["не похож"], confidence: 0.9, cost: 0.002 };
 const ANATOMY: CoverQcResult = { status: "ANATOMY_PROBLEM", pass: false, reasons: ["анатомия"], confidence: 0.9, cost: 0.002 };
 
-test("1: первая попытка PASS → готово, лишних генераций нет", async () => {
+test("PASS: ровно одна генерация и готовая обложка", async () => {
   const dir = tmpDir();
   const { deps, calls } = stubDeps([PASS]);
   const r = await buildCover(dir, TIGER(), deps);
   assert.equal(r.ok, true);
   assert.equal(r.status, "PASS");
-  assert.equal(r.attempts, 1);
-  assert.deepEqual(calls.generated, ["cover-attempt-1.png"]);
+  assert.equal(calls.generated.length, 1);
   assert.equal(calls.encoded, 1);
   assert.ok(fs.existsSync(path.join(dir, "cover.jpg")));
-  assert.ok(fs.existsSync(path.join(dir, "cover-final.png")));
+  assert.equal(r.cost.total, 0.07);
 });
 
-test("2 и 3: провал QC ведёт к повторной генерации той же модели (до 3 попыток)", async () => {
+test("ГЛАВНОЕ: при QC FAIL число генераций РОВНО 1 — авто-повтора нет", async () => {
   const dir = tmpDir();
-  const { deps, calls } = stubDeps([EXTRA, EXTRA, PASS]);
+  // мок вернул бы PASS на второй вызов — но второго вызова быть не должно
+  const { deps, calls } = stubDeps([EXTRA, PASS, PASS]);
   const r = await buildCover(dir, TIGER(), deps);
-  assert.equal(r.ok, true);
-  assert.equal(r.attempts, 3);
-  assert.deepEqual(r.qcHistory, ["EXTRA_TEXT", "EXTRA_TEXT", "PASS"]);
-  assert.deepEqual(calls.generated, ["cover-attempt-1.png", "cover-attempt-2.png", "cover-attempt-3.png"]);
-  assert.equal(MAX_COVER_ATTEMPTS, 3);
-});
-
-test("4: три провала → COVER_FAILED и НИКАКОЙ обложки", async () => {
-  const dir = tmpDir();
-  const { deps, calls } = stubDeps([EXTRA, EXTRA, EXTRA]);
-  const r = await buildCover(dir, TIGER(), deps);
-  assert.equal(r.ok, false);
+  assert.equal(calls.generated.length, 1, "QC не имеет права инициировать новую генерацию");
+  assert.equal(calls.qc, 1, "QC вызывается один раз — по одной картинке");
   assert.equal(r.status, "COVER_FAILED");
-  assert.equal(r.attempts, 3);
+  assert.equal(r.ok, false);
   assert.equal(r.file, undefined);
-  assert.equal(calls.generated.length, 3, "ровно 3 генерации, ни одной лишней");
-  assert.equal(calls.encoded, 0);
-  assert.equal(calls.finished, 0);
-});
-
-test("5–8: после провала не вызывается ни renderer, ни Runway, ни кадр из видео, ни другая модель", async () => {
-  const dir = tmpDir();
-  const { deps, calls } = stubDeps([EXTRA, EXTRA, EXTRA]);
-  // в CoverDeps физически нет renderText / runway / frame-cover — доказываем набором вызовов
-  await buildCover(dir, TIGER(), deps);
-  assert.deepEqual(
-    calls.generated,
-    ["cover-attempt-1.png", "cover-attempt-2.png", "cover-attempt-3.png"],
-    "единственные обращения к генератору — попытки Full-AI",
-  );
-  assert.equal(calls.encoded, 0, "финальный файл не создаётся без PASS");
+  assert.equal(calls.encoded, 0, "финального файла без PASS не существует");
   assert.equal(fs.existsSync(path.join(dir, "cover.jpg")), false);
-  assert.equal(fs.existsSync(path.join(dir, "cover-clean-base.png")), false, "clean-base+renderer больше не существует");
-  assert.equal(fs.existsSync(path.join(dir, "cover-text.ass")), false, "наш текстовый слой не применяется");
-  const files = fs.readdirSync(dir);
-  assert.equal(files.some((f) => f.includes("clean") || f.includes("runway") || f.includes("frame")), false);
+  assert.equal(r.cost.total, 0.07, "оплачена ровно одна генерация");
+  const mode = JSON.parse(fs.readFileSync(path.join(dir, "cover-mode.json"), "utf8"));
+  assert.equal(mode.generations, 1);
+  assert.equal(mode.automaticRetries, 0);
 });
 
-test("9 и 10: headline и концепт не меняются между попытками", async () => {
-  const dir = tmpDir();
-  const { deps, calls } = stubDeps([EXTRA, EXTRA, PASS]);
-  await buildCover(dir, TIGER(), deps);
-  for (const p of calls.prompts) {
-    assert.ok(p.includes('"ТИГР\nУ ДОМА"'), "точный headline обязан быть в каждой попытке");
-    assert.ok(p.includes("tiger in courtyard"), "story не меняется");
-    assert.ok(p.includes("frozen alarm"), "эмоция не меняется");
-  }
-  // отличие между попытками — только корректирующая инструкция
-  const base = calls.prompts[0];
-  assert.ok(calls.prompts[1].startsWith(base), "вторая попытка = базовый промпт + feedback");
-  assert.ok(calls.prompts[2].startsWith(base));
-});
-
-test("11: QC-feedback добавляется и называет конкретную причину", async () => {
-  const dir = tmpDir();
-  const { deps, calls } = stubDeps([EXTRA, IDENTITY, PASS]);
-  await buildCover(dir, TIGER(), deps);
-  assert.ok(calls.prompts[1].includes("extra Russian-like text"), "причина №1 — лишний текст");
-  assert.ok(calls.prompts[1].includes("ТОЛШИЙ ШИНСВ"), "feedback называет найденный мусор");
-  assert.ok(calls.prompts[2].includes("preserve the reference identity"), "причина №2 — лицо");
-  assert.ok(fs.existsSync(path.join(dir, "cover-prompt-2.txt")));
-  assert.ok(fs.existsSync(path.join(dir, "cover-prompt-3.txt")));
-});
-
-test("12: финальная обложка появляется только после PASS", async () => {
-  const dir = tmpDir();
-  const { deps } = stubDeps([EXTRA, PASS]);
-  const r = await buildCover(dir, TIGER(), deps);
-  assert.equal(r.ok, true);
-  assert.ok(fs.existsSync(path.join(dir, "cover.jpg")));
-  const qc1 = JSON.parse(fs.readFileSync(path.join(dir, "cover-qc-1.json"), "utf8"));
-  assert.equal(qc1.pass, false, "первая попытка сохранена как непрошедшая");
-});
-
-test("13–15: extra text, лицо и анатомия ведут к повторной генерации", async () => {
+test("Любая причина провала QC даёт одну генерацию и COVER_FAILED", async () => {
   for (const failure of [EXTRA, IDENTITY, ANATOMY]) {
     const dir = tmpDir();
     const { deps, calls } = stubDeps([failure, PASS]);
     const r = await buildCover(dir, TIGER(), deps);
-    assert.equal(r.ok, true, `${failure.status} должен приводить к retry`);
-    assert.equal(calls.generated.length, 2);
+    assert.equal(calls.generated.length, 1, `${failure.status}: без авто-повтора`);
+    assert.equal(r.status, "COVER_FAILED");
   }
 });
 
-test("Артефакты: сохраняются попытки, QC и cover-mode.json", async () => {
+test("Ручная перегенерация — это ещё РОВНО одна генерация", async () => {
   const dir = tmpDir();
-  const { deps } = stubDeps([EXTRA, PASS]);
-  await buildCover(dir, TIGER(), deps);
-  for (const f of ["cover-prompt.txt", "cover-attempt-1.png", "cover-qc-1.json", "cover-attempt-2.png", "cover-qc-2.json", "cover-final.png", "cover.jpg", "cover-mode.json"]) {
-    assert.ok(fs.existsSync(path.join(dir, f)), `нет артефакта ${f}`);
-  }
-  const mode = JSON.parse(fs.readFileSync(path.join(dir, "cover-mode.json"), "utf8"));
-  assert.equal(mode.mode, "FULL_AI");
-  assert.equal(mode.status, "PASS");
-  assert.deepEqual(mode.qcHistory, ["EXTRA_TEXT", "PASS"]);
-  assert.equal(mode.totalCost, 0.14); // 2 генерации + 2 QC
-});
-
-test("Сбой провайдера не роняет монтаж — status=ERROR без обложки", async () => {
-  const dir = tmpDir();
-  const { deps } = stubDeps([PASS]);
-  deps.generateImage = async () => {
-    throw new Error("IMAGE_PROVIDER_ERROR: 429");
+  // общий счётчик на оба запуска: имитируем нажатие «Перегенерировать» после провала
+  const calls = { generated: 0 };
+  const results = [EXTRA, PASS];
+  let qcCall = 0;
+  const deps = {
+    generateImage: async (_p: string, out: string) => {
+      calls.generated++;
+      fs.writeFileSync(out, "png");
+      return { cost: 0.068 };
+    },
+    runQc: async () => results[qcCall++],
+    finish: async (_d: string, src: string, out: string) => (fs.copyFileSync(src, out), out),
+    encodeFinal: async (_d: string, _b: string, out: string) => (fs.writeFileSync(out, "jpg"), out),
   };
-  const r = await buildCover(dir, TIGER(), deps);
-  assert.equal(r.ok, false);
+
+  const first = await buildCover(dir, TIGER(), deps);
+  assert.equal(first.status, "COVER_FAILED");
+  assert.equal(calls.generated, 1, "после автоматического запуска — 1 генерация");
+
+  const second = await buildCover(dir, TIGER(), deps, { manual: true });
+  assert.equal(second.status, "PASS");
+  assert.equal(calls.generated, 2, "нажатие пользователя добавило ровно одну генерацию");
+  const mode = JSON.parse(fs.readFileSync(path.join(dir, "cover-mode.json"), "utf8"));
+  assert.equal(mode.manualRegeneration, true);
+});
+
+test("В пайплайне нет ни рендерера, ни Runway, ни кадра из видео", async () => {
+  const dir = tmpDir();
+  const { deps } = stubDeps([EXTRA]);
+  await buildCover(dir, TIGER(), deps);
+  const files = fs.readdirSync(dir);
+  assert.equal(files.some((f) => /clean|runway|frame|cover-text\.ass|cover\.ass/.test(f)), false);
+  assert.equal(fs.existsSync(path.join(dir, "cover-attempt-2.png")), false);
+  assert.equal(fs.existsSync(path.join(dir, "cover-prompt-2.txt")), false, "второго промпта не существует");
+});
+
+test("Сбой провайдера: status=ERROR, обложки нет, повтора нет", async () => {
+  const dir = tmpDir();
+  let calls = 0;
+  const r = await buildCover(dir, TIGER(), {
+    generateImage: async () => {
+      calls++;
+      throw new Error("IMAGE_PROVIDER_ERROR: 429");
+    },
+  });
   assert.equal(r.status, "ERROR");
+  assert.equal(calls, 1, "неудачный вызов не повторяется автоматически");
   assert.equal(fs.existsSync(path.join(dir, "cover.jpg")), false);
 });
 
 test("QC недоступен — это FAIL, а не пропуск проверки", async () => {
   const dir = tmpDir();
   const unavailable: CoverQcResult = { status: "QC_UNAVAILABLE", pass: false, reasons: ["нет ключа"], confidence: 0, cost: 0 };
-  const { deps, calls } = stubDeps([unavailable, unavailable, unavailable]);
+  const { deps, calls } = stubDeps([unavailable]);
   const r = await buildCover(dir, TIGER(), deps);
   assert.equal(r.status, "COVER_FAILED");
-  assert.equal(calls.encoded, 0, "без подтверждённого качества обложки не существует");
+  assert.equal(calls.generated.length, 1);
+  assert.equal(calls.encoded, 0);
 });
 
-// ===================== 16: флаг =====================
+test("Артефакты одной попытки", async () => {
+  const dir = tmpDir();
+  const { deps } = stubDeps([PASS]);
+  await buildCover(dir, TIGER(), deps);
+  for (const f of ["cover-prompt.txt", "cover-attempt-1.png", "cover-qc-1.json", "cover-final.png", "cover.jpg", "cover-mode.json"]) {
+    assert.ok(fs.existsSync(path.join(dir, f)), `нет артефакта ${f}`);
+  }
+});
 
-test("16: FULL_AI_COVER=false — это выключение обложек, а не скрытый фолбэк", async () => {
+test("FULL_AI_COVER=false — выключение обложек, а не скрытый фолбэк", async () => {
   const { fullAiCoverEnabled, fullAiCoverModel, DEFAULT_FULL_AI_MODEL } = await import("../lib/coverProvider");
   const prev = process.env.FULL_AI_COVER;
   try {
@@ -294,26 +276,18 @@ test("Kicker необязателен: по умолчанию его нет, д
   assert.equal(acceptKicker("ИТОГИ"), "ИТОГИ");
 });
 
-test("Retry-подсказка фиксирует единственный разрешённый текст", () => {
-  const fb = buildRetryFeedback(EXTRA, HEADLINE, null);
-  assert.ok(fb.includes("extra Russian-like text"));
-  assert.ok(fb.includes(`"${HEADLINE}"`));
-  assert.ok(fb.includes("Do not generate any other letters"));
-  assert.ok(fb.includes("Keep the same identity, concept, story and exact headline"));
-});
-
-test("Stats: считаются попытки и провалы, счётчиков фолбэка больше нет", () => {
+test("Stats: generated / passedQc / failedQc / manualRegenerations", () => {
   let s = readCoverStats(path.join(tmpDir(), "none.json"));
-  s = applyCoverRun(s, { attempts: 1, status: "PASS", qc: "PASS", cost: 0.07 });
-  s = applyCoverRun(s, { attempts: 2, status: "PASS", qc: "PASS", cost: 0.14 });
-  s = applyCoverRun(s, { attempts: 3, status: "PASS", qc: "PASS", cost: 0.21 });
-  s = applyCoverRun(s, { attempts: 3, status: "COVER_FAILED", qc: "EXTRA_TEXT", cost: 0.21 });
-  assert.equal(s.totalCovers, 4);
-  assert.equal(s.passFirst, 1);
-  assert.equal(s.passSecond, 1);
-  assert.equal(s.passThird, 1);
-  assert.equal(s.failedAfterThree, 1);
+  s = applyCoverRun(s, { status: "PASS", qc: "PASS", cost: 0.07 });
+  s = applyCoverRun(s, { status: "COVER_FAILED", qc: "EXTRA_TEXT", cost: 0.07 });
+  s = applyCoverRun(s, { status: "PASS", qc: "PASS", cost: 0.07, manual: true });
+  assert.equal(s.generated, 3);
+  assert.equal(s.passedQc, 2);
+  assert.equal(s.failedQc, 1);
+  assert.equal(s.manualRegenerations, 1);
   assert.equal(s.extraText, 1);
-  assert.equal(s.totalCost, 0.63);
-  assert.equal("fallback" in s, false);
+  assert.equal(s.totalCost, 0.21);
+  for (const gone of ["passSecond", "passThird", "failedAfterThree", "fallback"]) {
+    assert.equal(gone in s, false, `счётчик ${gone} должен быть удалён`);
+  }
 });

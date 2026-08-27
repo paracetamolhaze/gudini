@@ -60,10 +60,11 @@ export async function POST(req: NextRequest) {
   const patch: Record<string, string> = {};
   for (const field of FIELDS) {
     const value = body[field];
-    // пустые и замаскированные значения не перезаписывают сохранённые
-    if (typeof value === "string" && value.trim() && !value.includes("••••")) {
-      patch[field] = value.trim();
-    }
+    if (typeof value !== "string") continue;
+    // замаскированное значение = поле не трогали, сохранённое остаётся
+    if (value.includes("••••")) continue;
+    // пустая строка = явная очистка (в т.ч. отключение fallback на переменную окружения)
+    patch[field] = value.trim();
   }
   saveSettings(patch);
   return NextResponse.json({ ok: true });

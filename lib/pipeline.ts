@@ -226,8 +226,9 @@ export async function processProject(id: string): Promise<void> {
 }
 
 /**
- * Единственный способ получить обложку: Full-AI (Gemini Flash) + QC, до 3 попыток.
- * Ни рендерера, ни Runway, ни кадра из видео — при провале обложки просто нет.
+ * Единственный способ получить обложку: одна генерация Gemini Flash + QC.
+ * Автоматических повторов нет — при провале обложки просто нет (COVER_FAILED),
+ * новую оплаченную генерацию создаёт только нажатие «Перегенерировать».
  */
 export async function makeCover(
   dir: string,
@@ -235,6 +236,7 @@ export async function makeCover(
   script: string | null,
   title?: string | null,
   headlineOverride?: string | null,
+  manual = false,
 ): Promise<{ cover: string | null; coverStatus: CoverStatus }> {
   // FULL_AI_COVER=false — обложки просто НЕ создаются (это выключатель, а не фолбэк
   // на другой способ: подменных обложек в системе не существует)
@@ -258,9 +260,9 @@ export async function makeCover(
       concept.headline = concept.headlineLines.map((l) => l.text).join("\n");
     }
     fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
-    const r = await buildCover(dir, concept);
+    const r = await buildCover(dir, concept, {}, { manual });
     console.log(
-      `Cover: status=${r.status} attempts=${r.attempts} qc=[${r.qcHistory.join(", ")}] cost=$${r.cost.total}`,
+      `Cover: status=${r.status} qc=${r.qc} generations=1 cost=$${r.cost.total}${manual ? " (ручная перегенерация)" : ""}`,
     );
     return r.ok ? { cover: r.file ?? null, coverStatus: "ok" } : { cover: null, coverStatus: "failed" };
   } catch (e: any) {

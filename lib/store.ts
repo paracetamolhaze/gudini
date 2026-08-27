@@ -19,7 +19,7 @@ export type Publication = {
   at: string;
 };
 
-/** ok — обложка прошла QC; failed — три Full-AI попытки не прошли (подмены не делаем). */
+/** ok — обложка прошла QC; failed — единственная генерация не прошла QC (авто-повторов нет). */
 export type CoverStatus = "ok" | "failed";
 
 export type ProjectMeta = {
@@ -39,7 +39,7 @@ export type Project = {
   processing: ProcessingState;
   subtitlesSource?: "scribe" | "whisper" | "script";
   cover?: string | null; // cover.jpg — Full-AI обложка, прошедшая QC (иначе null)
-  coverStatus?: CoverStatus; // failed — три попытки не прошли QC, нужна перегенерация
+  coverStatus?: CoverStatus; // failed — генерация не прошла QC, нужна ручная перегенерация
   coverOffsetSec?: number; // устарело: кадр из видео больше не используется как обложка
   brollCount?: number; // сколько б-ролл перебивок вошло в монтаж
   meta: ProjectMeta | null;
@@ -194,6 +194,11 @@ function normalizeUrl(url?: string): string | undefined {
   return u;
 }
 
+/** Сохранённая пустая строка = поле очищено намеренно: fallback на env не подставляем. */
+function pick(saved: string | undefined, env: string | undefined): string | undefined {
+  return saved === "" ? undefined : saved || env || undefined;
+}
+
 /** Настройки: значения из settings.json поверх переменных окружения. */
 export function getSettings(): Settings {
   let saved: Settings = {};
@@ -201,24 +206,23 @@ export function getSettings(): Settings {
     saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
   } catch {}
   return {
-    anthropicKey: saved.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
-    openaiKey: saved.openaiKey || process.env.OPENAI_API_KEY || undefined,
-    elevenLabsKey: saved.elevenLabsKey || process.env.ELEVENLABS_API_KEY || undefined,
-    pexelsKey: saved.pexelsKey || process.env.PEXELS_API_KEY || undefined,
-    pixabayKey: saved.pixabayKey || process.env.PIXABAY_API_KEY || undefined,
-    runwayKey: saved.runwayKey || process.env.RUNWAY_API_KEY || undefined,
-    openrouterKey:
-      saved.openrouterKey || process.env.OPENROUTER || process.env.OPENROUTER_API_KEY || undefined,
-    googleClientId: saved.googleClientId || process.env.GOOGLE_CLIENT_ID || undefined,
-    googleClientSecret: saved.googleClientSecret || process.env.GOOGLE_CLIENT_SECRET || undefined,
-    tiktokClientKey: saved.tiktokClientKey || process.env.TIKTOK_CLIENT_KEY || undefined,
-    tiktokClientSecret: saved.tiktokClientSecret || process.env.TIKTOK_CLIENT_SECRET || undefined,
-    metaAppId: saved.metaAppId || process.env.META_APP_ID || undefined,
-    metaAppSecret: saved.metaAppSecret || process.env.META_APP_SECRET || undefined,
-    metaConfigId: saved.metaConfigId || process.env.META_CONFIG_ID || undefined,
-    igAppId: saved.igAppId || process.env.IG_APP_ID || undefined,
-    igAppSecret: saved.igAppSecret || process.env.IG_APP_SECRET || undefined,
-    publicBaseUrl: normalizeUrl(saved.publicBaseUrl || process.env.PUBLIC_BASE_URL),
+    anthropicKey: pick(saved.anthropicKey, process.env.ANTHROPIC_API_KEY),
+    openaiKey: pick(saved.openaiKey, process.env.OPENAI_API_KEY),
+    elevenLabsKey: pick(saved.elevenLabsKey, process.env.ELEVENLABS_API_KEY),
+    pexelsKey: pick(saved.pexelsKey, process.env.PEXELS_API_KEY),
+    pixabayKey: pick(saved.pixabayKey, process.env.PIXABAY_API_KEY),
+    runwayKey: pick(saved.runwayKey, process.env.RUNWAY_API_KEY),
+    openrouterKey: pick(saved.openrouterKey, process.env.OPENROUTER || process.env.OPENROUTER_API_KEY),
+    googleClientId: pick(saved.googleClientId, process.env.GOOGLE_CLIENT_ID),
+    googleClientSecret: pick(saved.googleClientSecret, process.env.GOOGLE_CLIENT_SECRET),
+    tiktokClientKey: pick(saved.tiktokClientKey, process.env.TIKTOK_CLIENT_KEY),
+    tiktokClientSecret: pick(saved.tiktokClientSecret, process.env.TIKTOK_CLIENT_SECRET),
+    metaAppId: pick(saved.metaAppId, process.env.META_APP_ID),
+    metaAppSecret: pick(saved.metaAppSecret, process.env.META_APP_SECRET),
+    metaConfigId: pick(saved.metaConfigId, process.env.META_CONFIG_ID),
+    igAppId: pick(saved.igAppId, process.env.IG_APP_ID),
+    igAppSecret: pick(saved.igAppSecret, process.env.IG_APP_SECRET),
+    publicBaseUrl: normalizeUrl(pick(saved.publicBaseUrl, process.env.PUBLIC_BASE_URL)),
     youtubeTokens: saved.youtubeTokens,
     tiktokTokens: saved.tiktokTokens,
     instagramTokens: saved.instagramTokens,

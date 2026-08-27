@@ -585,7 +585,7 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
   if (busy) {
     return (
       <div style={{ textAlign: "center", marginTop: 12 }}>
-        <p className="hint">Генерирую обложку и проверяю качество… (до 3 попыток)</p>
+        <p className="hint">Генерирую обложку и проверяю качество…</p>
       </div>
     );
   }

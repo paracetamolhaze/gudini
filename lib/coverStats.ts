@@ -3,24 +3,24 @@ import path from "path";
 import type { CoverQcStatus } from "./coverQc";
 
 /**
- * Статистика обложек. Фолбэков в системе нет, поэтому и счётчиков фолбэка нет:
- * обложка либо проходит QC на одной из трёх попыток, либо это COVER_FAILED.
+ * Статистика обложек. Автоматических повторов нет, поэтому нет и счётчиков попыток:
+ * каждая генерация — отдельное действие пользователя и отдельная оплата.
+ * manualRegenerations показывает, сколько раз пользователь нажал «Перегенерировать».
  */
 
 export type CoverRun = {
-  attempts: number;
   status: "PASS" | "COVER_FAILED" | "ERROR";
   qc: CoverQcStatus | "NONE";
   cost: number;
+  manual?: boolean;
   error?: string;
 };
 
 export type CoverStats = {
-  totalCovers: number;
-  passFirst: number;
-  passSecond: number;
-  passThird: number;
-  failedAfterThree: number;
+  generated: number;
+  passedQc: number;
+  failedQc: number;
+  manualRegenerations: number;
   textMismatch: number;
   extraText: number;
   unreadableText: number;
@@ -36,11 +36,10 @@ export type CoverStats = {
 const STATS_FILE = path.join(process.cwd(), "data", "cover-stats.json");
 
 const EMPTY: CoverStats = {
-  totalCovers: 0,
-  passFirst: 0,
-  passSecond: 0,
-  passThird: 0,
-  failedAfterThree: 0,
+  generated: 0,
+  passedQc: 0,
+  failedQc: 0,
+  manualRegenerations: 0,
   textMismatch: 0,
   extraText: 0,
   unreadableText: 0,
@@ -63,17 +62,13 @@ export function readCoverStats(file = STATS_FILE): CoverStats {
 /** Чистый апдейт счётчиков — тестируется без файловой системы. */
 export function applyCoverRun(stats: CoverStats, run: CoverRun): CoverStats {
   const s = { ...stats };
-  s.totalCovers += 1;
+  s.generated += 1;
   s.totalCost = Number((s.totalCost + (run.cost || 0)).toFixed(6));
+  if (run.manual) s.manualRegenerations += 1;
   if (run.error) s.errors += 1;
 
-  if (run.status === "PASS") {
-    if (run.attempts <= 1) s.passFirst += 1;
-    else if (run.attempts === 2) s.passSecond += 1;
-    else s.passThird += 1;
-  } else if (run.status === "COVER_FAILED") {
-    s.failedAfterThree += 1;
-  }
+  if (run.status === "PASS") s.passedQc += 1;
+  else if (run.status === "COVER_FAILED") s.failedQc += 1;
 
   switch (run.qc) {
     case "TEXT_MISMATCH": s.textMismatch += 1; break;

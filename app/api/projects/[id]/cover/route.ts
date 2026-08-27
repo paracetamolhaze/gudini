@@ -5,8 +5,8 @@ import { makeCover } from "@/lib/pipeline";
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
- * Перегенерация обложки: новый Full-AI цикл (до 3 попыток + QC).
- * Никаких подменных обложек — при провале возвращается coverStatus=failed.
+ * Ручная перегенерация обложки — РОВНО ОДНА платная генерация на нажатие.
+ * Никаких подменных обложек и авто-повторов: при провале QC возвращается coverStatus=failed.
  * Необязательный body {headline}: пользователь может сам сократить заголовок.
  */
 export async function POST(req: NextRequest, { params }: Ctx) {
@@ -27,6 +27,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     project.script,
     project.meta?.title,
     headline,
+    true, // действие пользователя: одна оплаченная генерация
   );
   const updated = updateProject(id, { cover, coverStatus });
   return NextResponse.json(updated ?? project);

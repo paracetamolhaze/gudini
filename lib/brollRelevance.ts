@@ -168,9 +168,25 @@ export function scoreRelevance(
     }
   }
 
+  // ЖЁСТКИЙ ГЕЙТ: обязательные условия должны выполняться ВСЕ. «Лучший из плохих»
+  // не проходит — скейтер через препятствие не заменяет футболиста через рекламный щит,
+  // а носилки на улице не заменяют носилки на поле. Не прошло — значит A-roll.
   const mustTerms = intent.mustHave.length ? intent.mustHave : [intent.subject];
-  const mustHits = mustTerms.filter((t) => termHit(t)).length;
-  const subjectMatch = mustTerms.length ? mustHits / mustTerms.length : termHit(intent.subject) ? 1 : 0;
+  const missing = mustTerms.filter((t) => !termHit(t));
+  const mustHits = mustTerms.length - missing.length;
+  if (missing.length) {
+    return {
+      relevance: 0,
+      subjectMatch: 0,
+      environmentMatch: 0,
+      actionMatch: 0,
+      specificityMatch: 0,
+      avoidViolation: false,
+      specificityFail: true,
+      reason: `не выполнены обязательные условия: ${missing.join(", ")}`,
+    };
+  }
+  const subjectMatch = 1;
   const environmentMatch = intent.environment ? (termHit(intent.environment) ? 1 : partial(intent.environment, haystack)) : 0.5;
   const actionMatch = intent.action ? (termHit(intent.action) ? 1 : partial(intent.action, haystack)) : 0.5;
 

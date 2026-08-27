@@ -6,7 +6,7 @@ import { planBrollSegments } from "./ai";
 import { Word } from "./transcribe";
 import { EditEvent, VisualIntent } from "./editPlan";
 import { analyzeAsset, scoreRelevance, combineScores, VisualRelevanceScore } from "./brollRelevance";
-import { buildPersonClip, buildGraphicClip } from "./brollEntity";
+import { buildPersonClip } from "./brollEntity";
 
 export type BrollClip = { start: number; end: number; file: string; query: string };
 
@@ -30,9 +30,11 @@ type StockCandidate = {
 type CacheEntry = StockCandidate & { file: string; at: string };
 
 /**
- * Подбирает материал для B_ROLL-событий монтажного плана (параллельно).
- * Приоритет: готовый файл в проекте → Runway (если ключ) → сток (кэш → Pexels → Pixabay).
- * События без материала выбрасываются из плана (останется A-roll).
+ * Подбирает материал для B_ROLL-событий (параллельно).
+ * Приоритет: конкретная сущность (фото человека с Wikimedia) → сток, прошедший
+ * ЖЁСТКИЙ гейт по mustHave/avoid. Ничего не подошло — события нет, остаётся A-roll.
+ * Генерация видео (Runway) не используется: приблизительно похожая картинка за деньги
+ * хуже, чем лицо автора.
  */
 export async function resolveBrollEvents(dir: string, events: EditEvent[]): Promise<EditEvent[]> {
   const brolls = events.filter((e) => e.type === "B_ROLL");
@@ -89,37 +91,6 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
         }
       }
 
-      if (event.sourceIntent === "GRAPHIC" && event.graphicLines?.length) {
-        try {
-          if (await buildGraphicClip(event.graphicLines, full, duration)) {
-            event.file = file;
-            trace.push({
-              query: event.graphicLines.join(" / "),
-              candidates: [],
-              mode: "graphic",
-              sourceIntent: "GRAPHIC",
-              winner: "generated",
-            });
-            return;
-          }
-        } catch (e) {
-          console.warn(`Графика «${event.graphicLines.join("/")}»:`, e);
-        }
-        return;
-      }
-
-      // Runway (~$0.30/клип — вчетверо дороже всей обложки) НЕ используется автоматически:
-      // если релевантного стока нет, лучше оставить лицо автора, чем незаметно потратить деньги.
-      // Включается явно: BROLL_SOURCE=runway.
-      const runwayEnabled = process.env.BROLL_SOURCE === "runway";
-      const tryRunway = async () => {
-        try {
-          return Boolean(getSettings().runwayKey) && (await generateRunwayVideo(event.query!, full));
-        } catch (e) {
-          console.warn(`Runway «${event.query}»:`, e);
-          return false;
-        }
-      };
       const tryStock = async () => {
         try {
           return await fetchStockVideo(queries, duration, full, used, event.visualIntent, trace, {
@@ -131,29 +102,9 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
           return false;
         }
       };
-      let ok = runwayEnabled ? (await tryRunway()) || (await tryStock()) : await tryStock();
-
-      // матчап без подходящего реального материала — рисуем свою графику,
-      // а не ставим случайный стадион «потому что тоже футбол»
-      if (!ok && event.sourceIntent === "TEAM_MATCHUP" && event.graphicLines?.length) {
-        try {
-          ok = await buildGraphicClip(event.graphicLines, full, duration);
-          if (ok) {
-            trace.push({
-              query: event.graphicLines.join(" / "),
-              candidates: [],
-              mode: "graphic",
-              sourceIntent: "TEAM_MATCHUP",
-              entityName: event.entityName,
-              winner: "generated",
-              note: "реального материала матча нет — своя графика вместо общего стока",
-            });
-          }
-        } catch (e) {
-          console.warn(`Графика матчапа «${event.entityName}»:`, e);
-        }
-      }
-      if (ok) event.file = file;
+      // подходящего материала нет → перебивки не будет, останется лицо автора
+      if (await tryStock()) event.file = file;
+      else console.log(`B-roll «${event.query}»: точного совпадения нет → A-roll`);
     }),
   );
   try {
@@ -187,11 +138,6 @@ export async function prepareBroll(dir: string, words: Word[], topic: string): P
     segments.map(async (seg) => {
       const full = path.join(dir, seg.file);
       if (fs.existsSync(full)) return seg;
-      try {
-        if (getSettings().runwayKey && (await generateRunwayVideo(seg.query, full))) return seg;
-      } catch (e) {
-        console.warn(`Runway «${seg.query}»:`, e);
-      }
       try {
         if (await fetchStockVideo([seg.query], seg.end - seg.start, full, used)) return seg;
       } catch (e) {
@@ -346,12 +292,12 @@ export async function fetchStockVideo(
       trace?.push(record);
       return false;
     } else {
-      // vision недоступен (нет превью/ключа/сбой) → честный технический фолбэк
-      record.mode = "technical";
-      ranked = eligible.slice(0, 3).map(({ c, technical }) => {
-        if (!record.candidates.some((t) => t.provider === c.provider && t.id === c.id)) push(c, technical);
-        return { c, final: technical };
-      });
+      // vision недоступен — проверить содержимое кадра нечем. Ставить непроверенный
+      // сток «по техническим параметрам» нельзя: именно так в ролик попадали скейтер
+      // вместо футболиста и носилки на улице вместо носилок на поле.
+      record.note = "vision недоступен — без проверки кадра перебивку не ставим";
+      trace?.push(record);
+      return false;
     }
   } else {
     ranked = eligible.slice(0, 3).map(({ c, technical }) => {
@@ -499,70 +445,4 @@ function cacheStore(c: StockCandidate, buffer: Buffer) {
     index.push({ ...c, file, at: new Date().toISOString() });
     fs.writeFileSync(CACHE_INDEX, JSON.stringify(index, null, 2));
   } catch {}
-}
-
-// ===== Runway: ИИ-генерация перебивки под точную фразу =====
-
-const RUNWAY_BASE = "https://api.dev.runwayml.com/v1";
-
-async function generateRunwayVideo(query: string, outPath: string): Promise<boolean> {
-  const key = getSettings().runwayKey;
-  if (!key || !query.trim()) return false;
-  const headers = {
-    Authorization: `Bearer ${key}`,
-    "X-Runway-Version": "2024-11-06",
-    "Content-Type": "application/json",
-  };
-
-  // 1) кадр по описанию
-  const imageTask = await runwayPost("/text_to_image", headers, {
-    model: "gen4_image",
-    promptText: `${query}, vertical cinematic shot, realistic, high detail`,
-    ratio: "1080:1920",
-  });
-  const imageUrl = await runwayWait(imageTask, headers);
-
-  // 2) оживляем кадр в 5-секундный клип
-  const videoTask = await runwayPost("/image_to_video", headers, {
-    model: "gen4_turbo",
-    promptImage: imageUrl,
-    promptText: query,
-    ratio: "720:1280",
-    duration: 5,
-  });
-  const videoUrl = await runwayWait(videoTask, headers);
-
-  const download = await fetch(videoUrl);
-  if (!download.ok) throw new Error(`Runway download: ${download.status}`);
-  const buffer = Buffer.from(await download.arrayBuffer());
-  if (buffer.length < 50_000) throw new Error("Runway вернул пустой файл");
-  fs.writeFileSync(outPath, buffer);
-  return true;
-}
-
-async function runwayPost(endpoint: string, headers: Record<string, string>, body: unknown): Promise<string> {
-  const res = await fetch(RUNWAY_BASE + endpoint, { method: "POST", headers, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error(`Runway ${endpoint}: ${res.status} ${(await res.text()).slice(0, 300)}`);
-  const json: any = await res.json();
-  if (!json.id) throw new Error(`Runway ${endpoint}: нет id задачи`);
-  return json.id;
-}
-
-/** Ждёт завершения задачи Runway (до 5 минут), возвращает URL результата. */
-async function runwayWait(taskId: string, headers: Record<string, string>): Promise<string> {
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 5000));
-    const res = await fetch(`${RUNWAY_BASE}/tasks/${taskId}`, { headers });
-    if (!res.ok) throw new Error(`Runway task: ${res.status}`);
-    const json: any = await res.json();
-    if (json.status === "SUCCEEDED") {
-      const url = Array.isArray(json.output) ? json.output[0] : json.output;
-      if (!url) throw new Error("Runway: задача завершилась без результата");
-      return String(url);
-    }
-    if (json.status === "FAILED" || json.status === "CANCELLED") {
-      throw new Error(`Runway: ${json.status} ${json.failure ?? json.failureCode ?? ""}`);
-    }
-  }
-  throw new Error("Runway: задача не завершилась за 5 минут");
 }

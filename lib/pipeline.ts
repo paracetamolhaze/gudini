@@ -12,7 +12,7 @@ import {
 } from "./speechCleanupPlan";
 import { planSpeechCleanup } from "./speechCleanupPlanner";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
-import { buildAss, buildCalloutsAss, dropDuplicateCallouts } from "./subtitles";
+import { buildAss } from "./subtitles";
 import { applyScriptFormatting } from "./scriptFormat";
 import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
@@ -181,17 +181,12 @@ export async function processProject(id: string): Promise<void> {
         })),
       };
     }
-    // каллаут, повторяющий произносимые в этот момент слова, — визуальный шум
-    plan.events = dropDuplicateCallouts(plan.events, words);
     fs.writeFileSync(path.join(dir, "edit-plan.json"), JSON.stringify(plan, null, 2), "utf8");
 
-    // --- Субтитры и текстовые акценты ---
+    // --- Субтитры (единственный текстовый слой в ролике) ---
     setStep(id, "Субтитры", 34);
     fs.writeFileSync(path.join(dir, "subs.ass"), buildAss(words, plan.captionStyle), "utf8");
-    const callouts = plan.events.filter((e) => e.type === "TEXT_CALLOUT");
-    if (callouts.length) {
-      fs.writeFileSync(path.join(dir, "callouts.ass"), buildCalloutsAss(callouts), "utf8");
-    }
+    fs.rmSync(path.join(dir, "callouts.ass"), { force: true }); // от прошлых прогонов
 
     // --- Рендер по плану ---
     setStep(id, "Монтаж видео", 38);
@@ -252,6 +247,12 @@ export async function makeCover(
   if (!getSettings().openrouterKey) {
     console.warn("Cover: нет ключа OPENROUTER — обложка не создаётся");
     return { cover: null, coverStatus: "failed" };
+  }
+  // при повторном монтаже готовая обложка переиспользуется: сюжет и заголовок те же,
+  // а генерация стоит денег. Пересоздать её можно кнопкой «Перегенерировать».
+  if (!manual && fs.existsSync(path.join(dir, "cover.jpg"))) {
+    console.log("Cover: обложка уже есть — повторная генерация не нужна");
+    return { cover: "cover.jpg", coverStatus: "ok" };
   }
   try {
     const override = headlineOverride?.trim();
@@ -343,25 +344,12 @@ async function renderPlan(
 ): Promise<void> {
   const music = hasMusic();
   const brolls = plan.events.filter((e) => e.type === "B_ROLL" && e.file);
-  const punches = plan.events.filter((e) => e.type === "PUNCH_IN");
-  const hasCallouts = fs.existsSync(path.join(dir, "callouts.ass"));
 
+  // A-roll проходит РОВНО один путь обработки: scale → crop → fps.
+  // Никаких split/повторных scale поверх той же картинки: раньше punch-in накладывал
+  // пересканированную копию кадра, и на этих секундах заметно менялись цвет и контраст.
   let chain = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30[vbase]`;
   let current = "vbase";
-
-  // punch-in: приближенная копия кадра поверх базы в заданных интервалах
-  if (punches.length) {
-    const splits = punches.map((_, i) => `[pz${i}]`).join("");
-    chain += `;[${current}]split=${punches.length + 1}[vb0]${splits}`;
-    current = "vb0";
-    punches.forEach((p, i) => {
-      const s = (p.scale ?? 1.06).toFixed(3);
-      chain +=
-        `;[pz${i}]crop=w=iw/${s}:h=ih/${s}:x=(iw-iw/${s})/2:y=(ih-ih/${s})/2,scale=1080:1920[pv${i}]` +
-        `;[${current}][pv${i}]overlay=eof_action=pass:enable='between(t,${p.start.toFixed(2)},${p.end.toFixed(2)})'[vp${i}]`;
-      current = `vp${i}`;
-    });
-  }
 
   // б-роллы поверх (голос не прерывается)
   brolls.forEach((b, k) => {
@@ -374,7 +362,7 @@ async function renderPlan(
     current = `vo${k}`;
   });
 
-  chain += `;[${current}]ass=subs.ass${hasCallouts ? ",ass=callouts.ass" : ""}[v]`;
+  chain += `;[${current}]ass=subs.ass[v]`;
 
   const audioChain = music
     ? `[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[vo];` +

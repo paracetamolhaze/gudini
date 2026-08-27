@@ -49,31 +49,6 @@ test("EditPlan: пересекающиеся события одной доро�
   assert.equal(events.length, 1);
 });
 
-test("EditPlan: PUNCH_IN scale клампится в [1.03, 1.1], дефолт 1.06", () => {
-  const events = validatePlan(
-    [
-      { type: "PUNCH_IN", from: 10, to: 16, scale: 1.5 },
-      { type: "PUNCH_IN", from: 30, to: 36 },
-    ],
-    words,
-    duration,
-  );
-  assert.equal(events.length, 2);
-  assert.ok(events.every((e) => e.scale! >= 1.03 && e.scale! <= 1.1));
-});
-
-test("EditPlan: PUNCH_IN поверх B_ROLL отбрасывается (лицо всё равно закрыто)", () => {
-  const events = validatePlan(
-    [
-      { type: "B_ROLL", from: 10, to: 18, query: "a" },
-      { type: "PUNCH_IN", from: 12, to: 16 },
-    ],
-    words,
-    duration,
-  );
-  assert.equal(events.filter((e) => e.type === "PUNCH_IN").length, 0);
-});
-
 test("EditPlan: лимиты количества (B_ROLL<=8, CALLOUT<=4)", () => {
   const many = Array.from({ length: 15 }, (_, i) => ({
     type: "B_ROLL",
@@ -83,38 +58,6 @@ test("EditPlan: лимиты количества (B_ROLL<=8, CALLOUT<=4)", () =
   }));
   const events = validatePlan(many as any, makeWords(300), 120);
   assert.ok(events.filter((e) => e.type === "B_ROLL").length <= 8);
-});
-
-test("PUNCH_IN: минимальный зазор 5с — «дёрганье камеры» невозможно", () => {
-  const events = validatePlan(
-    [
-      { type: "PUNCH_IN", from: 10, to: 16 }, // ~4с
-      { type: "PUNCH_IN", from: 20, to: 26 }, // через ~1.6с после конца первого — отбросить
-      { type: "PUNCH_IN", from: 60, to: 66 }, // далеко — ок
-    ],
-    words,
-    duration,
-  );
-  const punches = events.filter((e) => e.type === "PUNCH_IN");
-  assert.equal(punches.length, 2);
-  for (let i = 1; i < punches.length; i++) {
-    assert.ok(punches[i].start - punches[i - 1].end >= 5.0 - 0.01);
-  }
-});
-
-test("PUNCH_IN: лимит нормирован по длительности (~5 на минуту)", () => {
-  const longWords = makeWords(450); // 180с
-  const many = Array.from({ length: 30 }, (_, i) => ({
-    type: "PUNCH_IN",
-    from: 10 + i * 14,
-    to: 14 + i * 14,
-  }));
-  const events = validatePlan(many as any, longWords, 180);
-  const punches = events.filter((e) => e.type === "PUNCH_IN");
-  assert.ok(punches.length <= Math.round((180 / 60) * 5), `слишком много панчей: ${punches.length}`);
-  // а для короткого ролика (36с) — не больше 3
-  const shortEvents = validatePlan(many.slice(0, 6) as any, makeWords(90), 36);
-  assert.ok(shortEvents.filter((e) => e.type === "PUNCH_IN").length <= 3);
 });
 
 test("EditPlan: visualIntent парсится и клампится", () => {

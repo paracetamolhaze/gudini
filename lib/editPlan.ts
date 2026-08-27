@@ -95,19 +95,21 @@ export type RawPlanEvent = {
   graphic?: string[];
 };
 
+// GRAPHIC (текст на чёрном фоне) убран: такая «перебивка» хуже исходного кадра.
 const SOURCE_INTENTS: VisualSourceIntent[] = [
   "GENERIC_STOCK",
   "PERSON",
   "TEAM_MATCHUP",
   "SPECIFIC_EVENT",
   "LOCATION",
-  "GRAPHIC",
 ];
 
+/**
+ * В production остались только перебивки. PUNCH_IN отключён (пересканированная копия
+ * кадра меняла цвет A-roll), TEXT_CALLOUT отключён (крупная типографика — только на обложке).
+ */
 const LIMITS: Record<string, { min: number; max: number; count: number }> = {
   B_ROLL: { min: 2.0, max: 7.0, count: 8 },
-  PUNCH_IN: { min: 1.2, max: 8.0, count: 5 },
-  TEXT_CALLOUT: { min: 1.0, max: 4.5, count: 4 },
 };
 
 /**
@@ -140,16 +142,10 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
       const sourceIntent = SOURCE_INTENTS.includes(raw.sourceIntent as VisualSourceIntent)
         ? (raw.sourceIntent as VisualSourceIntent)
         : "GENERIC_STOCK";
-      const graphicLines = Array.isArray(raw.graphic)
-        ? raw.graphic.map((g) => String(g).trim().toUpperCase()).filter(Boolean).slice(0, 4)
-        : [];
-      // графике запрос не нужен — она рисуется нами; остальным без запроса делать нечего
-      if ((!query && sourceIntent !== "GRAPHIC") || start < 1.2) continue;
-      if (sourceIntent === "GRAPHIC" && !graphicLines.length) continue;
+      if (!query || start < 1.2) continue;
       event.query = query;
       event.sourceIntent = sourceIntent;
       if (raw.entity) event.entityName = String(raw.entity).slice(0, 60);
-      if (graphicLines.length) event.graphicLines = graphicLines;
       event.altQueries = Array.isArray(raw.alt) ? raw.alt.map(String).filter(Boolean).slice(0, 3) : [];
       if (raw.intent && typeof raw.intent === "object") {
         event.visualIntent = {
@@ -161,41 +157,23 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
           avoid: Array.isArray(raw.intent.avoid) ? raw.intent.avoid.map(String).slice(0, 6) : [],
         };
       }
-    } else if (type === "PUNCH_IN") {
-      const scale = Number(raw.scale);
-      event.scale = Number.isFinite(scale) ? Math.min(1.1, Math.max(1.03, scale)) : 1.06;
-    } else if (type === "TEXT_CALLOUT") {
-      const text = String(raw.text ?? "").trim();
-      if (!text) continue;
-      event.text = text.slice(0, 40);
     }
     candidates.push(event);
   }
 
-  // дорожки: B_ROLL — видеоисточник; PUNCH_IN — эффект A-roll; TEXT_CALLOUT — текст.
+  // единственная дорожка — перебивки; минимального количества нет: лучше три
+  // точных перебивки, чем шесть «по квоте»
   const result: EditEvent[] = [];
-  for (const type of ["B_ROLL", "PUNCH_IN", "TEXT_CALLOUT"] as const) {
-    // панч-ины нормируются по длительности (~5 на минуту) и требуют зазор ≥5с — никакого «дёргания камеры»
-    const maxCount =
-      type === "PUNCH_IN"
-        ? Math.max(1, Math.min(8, Math.round((duration / 60) * 5)))
-        : LIMITS[type].count;
-    const minGap = type === "PUNCH_IN" ? 5.0 : 0.4;
-    const track = candidates
-      .filter((e) => e.type === type)
-      .sort((a, b) => a.start - b.start)
-      .slice(0, maxCount * 3);
-    let prevEnd = -Infinity;
-    let kept = 0;
-    for (const ev of track) {
-      if (kept >= maxCount) break;
-      if (ev.start < prevEnd + minGap) continue; // пересечение/впритык внутри дорожки
-      // пан-ин поверх б-ролла бессмыслен: лицо всё равно закрыто
-      if (type === "PUNCH_IN" && result.some((b) => b.type === "B_ROLL" && overlaps(b, ev))) continue;
-      result.push(ev);
-      prevEnd = ev.end;
-      kept++;
-    }
+  const track = candidates
+    .filter((e) => e.type === "B_ROLL")
+    .sort((a, b) => a.start - b.start)
+    .slice(0, LIMITS.B_ROLL.count * 3);
+  let prevEnd = -Infinity;
+  for (const ev of track) {
+    if (result.length >= LIMITS.B_ROLL.count) break;
+    if (ev.start < prevEnd + 0.4) continue; // пересечение/впритык
+    result.push(ev);
+    prevEnd = ev.end;
   }
   return result.sort((a, b) => a.start - b.start);
 }

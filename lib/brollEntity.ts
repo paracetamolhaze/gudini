@@ -1,127 +1,90 @@
 import fs from "fs";
 import path from "path";
-import { runFfmpeg } from "./ffmpeg";
-import { resolveCoverFontFile } from "./coverLayout";
+import { runFfmpeg, probe } from "./ffmpeg";
+import type { WebAsset } from "./brollWeb";
 
 /**
- * Визуалы для КОНКРЕТНЫХ сущностей — то, чего не даёт обычный сток.
- * 1) PERSON — фотография человека с Wikimedia Commons (свободная лицензия).
- * 2) TEAM_MATCHUP / GRAPHIC — собственная motion-графика («АНГЛИЯ vs МЕКСИКА»).
- * Если подходящего материала нет, мы НЕ подставляем случайный кадр по теме:
- * событие уходит в A-roll, лицо автора лучше нерелевантной перебивки.
+ * Превращает найденный в открытых источниках кадр в вертикальную перебивку.
+ * Горизонтальный материал не отбрасывается: если объект помещается — обрезаем,
+ * если важна вся ширина (команды, табло, панорама поля) — вписываем целиком
+ * на размытый фон из того же кадра. Растягивать нельзя ни при каких условиях.
  */
 
-const FREE_LICENSES = /^(cc0|cc by|cc by-sa|public domain|pd|attribution)/i;
+const W = 1080;
+const H = 1920;
 
-type CommonsImage = { url: string; license: string; title: string };
+export type Layout = "crop" | "fit";
 
-/** Ищет свободно лицензированное фото человека на Wikimedia Commons. */
-export async function findCommonsImage(entityName: string): Promise<CommonsImage | null> {
-  const query = entityName.trim();
-  if (!query) return null;
-  const url = new URL("https://commons.wikimedia.org/w/api.php");
-  url.searchParams.set("action", "query");
-  url.searchParams.set("format", "json");
-  url.searchParams.set("generator", "search");
-  url.searchParams.set("gsrsearch", `${query} filetype:bitmap`);
-  url.searchParams.set("gsrnamespace", "6");
-  url.searchParams.set("gsrlimit", "10");
-  url.searchParams.set("prop", "imageinfo");
-  url.searchParams.set("iiprop", "url|extmetadata|size");
-  url.searchParams.set("iiurlwidth", "1200");
-
-  const res = await fetch(url, { headers: { "User-Agent": "Gudini/1.0 (video editor)" } });
-  if (!res.ok) return null;
-  const json: any = await res.json();
-  const pages: any[] = Object.values(json.query?.pages ?? {});
-  const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
-
-  for (const page of pages) {
-    const info = page.imageinfo?.[0];
-    if (!info) continue;
-    const license = String(info.extmetadata?.LicenseShortName?.value ?? "").replace(/<[^>]+>/g, "");
-    if (!FREE_LICENSES.test(license)) continue;
-    const title = String(page.title ?? "").toLowerCase();
-    // имя должно встречаться в названии файла — иначе это «что-то по теме», а не человек
-    const hits = terms.filter((t) => title.includes(t)).length;
-    if (!terms.length || hits < terms.length) continue;
-    const link = info.thumburl || info.url;
-    if (!link) continue;
-    return { url: String(link), license, title: String(page.title) };
-  }
-  return null;
+/** Простая эвристика: очень широкий кадр теряет смысл при обрезке — его вписываем. */
+export function chooseLayout(width: number, height: number): Layout {
+  if (!width || !height) return "crop";
+  const aspect = width / height;
+  return aspect > 1.35 ? "fit" : "crop";
 }
 
-/** Скачивает фото сущности и превращает в вертикальный клип нужной длины. */
-export async function buildPersonClip(
-  entityName: string,
+function videoFilter(layout: Layout): string {
+  if (layout === "crop") {
+    return `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1`;
+  }
+  // фон — тот же кадр, увеличенный и размытый; поверх — оригинал целиком
+  return (
+    `split=2[bg][fg];` +
+    `[bg]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},gblur=sigma=28,eq=brightness=-0.06[bgb];` +
+    `[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease[fgs];` +
+    `[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1`
+  );
+}
+
+async function download(url: string, outFile: string): Promise<boolean> {
+  const res = await fetch(url, { headers: { "User-Agent": "Gudini/1.0 (short-video editor)" } });
+  if (!res.ok) return false;
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.length < 8_000) return false;
+  fs.writeFileSync(outFile, buffer);
+  return true;
+}
+
+/** Строит клип нужной длины из веб-ассета (изображение или видео). */
+export async function buildWebAssetClip(
+  asset: WebAsset,
   outPath: string,
   duration: number,
-): Promise<{ ok: boolean; source?: string; license?: string }> {
-  const image = await findCommonsImage(entityName);
-  if (!image) return { ok: false };
-  const download = await fetch(image.url, { headers: { "User-Agent": "Gudini/1.0 (video editor)" } });
-  if (!download.ok) return { ok: false };
-  const buffer = Buffer.from(await download.arrayBuffer());
-  if (buffer.length < 10_000) return { ok: false };
-
+  buffer?: Buffer,
+): Promise<{ ok: boolean; layout?: Layout; localPath?: string }> {
   const dir = path.dirname(outPath);
-  const still = path.join(dir, `entity-${path.basename(outPath, ".mp4")}.jpg`);
-  fs.writeFileSync(still, buffer);
-  await runFfmpeg(
-    [
-      "-loop", "1",
-      "-t", Math.max(2, duration).toFixed(2),
-      "-i", path.basename(still),
-      "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
-      "-r", "30",
-      "-pix_fmt", "yuv420p",
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      path.basename(outPath),
-    ],
-    { cwd: dir },
-  );
-  return { ok: true, source: image.title, license: image.license };
-}
+  const base = path.basename(outPath, ".mp4");
+  const ext = asset.mediaType === "video" ? ".src" : path.extname(new URL(asset.directUrl).pathname) || ".jpg";
+  const src = path.join(dir, `web-${base}${ext}`);
 
-/**
- * Собственная графика вместо случайного стока: крупные строки на тёмном фоне.
- * Для «Англия vs Мексика» это честнее и понятнее, чем произвольный стадион.
- */
-export async function buildGraphicClip(lines: string[], outPath: string, duration: number): Promise<boolean> {
-  const clean = lines.map((l) => l.replace(/[':\\%]/g, "").trim().toUpperCase()).filter(Boolean).slice(0, 4);
-  if (!clean.length) return false;
+  try {
+    // байты уже скачаны на этапе смысловой проверки — повторно не тянем
+    if (buffer) fs.writeFileSync(src, buffer);
+    else if (!(await download(asset.directUrl, src))) return { ok: false };
+    let width = 0;
+    let height = 0;
+    try {
+      const info = await probe(src);
+      width = info.width;
+      height = info.height;
+    } catch {
+      // изображение без видеопотока probe может не прочитать — берём crop по умолчанию
+    }
+    const layout = chooseLayout(width, height);
+    const filter = videoFilter(layout);
+    const dur = Math.max(2, duration).toFixed(2);
 
-  const dir = path.dirname(outPath);
-  const font = resolveCoverFontFile();
-  const fontFile = path.join(dir, "graphic-font.ttf");
-  fs.copyFileSync(font.file, fontFile);
-  const fontArg = "graphic-font.ttf";
+    const args =
+      asset.mediaType === "video"
+        ? ["-i", path.basename(src), "-t", dur, "-an", "-filter_complex", `[0:v]${filter}[v]`, "-map", "[v]"]
+        : ["-loop", "1", "-t", dur, "-i", path.basename(src), "-filter_complex", `[0:v]${filter}[v]`, "-map", "[v]"];
 
-  const step = 260;
-  const startY = 960 - ((clean.length - 1) * step) / 2;
-  const draws = clean.map((text, i) => {
-    const accent = clean.length > 1 && text === "VS";
-    const size = accent ? 110 : 150;
-    const color = accent ? "0xFFD700" : "white";
-    return (
-      `drawtext=fontfile=${fontArg}:text='${text}':fontsize=${size}:fontcolor=${color}` +
-      `:borderw=8:bordercolor=black:x=(w-text_w)/2:y=${Math.round(startY + i * step)}-text_h/2`
+    await runFfmpeg(
+      [...args, "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", path.basename(outPath)],
+      { cwd: dir },
     );
-  });
-
-  await runFfmpeg(
-    [
-      "-f", "lavfi",
-      "-i", `color=c=0x0B0E14:s=1080x1920:d=${Math.max(2, duration).toFixed(2)}:r=30`,
-      "-vf", draws.join(","),
-      "-pix_fmt", "yuv420p",
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      path.basename(outPath),
-    ],
-    { cwd: dir },
-  );
-  return true;
+    return { ok: true, layout, localPath: path.basename(outPath) };
+  } catch (e) {
+    console.warn(`Веб-ассет «${asset.title ?? asset.directUrl}»:`, String(e).slice(0, 120));
+    return { ok: false };
+  }
 }

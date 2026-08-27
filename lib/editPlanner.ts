@@ -28,6 +28,20 @@ avoid — конкретные подмены, которые выглядят �
   для прыжка через рекламный щит: ["skateboard","skatepark","BMX","parkour","street trick","gym"];
   для носилок: ["street accident","hospital corridor","ambulance interior"].
 
+factualSpecificity — насколько конкретен нужный кадр. От него зависит вся стратегия поиска:
+- EXACT — именно ЭТО событие с этим человеком («Хендерсон перепрыгивает рекламный щит»,
+  «Хендерсона уносят на носилках»). Сначала ищем реальный кадр события в открытых источниках.
+  Подмена похожим ЗАПРЕЩЕНА: не нашли — остаётся лицо автора.
+- ENTITY — конкретный человек/команда в любой ситуации («Хендерсон на скамейке», «сборная Англии»).
+- GENERAL — общая иллюстрация («болельщики празднуют»), тут допустим обычный сток.
+
+queries — 3–6 РАЗНЫХ поисковых формулировок на английском для фактического поиска, от самой
+конкретной к более общей. Для EXACT/ENTITY обязательно включай имя и контекст события:
+["Jordan Henderson advertising board injury","Jordan Henderson jumps hoarding celebration",
+ "Henderson World Cup injury barrier","England Mexico Henderson injury"].
+Не пиши «football stadium» — это не поиск факта.
+event — короткое описание события на английском для EXACT.
+
 sourceIntent для каждого B_ROLL:
 - PERSON — назван конкретный человек. entity — имя латиницей ("Jordan Henderson").
   Ищем свободное фото именно его; не найдём — останется лицо автора, и это нормально.
@@ -48,8 +62,8 @@ sourceIntent для каждого B_ROLL:
 
 Ответь СТРОГО валидным JSON без пояснений:
 {"events":[
- {"type":"B_ROLL","from":12,"to":19,"sourceIntent":"PERSON","entity":"Jordan Henderson","query":"Jordan Henderson England football","alt":["..."],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["..."],"avoid":["..."]}},
- {"type":"B_ROLL","from":24,"to":30,"sourceIntent":"TEAM_MATCHUP","entity":"England vs Mexico","query":"England Mexico World Cup match","alt":["..."],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["football","England or Mexico national team"],"avoid":["empty stadium","training ground"]}}]}`;
+ {"type":"B_ROLL","from":12,"to":19,"sourceIntent":"PERSON","factualSpecificity":"ENTITY","entity":"Jordan Henderson","query":"Jordan Henderson England football","queries":["Jordan Henderson England national team","Jordan Henderson footballer portrait","Jordan Henderson World Cup"],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["..."],"avoid":["..."]}},
+ {"type":"B_ROLL","from":33,"to":38,"sourceIntent":"SPECIFIC_EVENT","factualSpecificity":"EXACT","entity":"Jordan Henderson","event":"jump over advertising board after match","query":"Jordan Henderson advertising board injury","queries":["Jordan Henderson advertising hoarding injury","Henderson celebration barrier injury","England Mexico Henderson injury"],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["football","advertising board","stadium pitch"],"avoid":["skateboard","BMX","parkour","random athlete"]}}]}`;
 
 /** Строит валидированный монтажный план. Возвращает null, если ИИ недоступен/упал. */
 export async function planEdit(

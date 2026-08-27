@@ -30,6 +30,14 @@ export type VisualSourceIntent =
   | "LOCATION"
   | "GRAPHIC";
 
+/**
+ * Насколько конкретен визуал, который требуется фразе.
+ * EXACT — именно это событие («Хендерсон прыгает через щит»): подмена запрещена.
+ * ENTITY — конкретный человек/команда в любой ситуации.
+ * GENERAL — общая иллюстрация («болельщики празднуют»).
+ */
+export type FactualSpecificity = "EXACT" | "ENTITY" | "GENERAL";
+
 export type EditEvent = {
   type: EditEventType;
   start: number; // сек на чистом (после вырезки пауз) таймлайне
@@ -37,9 +45,13 @@ export type EditEvent = {
   // B_ROLL
   query?: string;
   altQueries?: string[];
+  /** 3–6 поисковых формулировок для фактического поиска в открытых источниках */
+  queries?: string[];
   visualIntent?: VisualIntent;
   sourceIntent?: VisualSourceIntent;
+  factualSpecificity?: FactualSpecificity;
   entityName?: string; // «Jordan Henderson», «England vs Mexico»
+  eventName?: string; // «jump over advertising board after match»
   graphicLines?: string[]; // текст для собственной motion-графики
   file?: string; // заполняется после подбора материала
   // PUNCH_IN
@@ -91,9 +103,14 @@ export type RawPlanEvent = {
   scale?: number;
   text?: string;
   sourceIntent?: string;
+  factualSpecificity?: string;
   entity?: string;
+  event?: string;
+  queries?: string[];
   graphic?: string[];
 };
+
+const SPECIFICITY: FactualSpecificity[] = ["EXACT", "ENTITY", "GENERAL"];
 
 // GRAPHIC (текст на чёрном фоне) убран: такая «перебивка» хуже исходного кадра.
 const SOURCE_INTENTS: VisualSourceIntent[] = [
@@ -145,7 +162,14 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
       if (!query || start < 1.2) continue;
       event.query = query;
       event.sourceIntent = sourceIntent;
+      event.factualSpecificity = SPECIFICITY.includes(raw.factualSpecificity as FactualSpecificity)
+        ? (raw.factualSpecificity as FactualSpecificity)
+        : "GENERAL";
       if (raw.entity) event.entityName = String(raw.entity).slice(0, 60);
+      if (raw.event) event.eventName = String(raw.event).slice(0, 100);
+      // 3–6 формулировок для фактического поиска; primary query всегда первым
+      const queries = Array.isArray(raw.queries) ? raw.queries.map((q) => String(q).trim()).filter(Boolean) : [];
+      event.queries = [...new Set([query, ...queries])].slice(0, 6);
       event.altQueries = Array.isArray(raw.alt) ? raw.alt.map(String).filter(Boolean).slice(0, 3) : [];
       if (raw.intent && typeof raw.intent === "object") {
         event.visualIntent = {

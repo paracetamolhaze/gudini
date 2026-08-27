@@ -3,6 +3,7 @@ import path from "path";
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
 import { VisualIntent } from "./editPlan";
+import { detectImageMediaType } from "./coverQc";
 
 /**
  * Semantic-отбор б-ролла: что реально видно на кандидате vs что нужно по смыслу.
@@ -60,16 +61,21 @@ Reply with STRICT JSON only:
 {"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words"}
 Be generous with objects: include category words (e.g. for a tiger: tiger, big cat, predator, animal, wildlife).`;
 
-/** Vision-описание ассета по превью; кэшируется по provider:id. */
+/**
+ * Vision-описание ассета по превью; кэшируется по ключу.
+ * buffer — когда картинку нужно передать байтами: часть источников (Wikimedia)
+ * не отдаёт файлы сторонним загрузчикам, и ссылку модель скачать не может.
+ */
 export async function analyzeAsset(
   cacheKey: string,
   thumbnailUrl: string,
+  buffer?: Buffer,
 ): Promise<AssetAnalysis | null> {
   const cache = readAnalysisCache();
   if (cache[cacheKey]) return cache[cacheKey];
 
   const key = getSettings().anthropicKey;
-  if (!key || !thumbnailUrl) return null;
+  if (!key || (!thumbnailUrl && !buffer)) return null;
 
   const client = new Anthropic({ apiKey: key });
   const response = await client.messages.create({
@@ -80,7 +86,16 @@ export async function analyzeAsset(
       {
         role: "user",
         content: [
-          { type: "image", source: { type: "url", url: thumbnailUrl } },
+          buffer
+            ? {
+                type: "image" as const,
+                source: {
+                  type: "base64" as const,
+                  media_type: detectImageMediaType(buffer),
+                  data: buffer.toString("base64"),
+                },
+              }
+            : { type: "image" as const, source: { type: "url" as const, url: thumbnailUrl } },
           { type: "text", text: "Describe this preview frame." },
         ],
       },
@@ -123,15 +138,20 @@ export function scoreRelevance(
 ): VisualRelevanceScore {
   const haystack = `${analysis.description} ${analysis.objects.join(" ")} ${analysis.environment} ${analysis.action}`.toLowerCase();
 
-  const termHit = (term: string): boolean => {
+  /**
+   * threshold=0.5 для обязательных условий (описание кадра редко дословно совпадает),
+   * но для ЗАПРЕТОВ нужно совпадение целиком: иначе «empty stadium» срабатывал на любом
+   * слове «stadium» и отбрасывал нормальные кадры команд на стадионе.
+   */
+  const termHit = (term: string, threshold = 0.5): boolean => {
     const words = term.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
     if (!words.length) return false;
     const hits = words.filter((w) => haystack.includes(stem(w))).length;
-    return hits / words.length >= 0.5;
+    return hits / words.length >= threshold;
   };
 
-  // avoid — жёсткое отклонение
-  const violated = intent.avoid.find((a) => termHit(a));
+  // avoid — жёсткое отклонение, но только при полном совпадении термина
+  const violated = intent.avoid.find((a) => termHit(a, 1));
   if (violated) {
     return {
       relevance: 0,

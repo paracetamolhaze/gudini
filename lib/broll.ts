@@ -6,7 +6,8 @@ import { planBrollSegments } from "./ai";
 import { Word } from "./transcribe";
 import { EditEvent, VisualIntent } from "./editPlan";
 import { analyzeAsset, scoreRelevance, combineScores, VisualRelevanceScore } from "./brollRelevance";
-import { buildPersonClip } from "./brollEntity";
+import { buildWebAssetClip } from "./brollEntity";
+import { findWebAssets, verifyEntity, fetchAsset, WebAsset } from "./brollWeb";
 
 export type BrollClip = { start: number; end: number; file: string; query: string };
 
@@ -39,13 +40,15 @@ type CacheEntry = StockCandidate & { file: string; at: string };
 export async function resolveBrollEvents(dir: string, events: EditEvent[]): Promise<EditEvent[]> {
   const brolls = events.filter((e) => e.type === "B_ROLL");
   const used = new Set<string>(); // не ставить один и тот же сток дважды в ролик
+  const usedWeb = new Set<string>(); // то же для веб-ассетов
+  const sources: WebAsset[] = [];
   const trace: BrollTrace[] = [];
 
   // Материалы прошлого монтажа удаляем: при повторном запуске план другой, и старый
   // файл под новым событием — это чужая перебивка (скачивание всё равно берётся из кэша).
   try {
     for (const f of fs.readdirSync(dir)) {
-      if (/^broll\d+\.mp4$/.test(f) || /^entity-broll/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
+      if (/^broll\d+\.mp4$/.test(f) || /^(entity|web)-/.test(f)) fs.rmSync(path.join(dir, f), { force: true });
     }
   } catch {}
 
@@ -56,41 +59,97 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
       const queries = [event.query!, ...(event.altQueries ?? [])].filter(Boolean);
       const duration = event.end - event.start;
 
-      // --- конкретные сущности: свой источник, generic-сток тут не годится ---
-      if (event.sourceIntent === "PERSON" && event.entityName) {
+      const specificity = event.factualSpecificity ?? "GENERAL";
+      const factual = specificity !== "GENERAL" || event.sourceIntent !== "GENERIC_STOCK";
+
+      // --- 1) ФАКТИЧЕСКИЙ ПОИСК в открытых источниках (§18: до всякого стока) ---
+      if (factual) {
         try {
-          const person = await buildPersonClip(event.entityName, full, duration);
-          if (person.ok) {
+          const found = await findWebAssets(event.queries ?? queries, {
+            entity: event.entityName,
+            preferVideo: specificity === "EXACT",
+          });
+          const verified = found.filter((a) => verifyEntity(a, event.entityName));
+          let checked = 0;
+          for (const asset of verified) {
+            if (usedWeb.has(asset.directUrl)) continue; // один ассет не может попасть дважды
+            if (checked >= 6) break; // дальше смотреть смысла нет
+
+            // СМЫСЛОВАЯ ПРОВЕРКА кадра: имя в подписи ещё не значит, что на кадре нужное.
+            // Без неё в «Англия — Мексика» приходило фото львов, а на EXACT-событие —
+            // портрет игрока, где нет ни щита, ни поля.
+            let bytes: Buffer | null = null;
+            if (event.visualIntent && asset.mediaType === "image") {
+              checked++;
+              bytes = await fetchAsset(asset.directUrl);
+              if (!bytes) continue;
+              const analysis = await analyzeAsset(`web:${asset.directUrl}`, asset.directUrl, bytes).catch(() => null);
+              if (!analysis) continue;
+              const rel = scoreRelevance(event.visualIntent, analysis, {
+                sourceIntent: event.sourceIntent,
+                entityName: event.entityName,
+              });
+              if (rel.avoidViolation || rel.specificityFail || rel.relevance < 0.5) {
+                trace.push({
+                  query: asset.retrievalQuery,
+                  candidates: [
+                    { provider: asset.sourceDomain, id: asset.directUrl.slice(-40), size: "-", duration: 0, technical: 0, relevance: rel, rejected: rel.reason },
+                  ],
+                  mode: "web",
+                  sourceIntent: event.sourceIntent,
+                  factualSpecificity: specificity,
+                  entityName: event.entityName,
+                  sourceUrl: asset.sourceUrl,
+                  note: `отклонён: ${rel.reason}`,
+                });
+                continue;
+              }
+            }
+
+            usedWeb.add(asset.directUrl);
+            const built = await buildWebAssetClip(asset, full, duration, bytes ?? undefined);
+            if (!built.ok) continue;
             event.file = file;
+            sources.push({ ...asset, localPath: file });
             trace.push({
-              query: event.query ?? event.entityName,
+              query: (event.queries ?? queries)[0] ?? "",
               intent: event.visualIntent,
               candidates: [],
-              mode: "entity",
-              sourceIntent: "PERSON",
+              mode: "web",
+              sourceIntent: event.sourceIntent,
+              factualSpecificity: specificity,
               entityName: event.entityName,
-              winner: `wikimedia:${person.source}`,
-              note: `лицензия: ${person.license}`,
+              winner: `${asset.sourceDomain}`,
+              sourceUrl: asset.sourceUrl,
+              retrievalQuery: asset.retrievalQuery,
+              note: `${asset.mediaType}, layout=${built.layout}, лицензия: ${asset.license ?? "—"}`,
             });
             return;
           }
-          // подходящего фото нет — случайного футболиста НЕ подставляем, останется A-roll
-          console.log(`B-roll «${event.entityName}»: свободного фото нет → A-roll`);
-          trace.push({
-            query: event.query ?? event.entityName,
-            candidates: [],
-            mode: "entity",
-            sourceIntent: "PERSON",
-            entityName: event.entityName,
-            note: "свободного фото не нашлось — оставляем лицо автора",
-          });
-          return;
+          console.log(
+            `B-roll «${event.entityName ?? event.query}»: фактического материала не нашлось` +
+              (specificity === "EXACT" ? " → A-roll (подмена запрещена)" : " → пробуем сток"),
+          );
         } catch (e) {
-          console.warn(`Wikimedia «${event.entityName}»:`, e);
-          return;
+          console.warn(`Веб-поиск «${event.query}»:`, String(e).slice(0, 120));
         }
       }
 
+      // --- 2) EXACT подменять нельзя: нет реального кадра — остаётся лицо автора (§22) ---
+      if (specificity === "EXACT") {
+        trace.push({
+          query: (event.queries ?? queries)[0] ?? "",
+          candidates: [],
+          mode: "web",
+          sourceIntent: event.sourceIntent,
+          factualSpecificity: specificity,
+          entityName: event.entityName,
+          note: "реального кадра события не найдено; подмена похожим запрещена → A-roll",
+        });
+        return;
+      }
+
+      // --- 3) сток с жёстким гейтом; не прошёл — A-roll ---
       const tryStock = async () => {
         try {
           return await fetchStockVideo(queries, duration, full, used, event.visualIntent, trace, {
@@ -102,13 +161,14 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
           return false;
         }
       };
-      // подходящего материала нет → перебивки не будет, останется лицо автора
       if (await tryStock()) event.file = file;
       else console.log(`B-roll «${event.query}»: точного совпадения нет → A-roll`);
     }),
   );
   try {
     if (trace.length) fs.writeFileSync(path.join(dir, "broll-trace.json"), JSON.stringify(trace, null, 2), "utf8");
+    // откуда взят каждый кадр — всегда видно
+    fs.writeFileSync(path.join(dir, "broll-sources.json"), JSON.stringify(sources, null, 2), "utf8");
   } catch {}
   // b-ролл без материала → выкидываем событие
   return events.filter((e) => e.type !== "B_ROLL" || e.file);
@@ -182,9 +242,12 @@ export type BrollTrace = {
   intent?: VisualIntent;
   candidates: CandidateTrace[];
   winner?: string;
-  mode: "semantic" | "technical" | "entity" | "graphic";
+  mode: "semantic" | "technical" | "entity" | "graphic" | "web";
   sourceIntent?: string;
+  factualSpecificity?: string;
   entityName?: string;
+  sourceUrl?: string;
+  retrievalQuery?: string;
   note?: string;
 };
 

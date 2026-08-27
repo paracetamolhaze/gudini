@@ -13,6 +13,8 @@ export type ProbeInfo = {
   width: number;
   height: number;
   hasAudio: boolean;
+  fps: number;
+  audioDuration: number;
 };
 
 /** Точная длительность файла (для webm с камеры метаданные врут — мерим по аудио). */
@@ -38,12 +40,34 @@ export async function probe(file: string): Promise<ProbeInfo> {
   const video = (json.streams ?? []).find((s: any) => s.codec_type === "video");
   const audio = (json.streams ?? []).find((s: any) => s.codec_type === "audio");
   if (!video) throw new Error("В файле не найден видеопоток");
+  const fpsRaw = String(video.avg_frame_rate ?? video.r_frame_rate ?? "0/1");
+  const [num, den] = fpsRaw.split("/").map(Number);
   return {
     duration: parseFloat(json.format?.duration ?? video.duration ?? "0"),
     width: video.width,
     height: video.height,
     hasAudio: Boolean(audio),
+    fps: den ? num / den : 0,
+    audioDuration: audio ? parseFloat(audio.duration ?? json.format?.duration ?? "0") || 0 : 0,
   };
+}
+
+/** Ищет чёрные кадры в маленьком окне вокруг монтажной точки (blackdetect, без AI). */
+export async function detectBlackNear(file: string, cwd: string, at: number): Promise<boolean> {
+  const start = Math.max(0, at - 0.15);
+  const stderr = await new Promise<string>((resolve, reject) => {
+    const proc = spawn(
+      ffmpegBin(),
+      ["-hide_banner", "-ss", String(start), "-t", "0.3", "-i", file,
+       "-vf", "blackdetect=d=0.08:pic_th=0.98", "-an", "-f", "null", "-"],
+      { cwd, windowsHide: true },
+    );
+    let out = "";
+    proc.stderr.on("data", (d) => (out += d));
+    proc.on("error", reject);
+    proc.on("close", () => resolve(out));
+  });
+  return stderr.includes("black_start");
 }
 
 function runCapture(bin: string, args: string[], cwd?: string): Promise<string> {

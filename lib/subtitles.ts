@@ -6,8 +6,13 @@ import { CaptionStyle, DEFAULT_CAPTION_STYLE, EditEvent } from "./editPlan";
  * события не пересекаются во времени (не накладываются друг на друга),
  * белый аккуратный шрифт с чёрной обводкой, без знаков препинания.
  */
-export function buildAss(words: Word[], styleOverride?: Partial<CaptionStyle>): string {
+export function buildAss(
+  words: Word[],
+  styleOverride?: Partial<CaptionStyle>,
+  highlightIndices?: number[],
+): string {
   const style: CaptionStyle = { ...DEFAULT_CAPTION_STYLE, ...styleOverride };
+  const highlights = new Set(highlightIndices ?? []);
   const marginV = style.position === "center" ? 900 : 560;
 
   const header = `[Script Info]
@@ -36,7 +41,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if (next) end = Math.min(end, next[0].start - 0.02);
     end = Math.max(end, start + 0.35);
 
-    const text = renderPhrase(phrase, style);
+    const text = renderPhrase(phrase, style, highlights);
     if (!text) continue;
     lines.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,${text}`);
   }
@@ -44,21 +49,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   return header + lines.join("\n") + "\n";
 }
 
+type IndexedWord = Word & { idx: number };
+
 /** Группирует слова во фразы: по количеству, длине строки, паузам и знакам конца предложения. */
-function groupPhrases(words: Word[], maxWords: number): Word[][] {
-  const phrases: Word[][] = [];
-  let current: Word[] = [];
+function groupPhrases(words: Word[], maxWords: number): IndexedWord[][] {
+  const phrases: IndexedWord[][] = [];
+  let current: IndexedWord[] = [];
   let chars = 0;
-  for (const w of words) {
+  words.forEach((w, idx) => {
     const clean = cleanWord(w.word);
-    if (!clean) continue;
+    if (!clean) return;
     const gap = current.length ? w.start - current[current.length - 1].end : 0;
     if (current.length && (current.length >= maxWords || chars + clean.length > 22 || gap > 0.6)) {
       phrases.push(current);
       current = [];
       chars = 0;
     }
-    current.push(w);
+    current.push({ ...w, idx });
     chars += clean.length + 1;
     // конец предложения в исходном слове — закрываем фразу
     if (/[.!?…]$/.test(w.word.trim()) && current.length >= 2) {
@@ -66,25 +73,24 @@ function groupPhrases(words: Word[], maxWords: number): Word[][] {
       current = [];
       chars = 0;
     }
-  }
+  });
   if (current.length) phrases.push(current);
   return phrases;
 }
 
-function renderPhrase(phrase: Word[], style: CaptionStyle): string {
-  const cleaned = phrase.map((w) => {
-    const c = cleanWord(w.word);
-    return style.uppercase ? c.toUpperCase() : c;
-  });
-  if (!style.highlightKeyword) return cleaned.filter(Boolean).join(" ");
-  // акцент — самое длинное слово фразы (обычно смысловое)
-  let accent = 0;
-  cleaned.forEach((c, i) => {
-    if (c.length > cleaned[accent].length) accent = i;
-  });
-  return cleaned
+/**
+ * Акцент — только по смысловому решению планировщика (цифры/имена/панч-слова).
+ * Большинство фраз остаются полностью белыми. Эвристики «самое длинное слово» больше нет.
+ */
+function renderPhrase(phrase: IndexedWord[], style: CaptionStyle, highlights: Set<number>): string {
+  return phrase
+    .map((w) => {
+      let c = cleanWord(w.word);
+      if (!c) return "";
+      if (style.uppercase) c = c.toUpperCase();
+      return highlights.has(w.idx) ? `{\\c&H00D7FF&}${c}{\\c&H00FFFFFF&}` : c;
+    })
     .filter(Boolean)
-    .map((c, i) => (i === accent ? `{\\c&H00D7FF&}${c}{\\c&H00FFFFFF&}` : c))
     .join(" ");
 }
 

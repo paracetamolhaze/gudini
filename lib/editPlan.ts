@@ -8,6 +8,16 @@ import { Word } from "./transcribe";
 
 export type EditEventType = "A_ROLL" | "B_ROLL" | "PUNCH_IN" | "TEXT_CALLOUT";
 
+/** Что должно быть видно в перебивке: для semantic-отбора стока. */
+export type VisualIntent = {
+  subject: string; // главный объект в кадре
+  action: string; // что происходит
+  environment: string; // окружение
+  mood: string;
+  mustHave: string[]; // без этого кандидат отклоняется
+  avoid: string[]; // с этим кандидат отклоняется
+};
+
 export type EditEvent = {
   type: EditEventType;
   start: number; // сек на чистом (после вырезки пауз) таймлайне
@@ -15,6 +25,7 @@ export type EditEvent = {
   // B_ROLL
   query?: string;
   altQueries?: string[];
+  visualIntent?: VisualIntent;
   file?: string; // заполняется после подбора материала
   // PUNCH_IN
   scale?: number;
@@ -43,6 +54,8 @@ export type EditPlan = {
   duration: number;
   events: EditEvent[];
   captionStyle: CaptionStyle;
+  /** индексы слов для смыслового highlight в субтитрах (цифры, имена, панч-слова) */
+  captionHighlights?: number[];
 };
 
 // «Сырое» событие от LLM: границы в индексах слов
@@ -52,6 +65,14 @@ export type RawPlanEvent = {
   to?: number;
   query?: string;
   alt?: string[];
+  intent?: {
+    subject?: string;
+    action?: string;
+    environment?: string;
+    mood?: string;
+    mustHave?: string[];
+    avoid?: string[];
+  };
   scale?: number;
   text?: string;
 };
@@ -92,6 +113,16 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
       if (!query || start < 1.2) continue;
       event.query = query;
       event.altQueries = Array.isArray(raw.alt) ? raw.alt.map(String).filter(Boolean).slice(0, 3) : [];
+      if (raw.intent && typeof raw.intent === "object") {
+        event.visualIntent = {
+          subject: String(raw.intent.subject ?? "").slice(0, 80),
+          action: String(raw.intent.action ?? "").slice(0, 120),
+          environment: String(raw.intent.environment ?? "").slice(0, 120),
+          mood: String(raw.intent.mood ?? "").slice(0, 80),
+          mustHave: Array.isArray(raw.intent.mustHave) ? raw.intent.mustHave.map(String).slice(0, 5) : [],
+          avoid: Array.isArray(raw.intent.avoid) ? raw.intent.avoid.map(String).slice(0, 6) : [],
+        };
+      }
     } else if (type === "PUNCH_IN") {
       const scale = Number(raw.scale);
       event.scale = Number.isFinite(scale) ? Math.min(1.1, Math.max(1.03, scale)) : 1.06;
@@ -106,15 +137,21 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
   // дорожки: B_ROLL — видеоисточник; PUNCH_IN — эффект A-roll; TEXT_CALLOUT — текст.
   const result: EditEvent[] = [];
   for (const type of ["B_ROLL", "PUNCH_IN", "TEXT_CALLOUT"] as const) {
+    // панч-ины нормируются по длительности (~5 на минуту) и требуют зазор ≥5с — никакого «дёргания камеры»
+    const maxCount =
+      type === "PUNCH_IN"
+        ? Math.max(1, Math.min(8, Math.round((duration / 60) * 5)))
+        : LIMITS[type].count;
+    const minGap = type === "PUNCH_IN" ? 5.0 : 0.4;
     const track = candidates
       .filter((e) => e.type === type)
       .sort((a, b) => a.start - b.start)
-      .slice(0, LIMITS[type].count * 2);
+      .slice(0, maxCount * 3);
     let prevEnd = -Infinity;
     let kept = 0;
     for (const ev of track) {
-      if (kept >= LIMITS[type].count) break;
-      if (ev.start < prevEnd + 0.4) continue; // пересечение/впритык внутри дорожки
+      if (kept >= maxCount) break;
+      if (ev.start < prevEnd + minGap) continue; // пересечение/впритык внутри дорожки
       // пан-ин поверх б-ролла бессмыслен: лицо всё равно закрыто
       if (type === "PUNCH_IN" && result.some((b) => b.type === "B_ROLL" && overlaps(b, ev))) continue;
       result.push(ev);

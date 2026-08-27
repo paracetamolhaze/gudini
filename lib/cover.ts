@@ -45,6 +45,10 @@ image_prompt — на английском, для image-модели, обяз�
 - high contrast, atmospheric light, polished, viral social cover aesthetic, clean composition;
 - IMPORTANT: no text, no letters, no captions anywhere in the image; keep the lower third relatively clean
   and less detailed (text will be added later by the renderer).
+Весь image_prompt — НЕ ДЛИННЕЕ 900 символов.
+Формулируй image_prompt безопасно (PG-13), иначе image-модель отклонит генерацию: без насилия, крови,
+оружия у лица, животных, нападающих на людей. Угрозу передавай атмосферой: силуэт вдали, туман, свет,
+тревожный фон — а не прямой опасностью для человека в кадре.
 
 Ответь СТРОГО валидным JSON без пояснений:
 {"headline":"...", "subheadline":"...", "emotion":"...", "visual_concept":"...", "image_prompt":"...",
@@ -109,14 +113,21 @@ export async function generateAiCover(dir: string, concept: CoverConcept): Promi
     "Content-Type": "application/json",
   };
 
+  // Runway ограничивает promptText 1000 символами — обрезаем по границе предложения
+  let promptText = concept.image_prompt.includes("@streamer")
+    ? concept.image_prompt
+    : `The main person is @streamer. ${concept.image_prompt}`;
+  if (promptText.length > 980) {
+    const cut = promptText.slice(0, 980);
+    promptText = cut.slice(0, Math.max(cut.lastIndexOf(". "), 600) + 1);
+  }
+
   const res = await fetch("https://api.dev.runwayml.com/v1/text_to_image", {
     method: "POST",
     headers,
     body: JSON.stringify({
       model: "gen4_image",
-      promptText: concept.image_prompt.includes("@streamer")
-        ? concept.image_prompt
-        : `${concept.image_prompt} The main person is @streamer.`,
+      promptText,
       ratio: "1080:1920",
       referenceImages: [{ uri: `data:image/jpeg;base64,${faceB64}`, tag: "streamer" }],
     }),

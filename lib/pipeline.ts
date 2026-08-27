@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE } from "./store";
-import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences } from "./ffmpeg";
+import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences, detectBlackNear } from "./ffmpeg";
 import {
   edgesFromSilences,
   mechanicalCuts,
@@ -178,7 +178,7 @@ export async function processProject(id: string): Promise<void> {
 
     // --- Субтитры и текстовые акценты ---
     setStep(id, "Субтитры", 34);
-    fs.writeFileSync(path.join(dir, "subs.ass"), buildAss(words, plan.captionStyle), "utf8");
+    fs.writeFileSync(path.join(dir, "subs.ass"), buildAss(words, plan.captionStyle, plan.captionHighlights), "utf8");
     const callouts = plan.events.filter((e) => e.type === "TEXT_CALLOUT");
     if (callouts.length) {
       fs.writeFileSync(path.join(dir, "callouts.ass"), buildCalloutsAss(callouts), "utf8");
@@ -216,9 +216,13 @@ export async function processProject(id: string): Promise<void> {
       }
     }
 
-    // --- Self-check результата ---
+    // --- Self-check результата (+ чёрные кадры вокруг монтажных точек) ---
     setStep(id, "Проверка результата", 97);
-    await selfCheck(dir, effDur);
+    const checkPoints = [
+      ...plan.events.filter((e) => e.type === "B_ROLL").flatMap((e) => [e.start, e.end]),
+      ...segments.slice(1).map((_, i) => segments.slice(0, i + 1).reduce((s, x) => s + (x.end - x.start), 0)),
+    ].filter((t) => t > 0.2 && t < effDur - 0.2);
+    await selfCheck(dir, effDur, checkPoints);
 
     updateProject(id, {
       processedVideo: "out.mp4",
@@ -341,8 +345,11 @@ async function renderPlan(
   );
 }
 
-/** Лёгкая проверка результата: файл существует, длительность/разрешение/звук в норме. */
-async function selfCheck(dir: string, expectedDur: number): Promise<void> {
+/**
+ * Проверка результата: файл/потоки/длительность/разрешение/fps/синхронность аудио,
+ * плюс blackdetect в маленьких окнах вокруг монтажных точек (склейки, границы б-роллов).
+ */
+async function selfCheck(dir: string, expectedDur: number, cutPoints: number[] = []): Promise<void> {
   const out = path.join(dir, "out.mp4");
   if (!fs.existsSync(out) || fs.statSync(out).size < 100_000) {
     throw new Error("Проверка: итоговый файл пустой");
@@ -357,6 +364,18 @@ async function selfCheck(dir: string, expectedDur: number): Promise<void> {
     throw new Error(`Проверка: разрешение ${info.width}×${info.height} вместо 1080×1920`);
   }
   if (!info.hasAudio) throw new Error("Проверка: в результате нет звука");
+  if (Math.abs(info.fps - 30) > 1) throw new Error(`Проверка: fps ${info.fps.toFixed(2)} вместо ~30`);
+  if (info.audioDuration > 0 && Math.abs(info.audioDuration - info.duration) > 1.0) {
+    throw new Error(
+      `Проверка: аудио ${info.audioDuration.toFixed(1)}с рассинхронизировано с видео ${info.duration.toFixed(1)}с`,
+    );
+  }
+  // чёрные кадры у монтажных точек (до 12 точек, окна по 0.3с — дёшево)
+  for (const t of cutPoints.slice(0, 12)) {
+    if (await detectBlackNear("out.mp4", dir, t)) {
+      throw new Error(`Проверка: чёрный кадр у монтажной точки ${t.toFixed(2)}с`);
+    }
+  }
 }
 
 /** ASS-оверлей для обложки: крупный заголовок в верхней трети кадра. */

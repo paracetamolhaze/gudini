@@ -88,7 +88,11 @@ export function validateCleanupActions(
       const end = Math.min(nextStart - 0.02, words[to].end + 0.05);
       if (end - start < 0.12) continue;
       if (end - start > MAX_FRAGMENT_SEC) continue;
-      if (start < HOOK_GUARD_SEC) continue; // хук не трогаем
+      // хук защищён от вырезки — кроме СТОПРОЦЕНТНЫХ коротких филлеров («эээ», «ну эээ»)
+      if (start < HOOK_GUARD_SEC) {
+        const shortObviousFiller = reason === "FILLER" && confidence >= 0.92 && end - start <= 1.2;
+        if (!shortObviousFiller) continue;
+      }
       if (removedTotal + (end - start) > removedCap) continue;
 
       removedTotal += end - start;

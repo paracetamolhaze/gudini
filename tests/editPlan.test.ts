@@ -85,6 +85,56 @@ test("EditPlan: лимиты количества (B_ROLL<=8, CALLOUT<=4)", () =
   assert.ok(events.filter((e) => e.type === "B_ROLL").length <= 8);
 });
 
+test("PUNCH_IN: минимальный зазор 5с — «дёрганье камеры» невозможно", () => {
+  const events = validatePlan(
+    [
+      { type: "PUNCH_IN", from: 10, to: 16 }, // ~4с
+      { type: "PUNCH_IN", from: 20, to: 26 }, // через ~1.6с после конца первого — отбросить
+      { type: "PUNCH_IN", from: 60, to: 66 }, // далеко — ок
+    ],
+    words,
+    duration,
+  );
+  const punches = events.filter((e) => e.type === "PUNCH_IN");
+  assert.equal(punches.length, 2);
+  for (let i = 1; i < punches.length; i++) {
+    assert.ok(punches[i].start - punches[i - 1].end >= 5.0 - 0.01);
+  }
+});
+
+test("PUNCH_IN: лимит нормирован по длительности (~5 на минуту)", () => {
+  const longWords = makeWords(450); // 180с
+  const many = Array.from({ length: 30 }, (_, i) => ({
+    type: "PUNCH_IN",
+    from: 10 + i * 14,
+    to: 14 + i * 14,
+  }));
+  const events = validatePlan(many as any, longWords, 180);
+  const punches = events.filter((e) => e.type === "PUNCH_IN");
+  assert.ok(punches.length <= Math.round((180 / 60) * 5), `слишком много панчей: ${punches.length}`);
+  // а для короткого ролика (36с) — не больше 3
+  const shortEvents = validatePlan(many.slice(0, 6) as any, makeWords(90), 36);
+  assert.ok(shortEvents.filter((e) => e.type === "PUNCH_IN").length <= 3);
+});
+
+test("EditPlan: visualIntent парсится и клампится", () => {
+  const events = validatePlan(
+    [
+      {
+        type: "B_ROLL",
+        from: 10,
+        to: 14,
+        query: "tiger",
+        intent: { subject: "tiger", action: "walking", environment: "city", mood: "tense", mustHave: ["tiger"], avoid: ["zoo"] },
+      },
+    ],
+    words,
+    duration,
+  );
+  assert.equal(events[0].visualIntent?.subject, "tiger");
+  assert.deepEqual(events[0].visualIntent?.avoid, ["zoo"]);
+});
+
 test("EditPlan: битые данные (NaN, отрицательные, пустой query) не роняют и отбрасываются", () => {
   const events = validatePlan(
     [

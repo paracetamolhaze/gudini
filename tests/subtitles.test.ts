@@ -71,6 +71,28 @@ test("Captions: конец предложения (точка/!/?) закрыв�
   assert.equal(events.length, 2);
 });
 
+test("Highlight: подсвечиваются только слова из captionHighlights (цифры и т.п.)", () => {
+  const words = makeWords([
+    ["Я", 0, 0.2],
+    ["потратил", 0.25, 0.7],
+    ["5000", 0.75, 1.2],
+    ["долларов", 1.25, 1.8],
+  ]);
+  const ass = buildAss(words, { maxWords: 4 }, [2]); // индекс «5000»
+  const line = ass.split("\n").find((l) => l.startsWith("Dialogue:"))!;
+  assert.ok(line.includes("{\\c&H00D7FF&}5000"), "должна подсветиться именно цифра");
+  assert.ok(!line.includes("{\\c&H00D7FF&}ПОТРАТИЛ"), "длинное слово подсвечиваться не должно");
+});
+
+test("Highlight: без списка highlights все фразы полностью белые", () => {
+  const words = makeWords([
+    ["очень", 0, 0.3],
+    ["длинноесловоздесь", 0.35, 1.0],
+  ]);
+  const ass = buildAss(words);
+  assert.ok(!ass.includes("\\c&H00D7FF&"), "никаких акцентов без решения планировщика");
+});
+
 test("Captions: знаки препинания вычищены, капс, дефис внутри слова сохранён", () => {
   const words = makeWords([
     ["привет,", 0, 0.4],

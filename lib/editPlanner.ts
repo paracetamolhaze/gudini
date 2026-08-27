@@ -13,9 +13,15 @@ const PLANNER_SYSTEM = `Ты — режиссёр монтажа коротки�
 - B_ROLL — видеоперебивка поверх автора (голос продолжается). Только для КОНКРЕТНОГО визуализируемого:
   место, предмет, животное, действие, событие. query — ВИЗУАЛЬНЫЙ запрос для видеостока на английском
   (не буквальный перевод фразы, а что должно быть в кадре: "young man packing suitcase cinematic"),
-  плюс alt — 2-3 альтернативных запроса.
-- PUNCH_IN — лёгкое приближение кадра автора на сильной фразе, scale 1.04–1.08.
+  плюс alt — 2-3 альтернативных запроса, плюс intent — структурное описание нужного кадра:
+  {"subject":"главный объект (en)","action":"что происходит (en)","environment":"окружение (en)",
+   "mood":"настроение (en)","mustHave":["без чего кадр не подходит, en"],"avoid":["что недопустимо, en:
+   zoo cage/cartoon/логотипы и т.п."]}
+- PUNCH_IN — лёгкое приближение кадра автора на сильной фразе, scale 1.04–1.08, не чаще чем раз в ~10 секунд.
 - TEXT_CALLOUT — крупный текст поверх: важная цифра, цена, дата, имя ("500 000 ЧЕЛОВЕК", "$5,000").
+
+Отдельно highlights: индексы слов для смыслового акцента в субтитрах — ТОЛЬКО действительно сильные
+(цифры, суммы, имена, панч-слова, контраст). Большинство фраз остаются без акцента; 0–6 слов на ролик.
 
 Правила режиссуры:
 - Лицо автора ОСТАВЛЯТЬ на: хуке, эмоциях, личной истории, шутке, панчлайне, призыве. Хук (начало) не закрывать.
@@ -25,7 +31,7 @@ const PLANNER_SYSTEM = `Ты — режиссёр монтажа коротки�
 - Для цифр и цен предпочитай TEXT_CALLOUT, а не случайный сток.
 
 Ответь СТРОГО валидным JSON без пояснений:
-{"events":[{"type":"B_ROLL","from":12,"to":19,"query":"...","alt":["...","..."]},{"type":"PUNCH_IN","from":30,"to":36,"scale":1.06},{"type":"TEXT_CALLOUT","from":44,"to":47,"text":"..."}]}`;
+{"events":[{"type":"B_ROLL","from":12,"to":19,"query":"...","alt":["..."],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["..."],"avoid":["..."]}},{"type":"PUNCH_IN","from":30,"to":36,"scale":1.06},{"type":"TEXT_CALLOUT","from":44,"to":47,"text":"..."}],"highlights":[42,87]}`;
 
 /** Строит валидированный монтажный план. Возвращает null, если ИИ недоступен/упал. */
 export async function planEdit(
@@ -62,12 +68,18 @@ export async function planEdit(
     .replace(/```$/m, "")
     .trim();
 
-  let parsed: { events?: RawPlanEvent[] };
+  let parsed: { events?: RawPlanEvent[]; highlights?: unknown[] };
   try {
     parsed = JSON.parse(raw);
   } catch {
     return null;
   }
   const events = validatePlan(parsed.events ?? [], words, duration);
-  return { version: 1, duration, events, captionStyle: { ...DEFAULT_CAPTION_STYLE } };
+  const captionHighlights = Array.isArray(parsed.highlights)
+    ? parsed.highlights
+        .map((h) => Math.trunc(Number(h)))
+        .filter((h) => Number.isFinite(h) && h >= 0 && h < words.length)
+        .slice(0, 8)
+    : [];
+  return { version: 1, duration, events, captionStyle: { ...DEFAULT_CAPTION_STYLE }, captionHighlights };
 }

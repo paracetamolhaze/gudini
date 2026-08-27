@@ -44,9 +44,43 @@ test("Cleanup: низкая уверенность (<0.7) отбрасывает
   assert.equal(plan.actions.length, 0);
 });
 
-test("Cleanup: зона хука (< 2с) не режется", () => {
+test("Cleanup: явный короткий FILLER в хуке (conf>=0.92) — вырезается", () => {
   const { plan } = validateCleanupActions(
     [{ type: "REMOVE_FRAGMENT", fromWord: 0, toWord: 1, reason: "FILLER", confidence: 0.95 }],
+    words,
+    [],
+    duration,
+  );
+  assert.equal(plan.actions.length, 1);
+});
+
+test("Cleanup: НЕ-филлер в хуке НИКОГДА не режется (false start/self-correction/обычная речь)", () => {
+  const { plan } = validateCleanupActions(
+    [
+      { type: "REMOVE_FRAGMENT", fromWord: 0, toWord: 1, reason: "FALSE_START", confidence: 0.99 },
+      { type: "REMOVE_FRAGMENT", fromWord: 0, toWord: 1, reason: "SELF_CORRECTION", confidence: 0.99 },
+      { type: "REMOVE_FRAGMENT", fromWord: 0, toWord: 1, reason: "REPEATED_WORDS", confidence: 0.99 },
+    ],
+    words,
+    [],
+    duration,
+  );
+  assert.equal(plan.actions.length, 0);
+});
+
+test("Cleanup: FILLER в хуке с conf<0.92 — не режется", () => {
+  const { plan } = validateCleanupActions(
+    [{ type: "REMOVE_FRAGMENT", fromWord: 0, toWord: 1, reason: "FILLER", confidence: 0.85 }],
+    words,
+    [],
+    duration,
+  );
+  assert.equal(plan.actions.length, 0);
+});
+
+test("Cleanup: длинный «филлер» (>1.2с) в хуке — не режется", () => {
+  const { plan } = validateCleanupActions(
+    [{ type: "REMOVE_FRAGMENT", fromWord: 0, toWord: 4, reason: "FILLER", confidence: 0.95 }],
     words,
     [],
     duration,

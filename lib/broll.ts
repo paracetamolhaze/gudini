@@ -108,9 +108,10 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
         return;
       }
 
-      // приоритет источников: по умолчанию сток (семантический отбор, дёшево);
-      // Runway (~$0.30/клип) — последний фолбэк, либо первым при BROLL_SOURCE=runway
-      const runwayFirst = process.env.BROLL_SOURCE === "runway";
+      // Runway (~$0.30/клип — вчетверо дороже всей обложки) НЕ используется автоматически:
+      // если релевантного стока нет, лучше оставить лицо автора, чем незаметно потратить деньги.
+      // Включается явно: BROLL_SOURCE=runway.
+      const runwayEnabled = process.env.BROLL_SOURCE === "runway";
       const tryRunway = async () => {
         try {
           return Boolean(getSettings().runwayKey) && (await generateRunwayVideo(event.query!, full));
@@ -130,7 +131,7 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
           return false;
         }
       };
-      let ok = runwayFirst ? (await tryRunway()) || (await tryStock()) : (await tryStock()) || (await tryRunway());
+      let ok = runwayEnabled ? (await tryRunway()) || (await tryStock()) : await tryStock();
 
       // матчап без подходящего реального материала — рисуем свою графику,
       // а не ставим случайный стадион «потому что тоже футбол»
@@ -360,6 +361,11 @@ export async function fetchStockVideo(
   }
 
   for (const { c } of ranked) {
+    const key = `${c.provider}:${c.id}`;
+    // бронируем ассет СИНХРОННО, до любого await: перебивки подбираются параллельно,
+    // и без этого один и тот же клип попадал в ролик дважды
+    if (used.has(key)) continue;
+    used.add(key);
     try {
       const cached = cacheByAsset(c);
       let buffer: Buffer;
@@ -367,17 +373,24 @@ export async function fetchStockVideo(
         buffer = fs.readFileSync(path.join(CACHE_DIR, cached.file));
       } else {
         const download = await fetch(c.url);
-        if (!download.ok) continue;
+        if (!download.ok) {
+          used.delete(key);
+          continue;
+        }
         buffer = Buffer.from(await download.arrayBuffer());
-        if (buffer.length < 50_000) continue;
+        if (buffer.length < 50_000) {
+          used.delete(key);
+          continue;
+        }
         cacheStore(c, buffer);
       }
       fs.writeFileSync(outPath, buffer);
-      used.add(`${c.provider}:${c.id}`);
-      record.winner = `${c.provider}:${c.id}`;
+      record.winner = key;
       trace?.push(record);
       return true;
-    } catch {}
+    } catch {
+      used.delete(key); // бронь снимаем: ассет не пригодился, пусть достанется другому событию
+    }
   }
   trace?.push(record);
   return false;

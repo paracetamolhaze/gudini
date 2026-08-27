@@ -80,7 +80,23 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
           // иначе один и тот же кадр достаётся сразу нескольким событиям
           usedWeb.add(saved.directUrl);
           const bytes = fs.readFileSync(saved.cacheFile);
-          const built = await buildWebAssetClip(saved, full, duration, bytes);
+
+          // Кэш НЕ отменяет проверки: ассет мог быть принят прежними, более мягкими
+          // правилами. Иначе старый скриншот переживает любое ужесточение качества,
+          // а новый поиск для этого блока вообще не запускается.
+          let stillGood = true;
+          if (event.visualIntent && saved.mediaType === "image") {
+            const an = await analyzeAsset(`web:${saved.directUrl}`, saved.directUrl, bytes).catch(() => null);
+            if (!an) stillGood = false;
+            else {
+              const rel = scoreRelevance(event.visualIntent, an);
+              stillGood = !rel.avoidViolation && !rel.specificityFail && rel.relevance >= 0.5;
+              if (!stillGood) console.log(`Кэш «${saved.sourceDomain}» больше не проходит: ${rel.reason}`);
+            }
+          }
+          if (!stillGood) usedWeb.delete(saved.directUrl);
+
+          const built = stillGood ? await buildWebAssetClip(saved, full, duration, bytes) : { ok: false as const };
           if (!built.ok) usedWeb.delete(saved.directUrl);
           if (built.ok) {
             event.file = file;

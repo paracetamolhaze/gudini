@@ -52,7 +52,7 @@ export type Project = {
 
 export type YoutubeTokens = { access_token: string; refresh_token?: string; expires_at?: number };
 export type TiktokTokens = { access_token: string; refresh_token?: string; expires_at?: number; open_id?: string };
-export type InstagramTokens = { access_token: string; ig_user_id?: string; via?: "ig" | "fb" };
+export type InstagramTokens = { access_token: string; ig_user_id?: string; via?: "ig" | "fb"; expires_at?: number };
 export type PlatformTokens = YoutubeTokens | TiktokTokens | InstagramTokens;
 
 /** Сохранённый аккаунт платформы. id — стабильный ключ, чтобы повторный вход обновлял, а не плодил. */

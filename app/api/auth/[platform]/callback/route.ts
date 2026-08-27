@@ -97,6 +97,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         access_token: accessToken,
         ig_user_id: igId,
         via: "ig",
+        expires_at: Date.now() + 60 * 24 * 3600 * 1000, // длинный токен Instagram живёт 60 дней
       });
     } else if (platform === "instagram") {
       const tokenRes = await fetch(

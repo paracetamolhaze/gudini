@@ -668,6 +668,7 @@ function PublishStep({
   const [description, setDescription] = useState(meta.description);
   const [hashtags, setHashtags] = useState(meta.hashtags.join(" "));
   const [busy, setBusy] = useState<string | null>(null);
+  const [captionCopied, setCaptionCopied] = useState(false);
   const [connected, setConnected] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -707,6 +708,22 @@ function PublishStep({
       setError(String(e?.message ?? e));
     } finally {
       setBusy(null);
+    }
+  }
+
+  /** Подпись для TikTok: в черновики API её не передаёт, автор вставляет вручную. */
+  async function copyCaption() {
+    const meta = project?.meta;
+    if (!meta) return;
+    const caption = [meta.title, meta.description, (meta.hashtags ?? []).join(" ")]
+      .filter(Boolean)
+      .join("\n\n");
+    try {
+      await navigator.clipboard.writeText(caption);
+      setCaptionCopied(true);
+      setTimeout(() => setCaptionCopied(false), 2000);
+    } catch {
+      window.prompt("Скопируйте подпись вручную:", caption);
     }
   }
 
@@ -795,6 +812,16 @@ function PublishStep({
                 <button className="btn btn-sm" onClick={() => publishTo(key)} disabled={busy !== null}>
                   {busy === key ? <span className="spin" /> : pub ? "Опубликовать снова" : "Опубликовать"}
                 </button>
+                {key === "tiktok" && project.meta && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ marginTop: 8 }}
+                    onClick={copyCaption}
+                    title="TikTok не принимает подпись через API при заливке в черновики — вставьте её в приложении"
+                  >
+                    {captionCopied ? "Скопировано ✓" : "📋 Скопировать подпись"}
+                  </button>
+                )}
               </div>
             );
           })}

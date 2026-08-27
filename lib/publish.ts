@@ -150,9 +150,47 @@ async function setYoutubeThumbnail(token: string, videoId: string, coverPath: st
 
 // ===== TikTok (Content Posting API) =====
 
-async function publishTikTok(videoPath: string): Promise<PublishResult> {
+/**
+ * Access-токен TikTok живёт ~24 часа, refresh — год. Без обновления публикация
+ * отваливается на следующий день после подключения.
+ */
+async function tiktokAccessToken(): Promise<string | null> {
   const s = getSettings();
-  const token = s.tiktokTokens?.access_token;
+  if (!s.tiktokTokens) return null;
+  const { access_token, refresh_token, expires_at, open_id } = s.tiktokTokens;
+  if (expires_at && Date.now() < expires_at - 60_000) return access_token;
+  if (!refresh_token || !s.tiktokClientKey || !s.tiktokClientSecret) return access_token;
+
+  const res = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_key: s.tiktokClientKey,
+      client_secret: s.tiktokClientSecret,
+      grant_type: "refresh_token",
+      refresh_token,
+    }),
+  });
+  const json: any = await res.json().catch(() => null);
+  if (!res.ok || !json?.access_token) {
+    throw new Error(
+      "Токен TikTok истёк и не обновился — переподключите TikTok в Настройках: " +
+        String(json?.error_description ?? json?.error ?? res.status).slice(0, 160),
+    );
+  }
+
+  const tokens = {
+    access_token: json.access_token,
+    refresh_token: json.refresh_token ?? refresh_token,
+    expires_at: Date.now() + (json.expires_in ?? 86_400) * 1000,
+    open_id: json.open_id ?? open_id,
+  };
+  updateActiveTokens("tiktok", tokens);
+  return tokens.access_token;
+}
+
+async function publishTikTok(videoPath: string): Promise<PublishResult> {
+  const token = await tiktokAccessToken();
   if (!token) return demo("tiktok", "аккаунт TikTok не подключён");
 
   const video = fs.readFileSync(videoPath);
@@ -196,6 +234,35 @@ async function publishTikTok(videoPath: string): Promise<PublishResult> {
 
 // ===== Instagram Reels (Graph API) =====
 
+/**
+ * Длинный токен Instagram живёт 60 дней и продлевается ещё на 60 одним запросом.
+ * Продлеваем заранее; неудача не должна ломать публикацию — текущий токен ещё жив.
+ */
+async function instagramAccessToken(tokens: { access_token: string; via?: "ig" | "fb"; expires_at?: number }): Promise<string> {
+  const WEEK = 7 * 24 * 3600 * 1000;
+  if (tokens.via === "fb") return tokens.access_token;
+  if (tokens.expires_at && tokens.expires_at - Date.now() > WEEK) return tokens.access_token;
+
+  try {
+    const res = await fetch(
+      `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${tokens.access_token}`,
+    );
+    const json: any = await res.json();
+    if (json?.access_token) {
+      const fresh = {
+        ...tokens,
+        access_token: json.access_token,
+        expires_at: Date.now() + (json.expires_in ?? 60 * 24 * 3600) * 1000,
+      };
+      updateActiveTokens("instagram", fresh);
+      return fresh.access_token;
+    }
+  } catch {}
+  // токен младше суток продлить нельзя — это нормально, работаем текущим
+  return tokens.access_token;
+}
+
+
 async function publishInstagram(
   id: string,
   title: string,
@@ -204,9 +271,9 @@ async function publishInstagram(
   hasCover: boolean,
 ): Promise<PublishResult> {
   const s = getSettings();
-  const token = s.instagramTokens?.access_token;
   const igUser = s.instagramTokens?.ig_user_id;
-  if (!token || !igUser) return demo("instagram", "аккаунт Instagram не подключён");
+  if (!s.instagramTokens?.access_token || !igUser) return demo("instagram", "аккаунт Instagram не подключён");
+  const token = await instagramAccessToken(s.instagramTokens);
   if (!s.publicBaseUrl) {
     return demo(
       "instagram",

@@ -1,0 +1,292 @@
+{
+  "beats": [
+    {
+      "id": "b0_2d3e",
+      "text": "Это первый футболист в мире, который не провёл на поле ни одной секунды, но умудрился сломать руку и получить жёлтую карточку.",
+      "factIds": [
+        "47c772fe"
+      ],
+      "visualNeed": "ENTITY",
+      "entities": [
+        "Jordan Henderson"
+      ]
+    },
+    {
+      "id": "b1_01fe",
+      "text": "Чемпионат мира, 1/8 финала, Англия играет с Мексикой, и в запасе сидит Джордан Хендерсон.",
+      "factIds": [
+        "66425c62"
+      ],
+      "visualNeed": "CONTEXT",
+      "entities": [
+        "England national football team",
+        "Mexico national football team",
+        "FIFA World Cup 2026",
+        "Jordan Henderson"
+      ]
+    },
+    {
+      "id": "b2_09ed",
+      "text": "Весь матч тренер его так и не выпускает.",
+      "factIds": [
+        "47c772fe"
+      ],
+      "visualNeed": "ENTITY",
+      "entities": [
+        "Jordan Henderson",
+        "England national football team"
+      ]
+    },
+    {
+      "id": "b3_f1ba",
+      "text": "Но Хендерсон так заводится на скамейке, что начинает спорить с судьёй и ловит жёлтую карточку.",
+      "factIds": [],
+      "visualNeed": "GENERAL",
+      "entities": [
+        "Jordan Henderson"
+      ]
+    },
+    {
+      "id": "b4_9770",
+      "text": "Дальше Англия побеждает и выходит в четвертьфинал.",
+      "factIds": [
+        "66425c62"
+      ],
+      "visualNeed": "CONTEXT",
+      "entities": [
+        "England national football team",
+        "FIFA World Cup 2026"
+      ]
+    },
+    {
+      "id": "b5_f9dc",
+      "text": "После финальный свистка все бегут праздновать.",
+      "factIds": [
+        "66425c62"
+      ],
+      "visualNeed": "CONTEXT",
+      "entities": [
+        "England national football team"
+      ]
+    },
+    {
+      "id": "b6_cd32",
+      "text": "И Хендерсон на радостях решает перепрыгнуть через рекламный щит у кромки поля.",
+      "factIds": [
+        "47c772fe"
+      ],
+      "visualNeed": "EXACT_EVENT",
+      "entities": [
+        "Jordan Henderson"
+      ]
+    },
+    {
+      "id": "b7_8516",
+      "text": "Спотыкается и неудачно падает на руку.",
+      "factIds": [
+        "66425c62"
+      ],
+      "visualNeed": "EXACT_EVENT",
+      "entities": [
+        "Jordan Henderson"
+      ]
+    },
+    {
+      "id": "b8_5e99",
+      "text": "В итоге его уносят с поля на носилках и везут в больницу.",
+      "factIds": [
+        "99f13f8c"
+      ],
+      "visualNeed": "EXACT_EVENT",
+      "entities": [
+        "Jordan Henderson"
+      ]
+    },
+    {
+      "id": "b9_405d",
+      "text": "Тренер подтвердил, что всё серьёзно и скорее всего для него этот чемпионат уже закончился.",
+      "factIds": [
+        "574df16c"
+      ],
+      "visualNeed": "ENTITY",
+      "entities": [
+        "Jordan Henderson",
+        "England national football team"
+      ]
+    },
+    {
+      "id": "b10_2ee0",
+      "text": "Человек ни разу не коснулся мяча, а уезжает домой с жёлтой карточкой и рукой в гипсе.",
+      "factIds": [
+        "47c772fe",
+        "574df16c"
+      ],
+      "visualNeed": "ENTITY",
+      "entities": [
+        "Jordan Henderson"
+      ]
+    },
+    {
+      "id": "b11_b21e",
+      "text": "Это уже называют, чуть ли не самой нелепой травмой за всю историю чемпионатов мира.",
+      "factIds": [
+        "13135062"
+      ],
+      "visualNeed": "NONE",
+      "entities": [
+        "Jordan Henderson",
+        "FIFA World Cup 2026"
+      ]
+    }
+  ],
+  "needs": [
+    {
+      "beatId": "b0_2d3e",
+      "factIds": [
+        "47c772fe"
+      ],
+      "entities": [
+        "Jordan Henderson"
+      ],
+      "intent": "ENTITY",
+      "visualDescription": "Portrait or close-up shot of Jordan Henderson looking frustrated on the bench.",
+      "preferredMedia": "IMAGE",
+      "importance": "HIGH"
+    },
+    {
+      "beatId": "b1_01fe",
+      "factIds": [
+        "66425c62"
+      ],
+      "entities": [
+        "England national football team",
+        "Mexico national football team",
+        "FIFA World Cup 2026",
+        "Jordan Henderson"
+      ],
+      "intent": "CONTEXT",
+      "visualDescription": "Stadium wide shot with England and Mexico teams during the World Cup Round of 16 match.",
+      "preferredMedia": "VIDEO",
+      "importance": "MEDIUM"
+    },
+    {
+      "beatId": "b2_09ed",
+      "factIds": [
+        "47c772fe"
+      ],
+      "entities": [
+        "Jordan Henderson",
+        "England national football team"
+      ],
+      "intent": "ENTITY",
+      "visualDescription": "Henderson sitting on the substitutes bench watching the match.",
+      "preferredMedia": "IMAGE",
+      "importance": "MEDIUM"
+    },
+    {
+      "beatId": "b3_f1ba",
+      "factIds": [],
+      "entities": [
+        "Jordan Henderson"
+      ],
+      "intent": "GENERAL",
+      "visualDescription": "A substitute player arguing animatedly from the sideline benches.",
+      "preferredMedia": "VIDEO",
+      "importance": "LOW"
+    },
+    {
+      "beatId": "b4_9770",
+      "factIds": [
+        "66425c62"
+      ],
+      "entities": [
+        "England national football team",
+        "FIFA World Cup 2026"
+      ],
+      "intent": "CONTEXT",
+      "visualDescription": "England players celebrating a World Cup win on the pitch.",
+      "preferredMedia": "VIDEO",
+      "importance": "MEDIUM"
+    },
+    {
+      "beatId": "b5_f9dc",
+      "factIds": [
+        "66425c62"
+      ],
+      "entities": [
+        "England national football team"
+      ],
+      "intent": "CONTEXT",
+      "visualDescription": "Players and staff running onto the pitch to celebrate after the final whistle.",
+      "preferredMedia": "VIDEO",
+      "importance": "MEDIUM"
+    },
+    {
+      "beatId": "b6_cd32",
+      "factIds": [
+        "47c772fe"
+      ],
+      "entities": [
+        "Jordan Henderson"
+      ],
+      "intent": "EXACT_EVENT",
+      "visualDescription": "Henderson jumping over an advertising board on the touchline during celebrations.",
+      "preferredMedia": "VIDEO",
+      "importance": "HIGH"
+    },
+    {
+      "beatId": "b7_8516",
+      "factIds": [
+        "66425c62"
+      ],
+      "entities": [
+        "Jordan Henderson"
+      ],
+      "intent": "EXACT_EVENT",
+      "visualDescription": "Henderson stumbling and falling awkwardly onto his arm near the touchline.",
+      "preferredMedia": "VIDEO",
+      "importance": "HIGH"
+    },
+    {
+      "beatId": "b8_5e99",
+      "factIds": [
+        "99f13f8c"
+      ],
+      "entities": [
+        "Jordan Henderson"
+      ],
+      "intent": "EXACT_EVENT",
+      "visualDescription": "Medical staff carrying Henderson off the pitch on a stretcher.",
+      "preferredMedia": "VIDEO",
+      "importance": "HIGH"
+    },
+    {
+      "beatId": "b9_405d",
+      "factIds": [
+        "574df16c"
+      ],
+      "entities": [
+        "Jordan Henderson",
+        "England national football team"
+      ],
+      "intent": "ENTITY",
+      "visualDescription": "England coach speaking at a press conference.",
+      "preferredMedia": "IMAGE",
+      "importance": "MEDIUM"
+    },
+    {
+      "beatId": "b10_2ee0",
+      "factIds": [
+        "47c772fe",
+        "574df16c"
+      ],
+      "entities": [
+        "Jordan Henderson"
+      ],
+      "intent": "ENTITY",
+      "visualDescription": "Henderson with his arm in a cast leaving the stadium.",
+      "preferredMedia": "IMAGE",
+      "importance": "MEDIUM"
+    }
+  ]
+}

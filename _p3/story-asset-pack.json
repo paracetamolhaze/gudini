@@ -1,0 +1,113 @@
+{
+  "storyId": "b618fa26",
+  "version": 2,
+  "assets": [],
+  "coverage": [
+    {
+      "beatId": "b0_2d3e",
+      "text": "Это первый футболист в мире, который не провёл на поле ни од",
+      "need": "ENTITY",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b1_01fe",
+      "text": "Чемпионат мира, 1/8 финала, Англия играет с Мексикой, и в за",
+      "need": "CONTEXT",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b2_09ed",
+      "text": "Весь матч тренер его так и не выпускает.",
+      "need": "ENTITY",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b3_f1ba",
+      "text": "Но Хендерсон так заводится на скамейке, что начинает спорить",
+      "need": "GENERAL",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b4_9770",
+      "text": "Дальше Англия побеждает и выходит в четвертьфинал.",
+      "need": "CONTEXT",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b5_f9dc",
+      "text": "После финальный свистка все бегут праздновать.",
+      "need": "CONTEXT",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b6_cd32",
+      "text": "И Хендерсон на радостях решает перепрыгнуть через рекламный ",
+      "need": "EXACT_EVENT",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b7_8516",
+      "text": "Спотыкается и неудачно падает на руку.",
+      "need": "EXACT_EVENT",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b8_5e99",
+      "text": "В итоге его уносят с поля на носилках и везут в больницу.",
+      "need": "EXACT_EVENT",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b9_405d",
+      "text": "Тренер подтвердил, что всё серьёзно и скорее всего для него ",
+      "need": "ENTITY",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b10_2ee0",
+      "text": "Человек ни разу не коснулся мяча, а уезжает домой с жёлтой к",
+      "need": "ENTITY",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    }
+  ],
+  "coverageRatio": 0,
+  "sourceVideos": [
+    {
+      "id": "af8d7be447",
+      "url": "https://www.bbc.co.uk/sport/football/videos/cqj1n077784o",
+      "durationSec": 51.243,
+      "segments": 3,
+      "method": "extractor"
+    },
+    {
+      "id": "31ac58638c",
+      "url": "https://www.espn.com/soccer/story/_/id/49283507/jordan-henderson-taken-hospital-wrist-injury-falling-mexico-victory-celebrations-england-world-cup",
+      "durationSec": 91.659,
+      "segments": 6,
+      "method": "extractor"
+    }
+  ],
+  "createdAt": "2026-08-27T19:40:14.232Z"
+}

@@ -27,6 +27,10 @@ export type FetchResult = {
 };
 
 const UA = "Gudini/1.0 (short-video editor)";
+/** JS-движок для разбора плеера YouTube: node уже установлен в образе воркера. */
+const JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node";
+/** Только видеодорожка: звук внешнего материала в ролик не попадает никогда. */
+const VIDEO_ONLY = "bv*[height<=1080][ext=mp4]/bv*[height<=1080]/bv*[ext=mp4]/bv*/best";
 const MAX_BYTES = 90_000_000;
 
 async function hasExtractor(): Promise<boolean> {
@@ -74,7 +78,11 @@ async function viaExtractor(pageUrl: string, out: string): Promise<FetchResult> 
         "--no-progress",
         "--max-filesize", "90M",
         "--socket-timeout", "20",
-        "-f", "best[height<=720][ext=mp4]/best[height<=720]/best",
+        "--js-runtimes", JS_RUNTIME,
+        // Звук внешнего материала нам не нужен вообще, поэтому берём ТОЛЬКО видеодорожку.
+        // Требование единого файла с аудио было причиной «Requested format is not available»:
+        // YouTube давно отдаёт video и audio раздельно.
+        "-f", VIDEO_ONLY,
         "--user-agent", UA,
         "-o", out,
         pageUrl,
@@ -84,12 +92,15 @@ async function viaExtractor(pageUrl: string, out: string): Promise<FetchResult> 
     if (!fs.existsSync(out) || fs.statSync(out).size < 20_000) return { ok: false, reason: "экстрактор ничего не отдал" };
     return { ok: true, file: out, method: "extractor" };
   } catch (e: any) {
-    const msg = String(e?.stderr ?? e?.message ?? e);
-    // площадка требует логин/подпись/токен — это не наш случай, идём дальше
-    const why = /cookies|sign in|login|private|DRM|PO Token|not available/i.test(msg)
-      ? "поток недоступен без входа/подписи"
-      : msg.slice(0, 90);
-    return { ok: false, reason: why };
+    // Показываем НАСТОЯЩУЮ ошибку yt-dlp. Раньше здесь стояла подстановка про
+    // «логин/подпись», из-за которой обычный промах с форматом выглядел как защита.
+    const msg = String(e?.stderr ?? e?.message ?? e)
+      .split(/\r?\n/)
+      .filter((l: string) => /ERROR|WARNING/i.test(l))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return { ok: false, reason: (msg || String(e?.message ?? e)).slice(0, 140) };
   }
 }
 
@@ -139,6 +150,9 @@ export async function probeVideo(pageUrl: string): Promise<ProbeInfo> {
         "--no-playlist",
         "--no-warnings",
         "--skip-download",
+        // YouTube требует JS-движок для полного разбора плеера; node уже есть в образе,
+        // но yt-dlp по умолчанию включает только deno — включаем node явно
+        "--js-runtimes", JS_RUNTIME,
         "--socket-timeout", "15",
         "--print", "%(extractor)s\t%(duration)s\t%(format_count)s\t%(title).80s",
         "--user-agent", UA,

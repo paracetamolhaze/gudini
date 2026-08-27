@@ -36,6 +36,33 @@ const domainOf = (u: string) => {
 
 export const PACK_VERSION = 2;
 
+/** Счётчики по стадиям: видно, на каком шаге кандидаты исчезают. */
+export type StageCounts = {
+  videoResults: number;
+  sourceVerifyPass: number;
+  probeAttempted: number;
+  probeOk: number;
+  downloadAttempted: number;
+  downloadOk: number;
+  sourceVideosAccepted: number;
+  framesSampled: number;
+  segmentsExtracted: number;
+  imageResults: number;
+  imageVerifyPass: number;
+  imagesAccepted: number;
+  beforeBeatMatch: number;
+  beatCompatible: number;
+};
+export const stages: StageCounts = {
+  videoResults: 0, sourceVerifyPass: 0, probeAttempted: 0, probeOk: 0,
+  downloadAttempted: 0, downloadOk: 0, sourceVideosAccepted: 0, framesSampled: 0,
+  segmentsExtracted: 0, imageResults: 0, imageVerifyPass: 0, imagesAccepted: 0,
+  beforeBeatMatch: 0, beatCompatible: 0,
+};
+export function resetStages(): void {
+  for (const k of Object.keys(stages) as (keyof StageCounts)[]) stages[k] = 0;
+}
+
 export type AssetKind = "VIDEO_SEGMENT" | "IMAGE";
 
 export type PackAsset = {
@@ -70,6 +97,7 @@ export type StoryAssetPackV2 = {
   coverage: BeatCoverage[];
   coverageRatio: number;
   sourceVideos: { id: string; url: string; durationSec: number; segments: number; method?: string }[];
+  stages?: StageCounts;
   createdAt: string;
 };
 
@@ -133,6 +161,7 @@ async function cutSegments(
         ["-ss", at.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-q:v", "4", path.basename(frame)],
         { cwd: dir },
       );
+      stages.framesSampled++;
       const an = await analyzeAsset(`seg:${videoId}:${i}`, "", fs.readFileSync(frame));
       addCost({ visionCalls: 1 });
       if (!an || an.isScreenshot || an.hasLargeWatermark) continue;
@@ -164,6 +193,7 @@ async function cutSegments(
         description: an.description,
         verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
       });
+      stages.segmentsExtracted++;
     } catch {
     } finally {
       try {
@@ -253,8 +283,10 @@ async function matchToBeats(
         ),
       };
     });
-  } catch {
-    return assets;
+  } catch (e: any) {
+    // Сбой сопоставления НЕЛЬЗЯ превращать в пустую медиатеку: однажды это уже
+    // выбросило 9 готовых видео-сегментов и дало «0 ассетов» вместо явной ошибки.
+    throw new Error(`Сопоставление с блоками не выполнено: ${String(e?.message ?? e).slice(0, 160)}`);
   }
 }
 
@@ -283,26 +315,33 @@ export async function buildAssetPack(
     if (coreSegments >= 10) break;
     for (const v of await braveVideos(q)) {
       if (coreSegments >= 10) break;
+      stages.videoResults++;
       const vid = sid(v.url);
       if (seenVideo.has(vid)) continue;
       const src = verifySource({ title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher }, research);
       if (!src.ok) continue;
+      stages.sourceVerifyPass++;
       seenVideo.add(vid);
 
       // разведка: доступен ли поток и какой длины ролик — до скачивания
       if (!v.directUrl) {
+        stages.probeAttempted++;
         const pr = await probeVideo(v.url);
+        if (pr.ok) stages.probeOk++;
         console.log(`  probe ${pr.platform} ${pr.ok ? `OK ${pr.durationSec ?? "?"}с (${pr.extractor})` : `— ${pr.reason}`}`);
         if (!pr.ok) continue;
       }
       const raw = path.join(mediaDir, `src-${vid}.mp4`);
+      stages.downloadAttempted++;
       const got = await fetchVideo(v.directUrl, v.url, raw);
+      if (got.ok) stages.downloadOk++;
       if (!got.ok) {
         console.log(`  скачивание ${v.url.slice(0, 55)} → ${got.reason}`);
         continue;
       }
       const cut = await cutSegments(raw, mediaDir, vid, 6);
       if (!cut.assets.length) continue;
+      stages.sourceVideosAccepted++;
       sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
       for (const a of cut.assets) {
         assets.push({
@@ -344,6 +383,7 @@ export async function buildAssetPack(
       if (gotVideo || assets.length >= 30) break;
       for (const v of (await braveVideos(q)).slice(0, 6)) {
         if (gotVideo || assets.length >= 30) break;
+        stages.videoResults++;
         const vid = sid(v.url);
         if (seenVideo.has(vid)) continue;
         const src = verifySource({ title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher }, research);
@@ -383,10 +423,12 @@ export async function buildAssetPack(
     for (const q of queries.slice(0, T.beat_image_queries)) {
       for (const im of (await braveImages(q)).slice(0, 6)) {
         if (assets.length >= 30) break;
+        stages.imageResults++;
         const key = im.imageUrl.split("?")[0];
         if (seenImage.has(key)) continue;
         const src = verifySource({ title: im.title, description: im.description, sourceUrl: im.url }, research);
         if (!src.ok) continue;
+        stages.imageVerifyPass++;
         seenImage.add(key);
 
         const id = sid(key);
@@ -400,6 +442,7 @@ export async function buildAssetPack(
           addCost({ visionCalls: 1 });
           if (!an || an.isScreenshot || an.hasLargeText || an.hasLargeWatermark) continue;
           fs.writeFileSync(file, buf);
+          stages.imagesAccepted++;
           assets.push({
             id,
             kind: "IMAGE",
@@ -418,8 +461,17 @@ export async function buildAssetPack(
   }
 
   // ---------- сопоставление с блоками ----------
+  stages.beforeBeatMatch = assets.length;
   const matched = await matchToBeats(assets, beats, research);
   const usable = matched.filter((a) => a.compatibleBeatIds.length);
+  stages.beatCompatible = usable.length;
+  if (assets.length > 0 && usable.length === 0) {
+    throw new Error(
+      `Медиатека собрала ${assets.length} материалов, но ни один не сопоставлен с блоками сценария. ` +
+        "Это сбой сопоставления, а не отсутствие материала — пустой пакет не возвращаем.",
+    );
+  }
+  console.log(`  сопоставление с блоками: ${assets.length} -> ${usable.length}`);
 
   const visual = beats.filter((b) => b.visualNeed !== "NONE");
   const coverage: BeatCoverage[] = visual.map((b) => {
@@ -442,6 +494,7 @@ export async function buildAssetPack(
     coverage,
     coverageRatio,
     sourceVideos,
+    stages: { ...stages },
     createdAt: new Date().toISOString(),
   };
   try {

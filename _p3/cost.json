@@ -1,0 +1,17 @@
+{
+  "researchLlmCalls": 1,
+  "braveNewsRequests": 0,
+  "braveVideoRequests": 32,
+  "braveImageRequests": 22,
+  "braveWebRequests": 0,
+  "pageFetches": 0,
+  "videoDownloads": 2,
+  "ytdlpProbes": 89,
+  "ytdlpSuccesses": 79,
+  "visionCalls": 27,
+  "speechCleanupCalls": 0,
+  "editPlannerCalls": 0,
+  "scriptLlmCalls": 0,
+  "coverGenerationCost": 0,
+  "coverQcCost": 0
+}

@@ -186,9 +186,49 @@ export async function searchOpenverse(query: string): Promise<WebAsset[]> {
 
 // ===================== Подключаемый веб-поиск (нужен ключ) =====================
 
+const braveKey = () => process.env.BRAVE_API_KEY || process.env.BRAVE || "";
+
 /** Есть ли ключ поисковика: без него общий веб-поиск не выполняется. */
 export function webSearchAvailable(): boolean {
-  return Boolean(process.env.BRAVE_API_KEY || process.env.SERPER_API_KEY);
+  return Boolean(braveKey() || process.env.SERPER_API_KEY);
+}
+
+/**
+ * Видео из открытого веба (новостные и спортивные сайты, публичные страницы).
+ * Берём ТОЛЬКО прямые файлы, которые отдаются обычным запросом: страницы плееров
+ * с защищёнными потоками (YouTube и подобные) сюда не попадают — их поток нельзя
+ * получить штатно, а обходить защиту мы не будем.
+ */
+export async function searchWebVideos(query: string): Promise<WebAsset[]> {
+  const key = braveKey();
+  if (!key) return [];
+  try {
+    const url = new URL("https://api.search.brave.com/res/v1/videos/search");
+    url.searchParams.set("q", query);
+    url.searchParams.set("count", "20");
+    const res = await fetch(url, { headers: { ...UA, Accept: "application/json", "X-Subscription-Token": key } });
+    if (!res.ok) return [];
+    const json: any = await res.json();
+    const out: WebAsset[] = [];
+    for (const r of json.results ?? []) {
+      const direct = String(r.properties?.url ?? r.url ?? "");
+      // только прямые видеофайлы; ссылки на страницы плееров не годятся
+      if (!/\.(mp4|webm|mov)(\?|$)/i.test(direct)) continue;
+      out.push({
+        sourceUrl: String(r.url ?? direct),
+        sourceDomain: domainOf(String(r.url ?? direct)),
+        directUrl: direct,
+        title: String(r.title ?? ""),
+        mediaType: "video",
+        retrievalQuery: query,
+        retrievedAt: new Date().toISOString(),
+      });
+    }
+    return out;
+  } catch (e) {
+    console.warn("Видео-поиск:", String(e).slice(0, 120));
+    return [];
+  }
 }
 
 /**
@@ -196,7 +236,7 @@ export function webSearchAvailable(): boolean {
  * официальные аккаунты). Включается ключом BRAVE_API_KEY или SERPER_API_KEY.
  */
 export async function searchWebImages(query: string): Promise<WebAsset[]> {
-  const brave = process.env.BRAVE_API_KEY;
+  const brave = braveKey();
   const serper = process.env.SERPER_API_KEY;
   try {
     if (brave) {
@@ -264,30 +304,39 @@ export async function findWebAssets(
     }
   };
 
-  // 1) конкретный человек — статья Wikipedia надёжнее любого поиска по картинкам
+  // портрет сущности из Wikipedia откладываем в конец: для действий нужно видео,
+  // а фото человека — надёжный запасной вариант
+  let entityFirst: WebAsset[] = [];
   if (options.entity) {
     try {
-      add(await searchWikipediaEntity(options.entity));
+      entityFirst = await searchWikipediaEntity(options.entity);
     } catch (e) {
       console.warn("Wikipedia:", String(e).slice(0, 100));
     }
   }
 
-  for (const q of queries.slice(0, 6)) {
-    if (options.preferVideo) {
-      try {
-        add(await searchWikimedia(q, true));
-      } catch {}
-    }
+  // Видео приоритетнее фотографии для действий: сначала собираем всё видео
+  // по всем запросам, потом уже изображения.
+  for (const q of queries.slice(0, 8)) {
     try {
-      add(await searchWikimedia(q, false));
+      add(await searchWebVideos(q));
     } catch {}
     try {
+      add(await searchWikimedia(q, true));
+    } catch {}
+  }
+  for (const q of queries.slice(0, 8)) {
+    try {
       add(await searchWebImages(q));
+    } catch {}
+    try {
+      add(await searchWikimedia(q, false));
     } catch {}
     try {
       add(await searchOpenverse(q));
     } catch {}
   }
+  // фото конкретного человека — хороший запасной вариант, но после видео
+  if (entityFirst.length) add(entityFirst);
   return out;
 }

@@ -14,7 +14,7 @@ function makeWords(n: number, wordDur = 0.4): Word[] {
 const words = makeWords(150); // ~60 сек
 const duration = 60;
 
-test("EditPlan: валидный B_ROLL проходит, длительность клампится в [2,7]", () => {
+test("EditPlan: валидный B_ROLL проходит, длительность клампится в [1.8, 5]", () => {
   const events = validatePlan(
     [{ type: "B_ROLL", from: 10, to: 11, query: "tiger city" }],
     words,
@@ -22,9 +22,9 @@ test("EditPlan: валидный B_ROLL проходит, длительност
   );
   assert.equal(events.length, 1);
   assert.equal(events[0].type, "B_ROLL");
-  assert.ok(events[0].end - events[0].start >= 2.0 - 0.01);
+  assert.ok(events[0].end - events[0].start >= 1.8 - 0.01);
   const long = validatePlan([{ type: "B_ROLL", from: 10, to: 60, query: "x" }], words, duration);
-  assert.ok(long[0].end - long[0].start <= 7.0 + 0.01);
+  assert.ok(long[0].end - long[0].start <= 5.0 + 0.01);
 });
 
 test("EditPlan: неизвестный тип события отбрасывается (fallback A-roll)", () => {
@@ -49,7 +49,7 @@ test("EditPlan: пересекающиеся события одной доро�
   assert.equal(events.length, 1);
 });
 
-test("EditPlan: лимиты количества (B_ROLL<=8, CALLOUT<=4)", () => {
+test("EditPlan: лимит количества перебивок (<=14)", () => {
   const many = Array.from({ length: 15 }, (_, i) => ({
     type: "B_ROLL",
     from: 5 + i * 9,
@@ -57,7 +57,7 @@ test("EditPlan: лимиты количества (B_ROLL<=8, CALLOUT<=4)", () =
     query: `q${i}`,
   }));
   const events = validatePlan(many as any, makeWords(300), 120);
-  assert.ok(events.filter((e) => e.type === "B_ROLL").length <= 8);
+  assert.ok(events.filter((e) => e.type === "B_ROLL").length <= 14);
 });
 
 test("EditPlan: visualIntent парсится и клампится", () => {

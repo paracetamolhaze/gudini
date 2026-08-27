@@ -126,8 +126,46 @@ const SOURCE_INTENTS: VisualSourceIntent[] = [
  * кадра меняла цвет A-roll), TEXT_CALLOUT отключён (крупная типографика — только на обложке).
  */
 const LIMITS: Record<string, { min: number; max: number; count: number }> = {
-  B_ROLL: { min: 2.0, max: 7.0, count: 8 },
+  // короткие частые вставки: смена визуального состояния каждые ~2.5–4.5 сек
+  B_ROLL: { min: 1.8, max: 5.0, count: 14 },
 };
+
+/**
+ * Сдвигает перебивки так, чтобы они закрывали склейки после чистки речи.
+ * Вырезанная запинка даёт видимый скачок лица (jump cut). Если рядом есть перебивка,
+ * начинаем её чуть раньше склейки и заканчиваем позже — монтаж речи становится незаметен.
+ */
+export function coverSpeechCuts(
+  events: EditEvent[],
+  cutPoints: number[],
+  duration: number,
+  lead = 0.3,
+  tail = 0.3,
+): EditEvent[] {
+  const brolls = events.filter((e) => e.type === "B_ROLL").sort((a, b) => a.start - b.start);
+  for (const t of cutPoints) {
+    if (!Number.isFinite(t) || t <= 0.2 || t >= duration - 0.2) continue;
+    if (brolls.some((b) => b.start <= t - 0.05 && b.end >= t + 0.05)) continue; // уже закрыт
+
+    // ближайшая перебивка, которую разумно растянуть на склейку
+    const after = brolls.find((b) => b.start > t && b.start - t <= 1.6);
+    const before = [...brolls].reverse().find((b) => b.end < t && t - b.end <= 1.6);
+    const candidate = after ?? before;
+    if (!candidate) continue;
+
+    const idx = brolls.indexOf(candidate);
+    const prev = brolls[idx - 1];
+    const next = brolls[idx + 1];
+    if (candidate === after) {
+      const newStart = Math.max(t - lead, prev ? prev.end + 0.1 : 0.2);
+      if (newStart < candidate.start) candidate.start = round2(newStart);
+    } else {
+      const newEnd = Math.min(t + tail, next ? next.start - 0.1 : duration - 0.1);
+      if (newEnd > candidate.end) candidate.end = round2(newEnd);
+    }
+  }
+  return events;
+}
 
 /**
  * Валидация плана от LLM: индексы слов → секунды, клампы длительностей,
@@ -169,7 +207,7 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
       if (raw.event) event.eventName = String(raw.event).slice(0, 100);
       // 3–6 формулировок для фактического поиска; primary query всегда первым
       const queries = Array.isArray(raw.queries) ? raw.queries.map((q) => String(q).trim()).filter(Boolean) : [];
-      event.queries = [...new Set([query, ...queries])].slice(0, 6);
+      event.queries = [...new Set([query, ...queries])].slice(0, 8);
       event.altQueries = Array.isArray(raw.alt) ? raw.alt.map(String).filter(Boolean).slice(0, 3) : [];
       if (raw.intent && typeof raw.intent === "object") {
         event.visualIntent = {
@@ -195,7 +233,7 @@ export function validatePlan(rawEvents: RawPlanEvent[], words: Word[], duration:
   let prevEnd = -Infinity;
   for (const ev of track) {
     if (result.length >= LIMITS.B_ROLL.count) break;
-    if (ev.start < prevEnd + 0.4) continue; // пересечение/впритык
+    if (ev.start < prevEnd + 0.25) continue; // пересечение/впритык
     result.push(ev);
     prevEnd = ev.end;
   }

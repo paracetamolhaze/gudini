@@ -208,6 +208,37 @@ export function segmentsFromCuts(
  * Пересчёт словных таймкодов на чистый таймлайн после вырезки.
  * Слова, попавшие в вырезанные куски, выпадают (и из субтитров тоже).
  */
+/**
+ * Как remapWords, но сохраняет для каждого слова его индекс в исходном списке.
+ * Нужно второму проходу чистки: он планирует по «чистой» транскрипции, а резать
+ * надо по исходному таймлайну.
+ */
+export function remapWordsWithIndex(
+  words: Word[],
+  segments: { start: number; end: number }[],
+): { words: Word[]; srcIndex: number[] } {
+  const out: Word[] = [];
+  const srcIndex: number[] = [];
+  let cum = 0;
+  for (const seg of segments) {
+    const segLen = seg.end - seg.start;
+    words.forEach((w, i) => {
+      const mid = (w.start + w.end) / 2;
+      if (mid >= seg.start && mid < seg.end) {
+        out.push({
+          word: w.word,
+          start: cum + Math.max(0, w.start - seg.start),
+          end: cum + Math.min(segLen, Math.max(0.05, w.end - seg.start)),
+        });
+        srcIndex.push(i);
+      }
+    });
+    cum += segLen;
+  }
+  const order = out.map((_, i) => i).sort((a, b) => out[a].start - out[b].start);
+  return { words: order.map((i) => out[i]), srcIndex: order.map((i) => srcIndex[i]) };
+}
+
 export function remapWords(words: Word[], segments: { start: number; end: number }[]): Word[] {
   const out: Word[] = [];
   let cum = 0;

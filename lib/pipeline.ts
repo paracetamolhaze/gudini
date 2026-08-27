@@ -6,6 +6,7 @@ import {
   edgesFromSilences,
   mechanicalCuts,
   segmentsFromCuts,
+  remapWordsWithIndex,
   remapWords,
   validateCleanupActions,
   CutRegion,
@@ -22,7 +23,7 @@ import { resolveHeadline } from "./coverHeadline";
 import { buildCover } from "./coverPipeline";
 import { fullAiCoverEnabled } from "./coverProvider";
 import type { CoverStatus } from "./store";
-import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE } from "./editPlan";
+import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE, coverSpeechCuts } from "./editPlan";
 
 const running = new Set<string>();
 // флаги читаются в момент вызова — тестируемо и переключаемо без пересборки модуля
@@ -92,9 +93,37 @@ export async function processProject(id: string): Promise<void> {
         if (rawActions) {
           const validated = validateCleanupActions(rawActions, rawWords, silences, duration);
           cuts = validated.cuts;
+          const actions = [...validated.plan.actions];
+
+          // ВТОРОЙ ПРОХОД: первый редко ловит всё. Смотрим на уже почищенную
+          // транскрипцию и ищем оставшиеся повторы, фальстарты и неудачные дубли.
+          // Режем всё одним разом — исходник перекодируется только один раз.
+          try {
+            const clean = remapWordsWithIndex(rawWords, segmentsFromCuts(edges, validated.cuts));
+            const second = await planSpeechCleanup(project.script, clean.words, []);
+            if (second?.length) {
+              const mapped = second
+                .filter((a) => String(a.type) === "REMOVE_FRAGMENT")
+                .map((a) => ({
+                  ...a,
+                  fromWord: clean.srcIndex[Math.trunc(Number(a.fromWord))],
+                  toWord: clean.srcIndex[Math.trunc(Number(a.toWord))],
+                }))
+                .filter((a) => Number.isFinite(a.fromWord) && Number.isFinite(a.toWord));
+              const extra = validateCleanupActions(mapped, rawWords, [], duration);
+              if (extra.cuts.length) {
+                cuts = [...validated.cuts, ...extra.cuts];
+                actions.push(...extra.plan.actions);
+                console.log(`Чистка речи, второй проход: +${extra.cuts.length} фрагментов`);
+              }
+            }
+          } catch (e) {
+            console.warn("Второй проход чистки пропущен:", String(e).slice(0, 120));
+          }
+
           fs.writeFileSync(
             path.join(dir, "speech-cleanup-plan.json"),
-            JSON.stringify(validated.plan, null, 2),
+            JSON.stringify({ version: 1, actions }, null, 2),
             "utf8",
           );
         }
@@ -162,6 +191,11 @@ export async function processProject(id: string): Promise<void> {
       }
     }
     if (plan) {
+      // точки видимых склеек на чистом таймлайне — их надо закрыть перебивками
+      const seamPoints = segments
+        .slice(1)
+        .map((_, i) => segments.slice(0, i + 1).reduce((s, x) => s + (x.end - x.start), 0));
+      plan.events = coverSpeechCuts(plan.events, seamPoints, effDur);
       setStep(id, "Подбор перебивок", 28);
       plan.events = await resolveBrollEvents(dir, plan.events);
     } else {

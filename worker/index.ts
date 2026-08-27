@@ -36,7 +36,7 @@ async function api(pathname: string, init: RequestInit = {}): Promise<any> {
   return res.json();
 }
 
-/** Подтягивает reference-фото стримера с сайта (для ИИ-обложек); отсутствие — не ошибка. */
+/** Подтягивает reference-фото и cover-шрифт с сайта; отсутствие — не ошибка. */
 async function syncFace(): Promise<void> {
   try {
     const res = await fetch(`${SITE}/api/settings/face`, { headers: { Authorization: AUTH } });
@@ -45,6 +45,15 @@ async function syncFace(): Promise<void> {
     if (buffer.length > 1000) {
       fs.mkdirSync(path.join(process.cwd(), "data"), { recursive: true });
       fs.writeFileSync(path.join(process.cwd(), "data", "face.jpg"), buffer);
+    }
+  } catch {}
+  try {
+    const res = await fetch(`${SITE}/api/settings/coverfont`, { headers: { Authorization: AUTH } });
+    if (!res.ok) return;
+    const name = res.headers.get("x-font-name") ?? "coverfont.ttf";
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > 1000) {
+      fs.writeFileSync(path.join(process.cwd(), "data", name.endsWith(".otf") ? "coverfont.otf" : "coverfont.ttf"), buffer);
     }
   } catch {}
 }

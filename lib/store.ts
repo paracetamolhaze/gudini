@@ -88,6 +88,17 @@ export function hasFace(): boolean {
   }
 }
 
+/** Пользовательский шрифт заголовков обложек (Settings → Cover Font). */
+export function coverFontFile(): string | null {
+  for (const name of ["coverfont.ttf", "coverfont.otf"]) {
+    const p = path.join(DATA_DIR, name);
+    try {
+      if (fs.statSync(p).size > 0) return p;
+    } catch {}
+  }
+  return null;
+}
+
 function ensureDirs() {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }

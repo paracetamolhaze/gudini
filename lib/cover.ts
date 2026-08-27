@@ -8,6 +8,7 @@ import {
   breakHeadline,
   computeLayout,
   buildCoverHeadlineAss,
+  resolveCoverFontFile,
   CoverLayout,
 } from "./coverLayout";
 
@@ -39,14 +40,17 @@ export type CoverConcept = {
   design_notes: string[];
 };
 
-// Фирменный стиль — ОДИН на все обложки (единый бренд, без случайного дизайна)
+// Фирменный стиль v3 — ОДИН на все обложки: настоящая фотография, не AI-арт
 const STYLE_SUFFIX =
-  "Cinematic editorial dramatic documentary photography, realistic, high contrast, moody atmospheric " +
-  "light, premium viral short-form cover aesthetic, clean composition. No glow, no neon, no cartoon, " +
-  "no plastic skin, no sci-fi UI unless the topic demands it. " +
-  "IMPORTANT: no text, letters or captions anywhere; the lower 35% of the frame must stay relatively " +
-  "clean and less detailed (a large headline will be placed there later), but not empty-looking; " +
-  "face and key story objects in the upper and middle sections.";
+  "REAL PHOTOGRAPH: professional photo composite for a viral vertical thumbnail, shot on a cinema camera, " +
+  "85mm lens look, tack-sharp focus on the eyes, natural skin texture with visible pores, realistic " +
+  "individual hair strands, realistic dramatic lighting, professional key-art retouch, high local detail. " +
+  "Simple composition: one person, one main story object, one environment — nothing else. " +
+  "Strictly NOT: digital painting, illustration, CGI, fantasy AI art, videogame poster, HDR, glow, neon, " +
+  "plastic skin, particles, sci-fi UI. " +
+  "ABSOLUTELY NO readable text, letters, numbers, logos, labels, watermarks or UI elements anywhere. " +
+  "Face and story object in the upper and middle sections; the lower 35% of the frame relatively clean " +
+  "and less detailed (a large headline goes there later), but not empty-looking.";
 
 const CONCEPT_SYSTEM = `Ты — арт-директор viral short-form контента (Gudini Cover Design System).
 По теме и сценарию придумай обложку: ОГРОМНОЕ ЛИЦО + ЭМОЦИЯ + СЮЖЕТ + ОГРОМНЫЙ КРИЧАЩИЙ HEADLINE.
@@ -55,15 +59,17 @@ const CONCEPT_SYSTEM = `Ты — арт-директор viral short-form кон
 визуальный символ для фона.
 
 headlineLines: 2–4 строки по 1–3 КОРОТКИХ слова, стиль «80 ЛЕТ / СПУСТЯ», «ПРЫЖОК / ЦЕНОЙ / ЖИЗНИ»,
-«РАВЕНСТВО / КОНЧИЛОСЬ». Одна смысловая строка accent:true (будет жёлтой), остальные белые.
-Длинную мысль сокращай до удара. kicker — необязательная микро-метка 1-2 слова («РАЗБОР», «ШОК»).
+«РАВЕНСТВО / КОНЧИЛОСЬ». Грамматика обязана быть безупречной («ВО ДВОРЕ», не «В ДВОРЕ»).
+accent одной смысловой строки: "yellow" (жёлтые буквы) или "box" (жёлтая плашка, чёрные буквы —
+для самого ударного короткого слова), остальные false (белые). kicker — микро-метка 1-2 слова.
 
 image_prompt — на английском, ТОЛЬКО сюжетная часть (стиль добавит система): the person @streamer
 from the reference photo is the identity reference (preserve likeness, facial structure, hairstyle,
-age, defining features; expression/pose/clothing/lighting MUST change to fit the story — never copy
-the reference pose), large chest-up portrait with [эмоция], background story elements [конкретика темы].
+age, defining features, ethnicity; expression/pose/clothing/lighting MUST change to fit the story —
+never copy the reference pose), large chest-up portrait with [эмоция]. Сцена ПРОСТАЯ: ровно ОДИН
+главный сюжетный объект + одно окружение, без нагромождения символов.
 Безопасно (PG-13): угрозу передавай атмосферой (силуэт вдали, туман, свет), не прямой опасностью.
-Не длиннее 700 символов.
+Не длиннее 600 символов.
 
 composition: facePosition left|center|right (смещай от центра, если сюжету лучше), faceScale
 large|very_large, headlineArea всегда "lower".
@@ -210,23 +216,40 @@ export async function generateAiCover(
 
   const download = await fetch(imageUrl);
   if (!download.ok) throw new Error(`DOWNLOAD_FAILED: ${download.status}`);
-  fs.writeFileSync(path.join(dir, "cover_art.png"), Buffer.from(await download.arrayBuffer()));
+  const artBuffer = Buffer.from(await download.arrayBuffer());
+  fs.writeFileSync(path.join(dir, "cover_art.png"), artBuffer);
+
+  // диагностика исходника генератора
+  try {
+    const art = await probe(path.join(dir, "cover_art.png"));
+    console.log(
+      `generated source: provider=runway gen4_image | width=${art.width} | height=${art.height} | filesize=${artBuffer.length} bytes`,
+    );
+  } catch {}
+
+  // --- lossless-постобработка ДО текста: композиция 1080×1920 + мягкий photographic finishing ---
+  // (один resize lanczos, лёгкий шарп для глаз/волос, чуть локального контраста; PNG — без потерь)
+  await runFfmpeg(
+    [
+      "-i", "cover_art.png",
+      "-vf",
+      "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920," +
+        "unsharp=5:5:0.55:5:5:0.0,eq=contrast=1.03:saturation=1.02",
+      "-frames:v", "1",
+      "cover_base.png",
+    ],
+    { cwd: dir },
+  );
 
   // --- фирменный текстовый слой (шрифт кладём рядом: ass fontsdir) ---
   const layout = computeLayout(concept.headlineLines);
   fs.writeFileSync(path.join(dir, "cover-text.ass"), buildCoverHeadlineAss(layout, concept.kicker), "utf8");
   fs.mkdirSync(path.join(dir, "fonts"), { recursive: true });
-  fs.copyFileSync(
-    path.join(process.cwd(), "fonts", "Oswald-Bold.ttf"),
-    path.join(dir, "fonts", "Oswald-Bold.ttf"),
-  );
+  const fontSrc = resolveCoverFontFile();
+  fs.copyFileSync(fontSrc.file, path.join(dir, "fonts", path.basename(fontSrc.file)));
+  // финальный энкод — максимальное качество JPEG (без промежуточных jpeg-пережатий)
   await runFfmpeg(
-    [
-      "-i", "cover_art.png",
-      "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,ass=cover-text.ass:fontsdir=fonts",
-      "-frames:v", "1", "-q:v", "2",
-      "cover.jpg",
-    ],
+    ["-i", "cover_base.png", "-vf", "ass=cover-text.ass:fontsdir=fonts", "-frames:v", "1", "-q:v", "1", "cover.jpg"],
     { cwd: dir },
   );
   return { ok: true, layout };

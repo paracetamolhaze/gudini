@@ -1,84 +1,115 @@
+import fs from "fs";
+import path from "path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { breakHeadline, computeLayout, measureText, buildCoverHeadlineAss } from "../lib/coverLayout";
+import {
+  breakHeadline,
+  computeLayout,
+  buildCoverHeadlineAss,
+  checkGlyphCoverage,
+  measureInk,
+} from "../lib/coverLayout";
 
-test("Layout: самая широкая строка занимает 85–94% ширины кадра", () => {
-  const lines = breakHeadline(
-    [
-      { text: "РАВЕНСТВО", accent: false },
-      { text: "КОНЧИЛОСЬ", accent: true },
-    ],
-    "",
+test("Layout v3: основные строки тянутся к ~93% ширины (ink-метрика)", () => {
+  const layout = computeLayout(
+    breakHeadline([{ text: "РАВЕНСТВО", accent: false }, { text: "КОНЧИЛОСЬ", accent: "yellow" }], ""),
   );
-  const layout = computeLayout(lines);
-  assert.ok(layout.widthRatio >= 0.85 && layout.widthRatio <= 0.94, `widthRatio=${layout.widthRatio}`);
+  assert.ok(layout.maxWidthRatio >= 0.85 && layout.maxWidthRatio <= 0.94, `ratio=${layout.maxWidthRatio}`);
+  // обе основные строки широкие, не «узкий столбик»
+  for (const l of layout.lines) {
+    assert.ok(l.inkWidth / 1080 >= 0.8, `${l.text}: ${l.inkWidth}`);
+  }
 });
 
-test("Layout: динамический размер — 2 короткие строки крупнее, чем 4", () => {
-  const two = computeLayout(breakHeadline([{ text: "80 ЛЕТ", accent: false }, { text: "СПУСТЯ", accent: true }], ""));
-  const four = computeLayout(
+test("Layout v3: построчные размеры — короткая строка крупнее длинной", () => {
+  const layout = computeLayout(
+    breakHeadline([{ text: "ГЕНЫ", accent: false }, { text: "ЗАКАЗАНЫ", accent: "yellow" }], ""),
+  );
+  const [short, long] = layout.lines;
+  assert.ok(short.fontSize > long.fontSize, `${short.fontSize} vs ${long.fontSize}`);
+  // и при этом обе почти во всю ширину
+  assert.ok(short.inkWidth / 1080 >= 0.8 && long.inkWidth / 1080 >= 0.8);
+});
+
+test("Layout v3: служебное слово («НА») — намеренно мелкое, а не во всю ширину", () => {
+  const layout = computeLayout(
     breakHeadline(
       [
-        { text: "ПРЫЖОК", accent: false },
-        { text: "ЦЕНОЙ", accent: true },
-        { text: "ЖИЗНИ", accent: false },
-        { text: "СЕГОДНЯ", accent: false },
+        { text: "ГЕНЫ", accent: false },
+        { text: "НА", accent: false },
+        { text: "ЗАКАЗ", accent: "yellow" },
       ],
       "",
     ),
   );
-  assert.ok(two.fontSize > four.fontSize, `${two.fontSize} vs ${four.fontSize}`);
-  assert.ok(four.fontSize >= 110, "даже 4 строки остаются крупными");
+  const na = layout.lines[1];
+  assert.ok(na.connector);
+  assert.ok(na.fontSize < layout.lines[0].fontSize * 0.5, `НА=${na.fontSize} vs ${layout.lines[0].fontSize}`);
+  // основные строки остаются огромными
+  assert.ok(layout.lines[0].inkWidth / 1080 >= 0.8);
+  assert.ok(layout.lines[2].inkWidth / 1080 >= 0.8);
 });
 
-test("Layout: блок занимает 25–40% высоты и не вылезает за safe-низ", () => {
+test("Layout v3: блок ≤42% высоты, низ в safe-зоне, строки плотные", () => {
   const layout = computeLayout(
-    breakHeadline([{ text: "МУРАШКИ", accent: false }, { text: "ОТ ТРЕЙЛЕРА", accent: true }], ""),
+    breakHeadline(
+      [
+        { text: "ПРЫЖОК", accent: false },
+        { text: "ЦЕНОЙ", accent: "box" },
+        { text: "ЖИЗНИ", accent: false },
+      ],
+      "",
+    ),
   );
-  assert.ok(layout.heightRatio <= 0.4 + 0.001, `height=${layout.heightRatio}`);
-  const lastBottom = layout.lines[layout.lines.length - 1].y + layout.fontSize;
-  assert.ok(lastBottom <= 1920 - 100, `низ блока ${lastBottom}`);
+  assert.ok(layout.heightRatio <= 0.42 + 0.001, `height=${layout.heightRatio}`);
+  const last = layout.lines[layout.lines.length - 1];
+  assert.ok(last.y + last.fontSize <= 1920 - 90, `низ=${last.y + last.fontSize}`);
+  // межстрочный шаг = 0.84 размера строки (строки почти сцепляются)
+  const gap = layout.lines[1].y - layout.lines[0].y;
+  assert.ok(Math.abs(gap - layout.lines[0].fontSize * 0.84) <= 2, `gap=${gap}`);
 });
 
-test("Layout: одна длинная строка автоматически бьётся на 2 сбалансированные", () => {
-  const lines = breakHeadline(null, "РАВЕНСТВО КОНЧИЛОСЬ НАВСЕГДА");
-  assert.equal(lines.length, 2);
-  const w0 = measureText(lines[0].text, 100);
-  const w1 = measureText(lines[1].text, 100);
-  assert.ok(Math.abs(w0 - w1) / Math.max(w0, w1) < 0.6, "строки примерно сбалансированы");
-});
-
-test("Layout: без явного акцента жёлтой становится последняя строка", () => {
-  const lines = breakHeadline(null, "ЕГО ИМЯ\nУЖЕ В НЕБЕ");
-  assert.equal(lines[0].accent, false);
-  assert.equal(lines[1].accent, true);
-});
-
-test("ASS: акцентная строка жёлтая, обычная белая, kicker присутствует", () => {
+test("ASS v3: box-акцент — жёлтая плашка с чёрным текстом, yellow — жёлтые буквы, scaleX применён", () => {
   const layout = computeLayout([
     { text: "ПРЫЖОК", accent: false },
-    { text: "ЦЕНОЙ ЖИЗНИ", accent: true },
+    { text: "ЦЕНОЙ", accent: "box" },
+    { text: "ЖИЗНИ", accent: "yellow" },
   ]);
-  const ass = buildCoverHeadlineAss(layout, "РАЗБОР");
+  const ass = buildCoverHeadlineAss(layout);
   const lines = ass.split("\n").filter((l) => l.startsWith("Dialogue:"));
-  assert.equal(lines.length, 3); // kicker + 2 строки
-  assert.ok(lines[0].includes("РАЗБОР"));
-  assert.ok(!lines[1].includes("\\c&H00D7FF&"), "белая строка без жёлтого");
-  assert.ok(lines[2].includes("\\c&H00D7FF&"), "акцентная строка жёлтая");
-  assert.ok(ass.includes("Oswald"), "фирменный шрифт");
+  assert.ok(lines[1].includes("HeadBox") && lines[1].includes("\\1c&H000000&"), "box: чёрный текст");
+  assert.ok(lines[1].includes("\\3c&H00D7FF&"), "box: жёлтая плашка");
+  assert.ok(lines[2].includes("\\1c&H00D7FF&"), "yellow-строка");
+  assert.ok(!lines[0].includes("\\1c&H00D7FF&"), "белая строка");
+  assert.ok(ass.includes(`\\fscx${layout.scaleX}`), "горизонтальное сжатие только текстового слоя");
 });
 
-test("Layout: максимум 4 строки, мусорные символы вычищаются", () => {
-  const lines = breakHeadline(
-    [
-      { text: "раз{}", accent: false },
-      { text: "два\\", accent: false },
-      { text: "три", accent: false },
-      { text: "четыре", accent: false },
-      { text: "пять", accent: false },
-    ],
+test("Glyph check: Montserrat Black покрывает АБВГД/абвгд/цифры/$%", () => {
+  const buf = fs.readFileSync(path.join(process.cwd(), "fonts", "Montserrat-Black.ttf"));
+  const res = checkGlyphCoverage(buf);
+  assert.ok(res.ok, `missing: ${res.missing}`);
+});
+
+test("Glyph check: латинский шрифт без кириллицы отклоняется", () => {
+  const buf = fs.readFileSync(path.join(process.cwd(), "fonts", "Anton-Regular.ttf"));
+  const res = checkGlyphCoverage(buf);
+  assert.equal(res.ok, false);
+  assert.ok(res.missing.includes("А"));
+});
+
+test("breakHeadline: одна строка бьётся на 2, авто-акцент последней; максимум 4 строки", () => {
+  const two = breakHeadline(null, "РАВЕНСТВО КОНЧИЛОСЬ НАВСЕГДА");
+  assert.equal(two.length, 2);
+  assert.equal(two[1].accent, "yellow");
+  const many = breakHeadline(
+    ["А", "Б", "В", "Г", "Д"].map((t) => ({ text: t, accent: false as const })),
     "",
   );
-  assert.equal(lines.length, 4);
-  assert.equal(lines[0].text, "РАЗ");
+  assert.equal(many.length, 4);
+});
+
+test("measureInk: ink-ширина положительна и меньше advance для строки с пробелом на конце", () => {
+  const ink = measureInk("ПРЫЖОК ", 100);
+  assert.ok(ink.width > 0);
+  assert.ok(ink.width < ink.advance, "хвостовой пробел не входит в ink");
 });

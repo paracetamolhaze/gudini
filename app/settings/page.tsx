@@ -12,6 +12,7 @@ type SettingsView = {
   runwayKey: string;
   music: boolean;
   face: boolean;
+  coverFont: boolean;
   googleClientId: string;
   googleClientSecret: string;
   tiktokClientKey: string;
@@ -153,6 +154,50 @@ function Settings() {
                 const res = await fetch("/api/settings/face", { method: "POST", body: form });
                 if (res.ok) setS((prev) => (prev ? { ...prev, face: true } : prev));
                 else setError("Не удалось загрузить фото");
+              }}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>🅰 Шрифт обложек (Cover Font)</h2>
+        <p className="hint">
+          Загрузите свой дисплейный шрифт (.ttf/.otf, с кириллицей — например Druk Cyr Condensed, если у вас
+          есть лицензия) — он станет главным шрифтом заголовков всех обложек. Без него используется встроенный
+          Montserrat Black с фирменным сжатием.
+        </p>
+        <div className="row" style={{ marginTop: 10 }}>
+          {s.coverFont ? (
+            <>
+              <span className="badge success">Свой шрифт загружен ✓</span>
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={async () => {
+                  await fetch("/api/settings/coverfont", { method: "DELETE" });
+                  setS((prev) => (prev ? { ...prev, coverFont: false } : prev));
+                }}
+              >
+                Удалить
+              </button>
+            </>
+          ) : (
+            <span className="badge">Свой шрифт не загружен — используется встроенный</span>
+          )}
+          <label className="btn btn-secondary btn-sm" style={{ margin: 0, cursor: "pointer" }}>
+            🅰 {s.coverFont ? "Заменить шрифт" : "Загрузить шрифт"}
+            <input
+              type="file"
+              accept=".ttf,.otf"
+              hidden
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const form = new FormData();
+                form.append("file", file);
+                const res = await fetch("/api/settings/coverfont", { method: "POST", body: form });
+                if (res.ok) setS((prev) => (prev ? { ...prev, coverFont: true } : prev));
+                else setError((await res.json().catch(() => ({}))).error ?? "Не удалось загрузить шрифт");
               }}
             />
           </label>

@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE } from "./store";
+import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE, getSettings } from "./store";
 import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences, detectBlackNear } from "./ffmpeg";
 import {
   edgesFromSilences,
@@ -17,6 +17,8 @@ import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
 import { planEdit } from "./editPlanner";
 import { generateCoverConcept, generateAiCover } from "./cover";
+import { buildCover, CoverPipelineResult } from "./coverPipeline";
+import { fullAiCoverEnabled } from "./coverProvider";
 import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE } from "./editPlan";
 
 const running = new Set<string>();
@@ -200,9 +202,19 @@ export async function processProject(id: string): Promise<void> {
         console.warn("Cover fallback: INVALID_CONCEPT — концепт не сгенерировался/не распарсился");
       } else {
         fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
-        const result = await generateAiCover(dir, concept);
-        if (result.ok) cover = "cover.jpg";
-        else console.warn(`Cover fallback: ${result.reason}`);
+        // Hybrid Cover Pipeline (FULL_AI + QC + фолбэк на рендерер).
+        // FULL_AI_COVER=false — мгновенный откат на прежний путь (Runway + рендерер).
+        const useHybrid = fullAiCoverEnabled() && !!getSettings().openrouterKey;
+        const result = useHybrid ? await buildCover(dir, concept) : await generateAiCover(dir, concept);
+        if (result.ok) {
+          cover = "cover.jpg";
+          if (useHybrid) {
+            const r = result as CoverPipelineResult;
+            console.log(
+              `Cover: mode=${r.mode} attempts=${r.attempts} qc=${r.qc} fallback=${r.fallbackUsed} cost=$${r.cost.total}`,
+            );
+          }
+        } else console.warn(`Cover fallback: ${result.reason}`);
       }
     } catch (e: any) {
       // причины в кодах: NO_REFERENCE | RUNWAY_ERROR | MODERATION_REJECT | DOWNLOAD_FAILED

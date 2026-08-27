@@ -41,6 +41,34 @@
 | OPENAI_API_KEY | Запасное распознавание (Whisper) | опционально |
 | PEXELS_API_KEY / PIXABAY_API_KEY | Стоковые видео для перебивок | бесплатные |
 | RUNWAY_API_KEY | ИИ-генерация перебивок (gen4_image → gen4_turbo), ~$0.30/клип | опционально |
+| OPENROUTER | Обложки: Gemini Flash Image (~$0.068/шт) | /api/v1/chat/completions |
+
+## Обложки — Hybrid Cover Pipeline (lib/coverPipeline.ts)
+
+Флаг `FULL_AI_COVER=true` (kill switch: `false` → прежний путь Runway + рендерер),
+провайдер `FULL_AI_COVER_MODEL=google/gemini-3.1-flash-image` (выбран по бенчмарку: 6/6 точных
+кириллических заголовков против двух дефектов у Pro, вдвое дешевле; Pro автоматически не используется).
+
+```
+Claude-концепт (короткий ударный headline) → selectTypographyMode()
+  ├─ FULL_AI       Flash рисует лицо+сцену+типографику → QC Gate
+  │                  PASS → cover.jpg
+  │                  FAIL → ОДИН retry с feedback → QC → PASS → cover.jpg
+  │                                                  FAIL ↓
+  └─ RENDERER_TEXT Flash рисует картинку БЕЗ букв → детерминированный слой (coverLayout)
+```
+
+- **Селектор** (`lib/coverTypography.ts`): в рендерер уходят заголовки с валютой/процентами, числом
+  длиннее двух цифр, несколькими числами, спецсимволами, >5 слов, >4 строк, >24 букв или с двумя+
+  служебными связками. Короткие ударные («ДЕТИ / НА ЗАКАЗ / БОГАТЫМ») идут в FULL_AI.
+- **QC Gate** (`lib/coverQc.ts`): vision-проверка (Haiku 4.5, ~$0.002) — сверяет нормализованный текст
+  с headline, ловит придуманные моделью надписи (реальный дефект: «ТОЛШИЙ ШИНСВ» поверх верного
+  заголовка), нечитаемость, провалы личности/анатомии. Отсутствие кикера допустимо, кикер между
+  строками заголовка — валидная вёрстка. QC недоступен → сразу безопасный фолбэк.
+- **Фолбэк никогда не кладёт текст поверх забракованной картинки** — генерируется чистое изображение.
+- Артефакты проекта: `cover-concept.json`, `cover-mode.json`, `cover-attempt-N.png`, `cover-qc-N.json`,
+  `cover-clean-base.png`, `cover.jpg`. Статистика по всем обложкам — `data/cover-stats.json`.
+- Цена: PASS с первой ~$0.070, с retry ~$0.139, фолбэк ~$0.205.
 
 Без ключей всё работает в демо-режиме (шаблонный сценарий, субтитры по тексту, без перебивок). Себестоимость ролика с ключами: ~5–7 центов (сценарий Opus ~3–4 ц. однократно, монтаж ~2 ц.).
 
@@ -55,7 +83,7 @@
 ## Структура кода
 
 - `app/` — страницы (главная-дашборд, project/[id] — степпер Сценарий→Съёмка(телесуфлёр+запись MediaRecorder)→Монтаж→Публикация, settings, login, terms, privacy) и API-маршруты (`app/api/...`).
-- `lib/` — store.ts (JSON-хранилище, настройки), pipeline.ts (монтаж), ffmpeg.ts, transcribe.ts, subtitles.ts, broll.ts, ai.ts, publish.ts, origin.ts (адрес за прокси), workerState.ts (файл-отметка «воркер в сети»).
+- `lib/` — store.ts (JSON-хранилище, настройки), pipeline.ts (монтаж), ffmpeg.ts, transcribe.ts, subtitles.ts, broll.ts, ai.ts, publish.ts, origin.ts (адрес за прокси), workerState.ts (файл-отметка «воркер в сети»), обложки: coverPipeline.ts (гибрид), coverTypography.ts (селектор), coverQc.ts (QC-гейт), coverProvider.ts (Gemini Flash + ffmpeg-финиш), coverPrompt.ts, coverLayout.ts, coverStats.ts.
 - `worker/index.ts` — воркер (tsx), использует те же lib/.
 - `middleware.ts` — парольная защита (cookie после /login + Basic auth), публичные пути: /terms, /privacy, /login, отдача видео; отдача TikTok-верификации из env TIKTOK_VERIFY_CONTENT.
 - `Dockerfile` (сайт, Railway), `Dockerfile.worker` + `docker-compose.yml` (воркер на ПК).

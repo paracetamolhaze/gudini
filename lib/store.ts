@@ -19,6 +19,9 @@ export type Publication = {
   at: string;
 };
 
+/** ok — обложка прошла QC; failed — три Full-AI попытки не прошли (подмены не делаем). */
+export type CoverStatus = "ok" | "failed";
+
 export type ProjectMeta = {
   title: string;
   description: string;
@@ -35,8 +38,9 @@ export type Project = {
   processedVideo: string | null;
   processing: ProcessingState;
   subtitlesSource?: "scribe" | "whisper" | "script";
-  cover?: string | null; // cover.jpg — обложка с заголовком
-  coverOffsetSec?: number; // момент видео, из которого взят кадр обложки
+  cover?: string | null; // cover.jpg — Full-AI обложка, прошедшая QC (иначе null)
+  coverStatus?: CoverStatus; // failed — три попытки не прошли QC, нужна перегенерация
+  coverOffsetSec?: number; // устарело: кадр из видео больше не используется как обложка
   brollCount?: number; // сколько б-ролл перебивок вошло в монтаж
   meta: ProjectMeta | null;
   publications: Publication[];

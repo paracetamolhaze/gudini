@@ -3,11 +3,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
 
 /**
- * QC Gate обложки: ни одна Full-AI обложка не публикуется без проверки.
- * Главный ловимый дефект — ПРИДУМАННЫЙ моделью текст (реальный случай: при верном
+ * QC Gate — обязательная часть Full-AI пайплайна (не фолбэк).
+ * Проверяет: точный headline, отсутствие лишнего читаемого текста, читаемость,
+ * узнаваемость лица, анатомию и критические визуальные артефакты.
+ * Главный ловимый дефект — придуманный моделью текст (реальный случай: при верном
  * «ТИГР / У ДОМА» модель дорисовала мусорную строку «ТОЛШИЙ ШИНСВ»).
- * Решение принимает vision-модель (обычный OCR врёт на condensed/стилизованной
- * типографике), но вердикт мы пересчитываем сами по нормализованному тексту.
+ * Решение принимает vision-модель (OCR врёт на condensed-типографике), но вердикт
+ * по тексту мы пересчитываем сами по нормализованному сравнению.
  */
 
 export type CoverQcStatus =
@@ -17,24 +19,29 @@ export type CoverQcStatus =
   | "UNREADABLE_TEXT"
   | "IDENTITY_PROBLEM"
   | "ANATOMY_PROBLEM"
+  | "VISUAL_ARTIFACTS"
   | "QC_UNAVAILABLE";
 
 export type CoverQcResult = {
   status: CoverQcStatus;
+  pass: boolean;
   extractedText?: string[];
+  extraText?: string[];
+  visualArtifacts?: string[];
   reasons: string[];
   confidence: number;
   cost?: number;
 };
 
-/** Сырой ответ vision-модели (schema из спеки). */
+/** Сырой ответ vision-модели. */
 export type CoverQcRaw = {
   readableText?: unknown;
   headlineMatch?: unknown;
   extraText?: unknown;
   textReadable?: unknown;
-  obviousIdentityFailure?: unknown;
-  obviousAnatomyFailure?: unknown;
+  identityOk?: unknown;
+  anatomyOk?: unknown;
+  visualArtifacts?: unknown;
   confidence?: unknown;
 };
 
@@ -43,10 +50,7 @@ const HOMOGLYPHS: Record<string, string> = {
   A: "А", B: "В", E: "Е", K: "К", M: "М", H: "Н", O: "О", P: "Р", C: "С", T: "Т", X: "Х", Y: "У",
 };
 
-/**
- * Нормализация для сравнения: регистр, переносы строк, кавычки, несмысловая
- * пунктуация и layout не учитываются. Валюта/проценты/стрелки — учитываются.
- */
+/** Нормализация для сравнения: регистр, переносы, кавычки и layout не учитываются. */
 export function normalizeCoverText(input: string): string {
   return String(input ?? "")
     .toUpperCase()
@@ -54,7 +58,7 @@ export function normalizeCoverText(input: string): string {
     .replace(/Ё/g, "Е")
     .replace(/[A-Z]/g, (c) => HOMOGLYPHS[c] ?? c)
     .replace(/[.,!?:;…]/g, " ")
-    .replace(/[\r\n \t]+/g, " ")
+    .replace(/[\r\n \t]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -65,16 +69,16 @@ function words(text: string): string[] {
 
 /**
  * Пересчёт вердикта по ответу модели. Чистая функция — тестируется без сети.
- * PASS: headline совпал, лишнего текста нет, текст читаем, нет провала личности/анатомии.
- * Отсутствие kicker'а допустимо; неправильный kicker попадёт в extraText → FAIL.
+ * Любой FAIL ведёт к повторной Full-AI генерации, а не к другому способу сборки обложки.
  */
 export function evaluateQc(
   raw: CoverQcRaw,
   expectedHeadline: string,
-  expectedKicker?: string,
+  expectedKicker?: string | null,
 ): CoverQcResult {
   const readable = Array.isArray(raw.readableText) ? raw.readableText.map((t) => String(t)) : [];
   const confidence = typeof raw.confidence === "number" ? Math.max(0, Math.min(1, raw.confidence)) : 0.5;
+  const artifacts = Array.isArray(raw.visualArtifacts) ? raw.visualArtifacts.map(String).filter((a) => a.trim()) : [];
   const reasons: string[] = [];
 
   const joined = normalizeCoverText(readable.join(" "));
@@ -82,59 +86,77 @@ export function evaluateQc(
   // kicker-плашка часто встаёт МЕЖДУ строками заголовка («ТИГР / ЧП В ГОРОДЕ / У ДОМА») —
   // это валидная вёрстка, поэтому перед проверкой убираем точные вхождения кикера
   const kicker = expectedKicker ? normalizeCoverText(expectedKicker) : "";
-  const withoutKicker = kicker
-    ? joined.split(kicker).join(" ").replace(/\s+/g, " ").trim()
-    : joined;
+  const withoutKicker = kicker ? joined.split(kicker).join(" ").replace(/\s+/g, " ").trim() : joined;
   const headlineFound = headline.length > 0 && withoutKicker.includes(headline);
 
-  // лишний текст: слова, которых нет ни в headline, ни в kicker
   const allowed = new Set([...words(expectedHeadline), ...(expectedKicker ? words(expectedKicker) : [])]);
-  const strayWords = readable
-    .flatMap((line) => words(line))
-    .filter((w) => !allowed.has(w));
+  const strayWords = readable.flatMap((line) => words(line)).filter((w) => !allowed.has(w));
   const modelExtra = Array.isArray(raw.extraText) ? raw.extraText.map(String).filter((t) => t.trim()) : [];
+  const strayList = [...new Set([...strayWords, ...modelExtra.map((t) => normalizeCoverText(t))])].filter(Boolean);
+
+  const fail = (status: CoverQcStatus): CoverQcResult => ({
+    status,
+    pass: false,
+    extractedText: readable,
+    extraText: strayList,
+    visualArtifacts: artifacts,
+    reasons,
+    confidence,
+  });
 
   if (raw.textReadable === false) {
-    reasons.push("модель не смогла разобрать текст на обложке");
-    return { status: "UNREADABLE_TEXT", extractedText: readable, reasons, confidence };
+    reasons.push("текст на обложке нечитаем");
+    return fail("UNREADABLE_TEXT");
   }
   if (!headlineFound) {
     reasons.push(
       `headline не совпал: ожидалось «${headline}», на обложке «${withoutKicker || "— текста не найдено —"}»`,
     );
-    return { status: "TEXT_MISMATCH", extractedText: readable, reasons, confidence };
+    return fail("TEXT_MISMATCH");
   }
-  if (strayWords.length || modelExtra.length) {
-    const found = [...new Set([...strayWords, ...modelExtra.map((t) => normalizeCoverText(t))])].filter(Boolean);
-    reasons.push(`лишний текст на обложке: ${found.join(", ")}`);
-    return { status: "EXTRA_TEXT", extractedText: readable, reasons, confidence };
+  if (strayList.length) {
+    reasons.push(`лишний текст на обложке: ${strayList.join(", ")}`);
+    return fail("EXTRA_TEXT");
   }
-  if (raw.obviousIdentityFailure === true) {
-    reasons.push("лицо не похоже на reference-фото");
-    return { status: "IDENTITY_PROBLEM", extractedText: readable, reasons, confidence };
+  if (raw.identityOk === false) {
+    reasons.push("лицо недостаточно похоже на reference-фото");
+    return fail("IDENTITY_PROBLEM");
   }
-  if (raw.obviousAnatomyFailure === true) {
+  if (raw.anatomyOk === false) {
     reasons.push("грубая анатомическая ошибка");
-    return { status: "ANATOMY_PROBLEM", extractedText: readable, reasons, confidence };
+    return fail("ANATOMY_PROBLEM");
   }
-  return { status: "PASS", extractedText: readable, reasons, confidence };
+  if (artifacts.length) {
+    reasons.push(`визуальные артефакты: ${artifacts.join(", ")}`);
+    return fail("VISUAL_ARTIFACTS");
+  }
+  return {
+    status: "PASS",
+    pass: true,
+    extractedText: readable,
+    extraText: [],
+    visualArtifacts: [],
+    reasons: [],
+    confidence,
+  };
 }
 
 const QC_SYSTEM =
   "Ты — контролёр качества обложек. Смотри на изображение и отвечай СТРОГО одним JSON-объектом, без пояснений.";
 
-function qcPrompt(headline: string, kicker?: string): string {
+function qcPrompt(headline: string, kicker?: string | null): string {
   return (
     `Expected headline:\n"${headline}"\n\n` +
-    (kicker ? `Expected optional kicker:\n"${kicker}"\n\n` : "") +
+    (kicker ? `Expected optional kicker:\n"${kicker}"\n\n` : "No kicker is expected.\n\n") +
     "Inspect this cover image.\n\n" +
     "Return JSON only:\n" +
     '{"readableText":["<every clearly readable text block, top to bottom, verbatim>"],' +
     '"headlineMatch":<true if the headline appears with exactly this wording and spelling>,' +
     '"extraText":["<any readable text that is NOT part of the headline or kicker>"],' +
-    '"textReadable":<true if the lettering is clean and legible>,' +
-    '"obviousIdentityFailure":<true only if the face is clearly a different person or badly distorted>,' +
-    '"obviousAnatomyFailure":<true only if there is an obvious anatomical defect>,' +
+    '"textReadable":<true if the lettering is clean and legible at thumbnail size>,' +
+    '"identityOk":<false only if the face is clearly a different person or badly distorted>,' +
+    '"anatomyOk":<false only if there is an obvious anatomical defect>,' +
+    '"visualArtifacts":["<only severe defects that ruin the cover>"],' +
     '"confidence":<0..1>}\n\n' +
     "Report gibberish or invented pseudo-words as extraText. Ignore tiny illegible texture noise."
   );
@@ -142,17 +164,19 @@ function qcPrompt(headline: string, kicker?: string): string {
 
 // Haiku 4.5 — дешёвый multimodal: QC не должен стоить как ещё одна генерация
 const QC_MODEL = "claude-haiku-4-5-20251001";
-const QC_PRICE_IN = 1 / 1_000_000; // $ за входной токен
-const QC_PRICE_OUT = 5 / 1_000_000; // $ за выходной токен
+const QC_PRICE_IN = 1 / 1_000_000;
+const QC_PRICE_OUT = 5 / 1_000_000;
 
-/** Проверяет готовую обложку. При недоступности QC возвращает QC_UNAVAILABLE (без исключения). */
+/** Проверяет готовую обложку. Недоступность QC — это FAIL (без исключения), а не пропуск. */
 export async function runCoverQc(
   imageFile: string,
   expectedHeadline: string,
-  expectedKicker?: string,
+  expectedKicker?: string | null,
 ): Promise<CoverQcResult> {
   const key = getSettings().anthropicKey;
-  if (!key) return { status: "QC_UNAVAILABLE", reasons: ["нет ANTHROPIC_API_KEY"], confidence: 0, cost: 0 };
+  if (!key) {
+    return { status: "QC_UNAVAILABLE", pass: false, reasons: ["нет ANTHROPIC_API_KEY"], confidence: 0, cost: 0 };
+  }
   try {
     const client = new Anthropic({ apiKey: key });
     const media = imageFile.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
@@ -166,7 +190,11 @@ export async function runCoverQc(
           content: [
             {
               type: "image",
-              source: { type: "base64", media_type: media as "image/png", data: fs.readFileSync(imageFile).toString("base64") },
+              source: {
+                type: "base64",
+                media_type: media as "image/png",
+                data: fs.readFileSync(imageFile).toString("base64"),
+              },
             },
             { type: "text", text: qcPrompt(expectedHeadline, expectedKicker) },
           ],
@@ -185,6 +213,7 @@ export async function runCoverQc(
   } catch (e: any) {
     return {
       status: "QC_UNAVAILABLE",
+      pass: false,
       reasons: [`QC недоступен: ${String(e?.message ?? e).slice(0, 160)}`],
       confidence: 0,
       cost: 0,
@@ -192,21 +221,52 @@ export async function runCoverQc(
   }
 }
 
-/** Доп. инструкция для повторной генерации: что именно было не так (§14). */
-export function buildRetryFeedback(previous: CoverQcResult, headline: string, kicker?: string): string {
-  const cause =
-    previous.status === "EXTRA_TEXT"
-      ? "it contained extra readable text that was not requested"
-      : previous.status === "TEXT_MISMATCH"
-        ? "the headline was misspelled or reworded"
-        : previous.status === "UNREADABLE_TEXT"
-          ? "the lettering was not clearly legible"
-          : "it failed quality control";
-  return (
-    `\n\nPrevious generation failed because ${cause}.\n\n` +
-    `IMPORTANT:\nRender ONLY these exact words:\n"${headline.replace(/\n/g, " ")}"\n` +
-    (kicker ? `Optional kicker:\n"${kicker}"\n` : "") +
-    "Do not create any other letters, labels, signs or pseudo-text anywhere in the image. " +
-    "Every letter must be correctly spelled Cyrillic and clearly legible."
-  );
+/**
+ * Корректирующая инструкция для СЛЕДУЮЩЕЙ Full-AI попытки (§22).
+ * Меняется только она: концепт, сцена, эмоция, reference и headline остаются прежними.
+ */
+export function buildRetryFeedback(
+  previous: CoverQcResult,
+  headline: string,
+  kicker?: string | null,
+): string {
+  const oneLine = headline.replace(/\n/g, " ");
+  const textRule =
+    `\n\nRegenerate the same cover. Keep the same identity, concept, story and exact headline.\n` +
+    `The ONLY readable text allowed anywhere in the image is:\n"${oneLine}"` +
+    (kicker ? `\nplus the short kicker: "${kicker}"` : "") +
+    "\nDo not generate any other letters or words anywhere.";
+
+  switch (previous.status) {
+    case "EXTRA_TEXT": {
+      const found = previous.extraText?.length ? ` (found: ${previous.extraText.join(", ")})` : "";
+      return (
+        `\n\nPrevious generation failed because extra Russian-like text appeared in the image${found}.` + textRule
+      );
+    }
+    case "TEXT_MISMATCH":
+      return `\n\nPrevious generation failed because the headline was misspelled or reworded.` + textRule;
+    case "UNREADABLE_TEXT":
+      return (
+        `\n\nPrevious generation failed because the lettering was not clearly legible at thumbnail size. ` +
+        `Make the headline larger, bolder and higher-contrast.` + textRule
+      );
+    case "IDENTITY_PROBLEM":
+      return (
+        `\n\nPrevious generation did not preserve the reference identity closely enough.\n\n` +
+        `Preserve the exact facial identity more faithfully. Do not change facial structure, eyes, nose, ` +
+        `jawline or hairstyle.` + textRule
+      );
+    case "ANATOMY_PROBLEM":
+      return (
+        `\n\nPrevious generation contained an anatomical defect. Render correct human anatomy; ` +
+        `keep hands and fingers out of frame.` + textRule
+      );
+    case "VISUAL_ARTIFACTS": {
+      const found = previous.visualArtifacts?.length ? ` (${previous.visualArtifacts.join(", ")})` : "";
+      return `\n\nPrevious generation contained severe visual artifacts${found}. Render a clean photographic image.` + textRule;
+    }
+    default:
+      return `\n\nPrevious generation failed quality control.` + textRule;
+  }
 }

@@ -1,41 +1,33 @@
 import fs from "fs";
 import path from "path";
 import type { CoverConcept } from "./cover";
-import { buildFullCoverPrompt, buildCoverImagePromptFull } from "./coverPrompt";
-import { selectTypographyMode, CoverTypographyMode } from "./coverTypography";
+import { buildFullCoverPrompt } from "./coverPrompt";
 import { runCoverQc, buildRetryFeedback, CoverQcResult, CoverQcStatus } from "./coverQc";
-import {
-  generateCoverImage,
-  finishCoverImage,
-  renderHeadlineOnImage,
-  encodeFinalCover,
-  fullAiCoverModel,
-} from "./coverProvider";
+import { generateCoverImage, finishCoverImage, encodeFinalCover, fullAiCoverModel } from "./coverProvider";
 import { recordCoverRun } from "./coverStats";
 
 /**
- * Hybrid Cover Pipeline (production).
+ * Production Cover Pipeline — ЕДИНСТВЕННЫЙ режим: FULL_AI.
  *
- *   concept → headline simplification (в планировщике) → Typography Mode Selector
- *     ├─ FULL_AI       : Gemini Flash рисует обложку целиком → QC Gate
- *     │                    PASS → final
- *     │                    FAIL → ОДИН retry с feedback → QC
- *     │                             FAIL → фолбэк на RENDERER_TEXT
- *     └─ RENDERER_TEXT : Gemini Flash рисует FACE+SCENE без букв → наш рендерер
+ *   CoverConcept → Gemini Flash рисует ВСЮ обложку (лицо + сцена + типографика) → QC
+ *     PASS → cover.jpg
+ *     FAIL → та же модель, тот же концепт и headline + корректирующая инструкция (до 3 попыток)
+ *     три FAIL → COVER_FAILED
  *
- * Опубликована может быть только валидная обложка: непрошедшая QC картинка никогда
- * не становится основой финала (под нарисованным мусором текст остался бы виден) —
- * для фолбэка всегда генерируется ЧИСТОЕ изображение без букв.
+ * Фолбэков нет вообще: ни детерминированного рендерера, ни Runway, ни кадра из видео,
+ * ни другой модели. Повторная генерация — это тот же план A, а не план B.
+ * Обложка становится финальной ТОЛЬКО после QC PASS.
  */
+
+export const MAX_COVER_ATTEMPTS = 3;
 
 export type CoverPipelineResult = {
   ok: boolean;
-  file?: string; // имя финального файла в папке проекта
-  mode: CoverTypographyMode;
-  selectorReasons: string[];
+  file?: string; // имя финального файла в папке проекта (только при PASS)
+  status: "PASS" | "COVER_FAILED" | "ERROR";
   attempts: number;
-  qc: CoverQcStatus | "SKIPPED";
-  fallbackUsed: boolean;
+  qc: CoverQcStatus | "NONE";
+  qcHistory: CoverQcStatus[];
   cost: { generation: number; qc: number; total: number };
   reason?: string;
 };
@@ -43,9 +35,8 @@ export type CoverPipelineResult = {
 /** Точки подмены для тестов и E2E (в проде — настоящие реализации). */
 export type CoverDeps = {
   generateImage: (prompt: string, outFile: string) => Promise<{ cost: number }>;
-  runQc: (imageFile: string, headline: string, kicker?: string) => Promise<CoverQcResult>;
+  runQc: (imageFile: string, headline: string, kicker?: string | null) => Promise<CoverQcResult>;
   finish: (dir: string, source: string, out: string) => Promise<string>;
-  renderText: (dir: string, base: string, concept: CoverConcept, out: string) => Promise<string>;
   encodeFinal: (dir: string, base: string, out: string) => Promise<string>;
 };
 
@@ -53,12 +44,10 @@ const defaultDeps: CoverDeps = {
   generateImage: (prompt, outFile) => generateCoverImage(prompt, outFile),
   runQc: (file, headline, kicker) => runCoverQc(file, headline, kicker),
   finish: finishCoverImage,
-  renderText: renderHeadlineOnImage,
   encodeFinal: encodeFinalCover,
 };
 
-const FINAL = "cover.jpg";
-const MAX_FULL_AI_ATTEMPTS = 2; // одна генерация + один retry, дальше — фолбэк
+export const COVER_FILE = "cover.jpg";
 
 export async function buildCover(
   dir: string,
@@ -66,102 +55,90 @@ export async function buildCover(
   deps: Partial<CoverDeps> = {},
 ): Promise<CoverPipelineResult> {
   const d: CoverDeps = { ...defaultDeps, ...deps };
+  // headline и концепт ФИКСИРУЮТСЯ на весь цикл: между попытками меняется
+  // только корректирующая инструкция
   const headline = concept.headlineLines.map((l) => l.text).join(" ");
-  const choice = selectTypographyMode(concept.headlineLines);
-  const cost = { generation: 0, qc: 0, total: 0 };
-  let attempts = 0;
-  let qcStatus: CoverQcStatus | "SKIPPED" = "SKIPPED";
-  let fallbackUsed = false;
+  const kicker = concept.kicker ?? null;
+  const basePrompt = buildFullCoverPrompt(concept);
 
-  const writeMode = (result: Partial<CoverPipelineResult>) => {
+  const cost = { generation: 0, qc: 0, total: 0 };
+  const qcHistory: CoverQcStatus[] = [];
+  let attempts = 0;
+  let lastQc: CoverQcResult | null = null;
+
+  const finish = (result: Partial<CoverPipelineResult> & { status: CoverPipelineResult["status"] }) => {
     cost.total = Number((cost.generation + cost.qc).toFixed(6));
     const payload = {
-      selectedMode: choice.mode,
-      selectorReasons: choice.reasons,
+      mode: "FULL_AI",
       provider: fullAiCoverModel(),
+      headline,
+      kicker,
+      ...result,
       attempts,
-      qc: qcStatus,
-      fallbackUsed,
+      qc: qcHistory[qcHistory.length - 1] ?? "NONE",
+      qcHistory,
       generationCost: Number(cost.generation.toFixed(6)),
       qcCost: Number(cost.qc.toFixed(6)),
       totalCost: cost.total,
-      ...result,
     };
     fs.writeFileSync(path.join(dir, "cover-mode.json"), JSON.stringify(payload, null, 2), "utf8");
+    recordCoverRun({
+      attempts,
+      status: result.status,
+      qc: qcHistory[qcHistory.length - 1] ?? "NONE",
+      cost: cost.total,
+      error: result.reason,
+    });
+    return {
+      ok: result.status === "PASS",
+      attempts,
+      qc: qcHistory[qcHistory.length - 1] ?? ("NONE" as const),
+      qcHistory,
+      cost,
+      ...result,
+    } as CoverPipelineResult;
   };
 
+  fs.writeFileSync(path.join(dir, "cover-prompt.txt"), basePrompt, "utf8");
+
   try {
-    if (choice.mode === "FULL_AI") {
-      const basePrompt = buildFullCoverPrompt(concept);
-      fs.writeFileSync(path.join(dir, "cover-image-prompt.txt"), basePrompt, "utf8");
-      let lastQc: CoverQcResult | null = null;
+    for (let attempt = 1; attempt <= MAX_COVER_ATTEMPTS; attempt++) {
+      attempts = attempt;
+      const prompt = attempt === 1 ? basePrompt : basePrompt + buildRetryFeedback(lastQc!, headline, kicker);
+      if (attempt > 1) fs.writeFileSync(path.join(dir, `cover-prompt-${attempt}.txt`), prompt, "utf8");
 
-      for (let attempt = 1; attempt <= MAX_FULL_AI_ATTEMPTS; attempt++) {
-        attempts = attempt;
-        const prompt =
-          attempt === 1 ? basePrompt : basePrompt + buildRetryFeedback(lastQc!, headline, concept.kicker);
-        if (attempt > 1) fs.writeFileSync(path.join(dir, "cover-image-prompt-2.txt"), prompt, "utf8");
+      const raw = path.join(dir, `cover-attempt-${attempt}.png`);
+      const gen = await d.generateImage(prompt, raw);
+      cost.generation += gen.cost ?? 0;
 
-        const raw = path.join(dir, `cover-attempt-${attempt}.png`);
-        const gen = await d.generateImage(prompt, raw);
-        cost.generation += gen.cost ?? 0;
+      const qc = await d.runQc(raw, headline, kicker);
+      cost.qc += qc.cost ?? 0;
+      qcHistory.push(qc.status);
+      lastQc = qc;
+      fs.writeFileSync(
+        path.join(dir, `cover-qc-${attempt}.json`),
+        JSON.stringify({ attempt, ...qc }, null, 2),
+        "utf8",
+      );
+      console.log(
+        `Cover QC #${attempt}/${MAX_COVER_ATTEMPTS}: ${qc.status}${qc.reasons.length ? ` — ${qc.reasons.join("; ")}` : ""}`,
+      );
 
-        const qc = await d.runQc(raw, headline, concept.kicker);
-        cost.qc += qc.cost ?? 0;
-        qcStatus = qc.status;
-        lastQc = qc;
-        fs.writeFileSync(
-          path.join(dir, `cover-qc-${attempt}.json`),
-          JSON.stringify({ attempt, ...qc }, null, 2),
-          "utf8",
-        );
-        console.log(
-          `Cover QC #${attempt}: ${qc.status}${qc.reasons.length ? ` — ${qc.reasons.join("; ")}` : ""}`,
-        );
-
-        if (qc.status === "PASS") {
-          const finished = await d.finish(dir, raw, path.join(dir, "cover_base.png"));
-          await d.encodeFinal(dir, finished, path.join(dir, FINAL));
-          const result = { ok: true, file: FINAL };
-          writeMode(result);
-          recordCoverRun({ mode: "FULL_AI", attempts, qc: qc.status, fallbackUsed: false, cost: cost.total });
-          return { ...result, mode: choice.mode, selectorReasons: choice.reasons, attempts, qc: qcStatus, fallbackUsed, cost };
-        }
-
-        // QC недоступен — retry не поможет, сразу к гарантированному пути
-        if (qc.status === "QC_UNAVAILABLE") break;
+      if (qc.pass) {
+        // финальная обложка появляется ТОЛЬКО здесь
+        const finished = await d.finish(dir, raw, path.join(dir, "cover-final.png"));
+        await d.encodeFinal(dir, finished, path.join(dir, COVER_FILE));
+        return finish({ status: "PASS", file: COVER_FILE });
       }
-
-      // два провала (или недоступный QC) → чистая картинка без букв + наш рендерер
-      fallbackUsed = true;
-      console.warn(`Cover: Full-AI не прошёл QC (${qcStatus}) — фолбэк на детерминированный рендерер`);
     }
 
-    // --- RENDERER_TEXT: изображение БЕЗ букв + детерминированный текстовый слой ---
-    const cleanPrompt = buildCoverImagePromptFull(concept);
-    fs.writeFileSync(path.join(dir, "cover-clean-prompt.txt"), cleanPrompt, "utf8");
-    const clean = path.join(dir, "cover-clean-base.png");
-    const gen = await d.generateImage(cleanPrompt, clean);
-    cost.generation += gen.cost ?? 0;
-    attempts += 1;
-
-    const finished = await d.finish(dir, clean, path.join(dir, "cover_base.png"));
-    await d.renderText(dir, finished, concept, path.join(dir, FINAL));
-
-    const result = { ok: true, file: FINAL };
-    writeMode(result);
-    recordCoverRun({
-      mode: fallbackUsed ? "FULL_AI" : "RENDERER_TEXT",
-      attempts,
-      qc: qcStatus,
-      fallbackUsed,
-      cost: cost.total,
+    console.warn(`Cover: COVER_FAILED — ${MAX_COVER_ATTEMPTS} попытки не прошли QC (${qcHistory.join(", ")})`);
+    return finish({
+      status: "COVER_FAILED",
+      reason: lastQc?.reasons.join("; ") || "обложка не прошла контроль качества",
     });
-    return { ...result, mode: choice.mode, selectorReasons: choice.reasons, attempts, qc: qcStatus, fallbackUsed, cost };
   } catch (e: any) {
     const reason = String(e?.message ?? e).slice(0, 200);
-    writeMode({ ok: false, reason });
-    recordCoverRun({ mode: choice.mode, attempts, qc: qcStatus, fallbackUsed, cost: cost.total, error: reason });
-    return { ok: false, mode: choice.mode, selectorReasons: choice.reasons, attempts, qc: qcStatus, fallbackUsed, cost, reason };
+    return finish({ status: "ERROR", reason });
   }
 }

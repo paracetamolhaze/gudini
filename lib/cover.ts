@@ -62,18 +62,19 @@ const CONCEPT_SYSTEM = `Ты — арт-директор viral short-form кон
 Анализ: вытащи конфликт/hook/claim (НЕ первые слова сценария), одну эмоцию лица, один сильный
 визуальный символ для фона.
 
-headlineLines: 2–4 строки по 1–3 КОРОТКИХ слова, стиль «80 ЛЕТ / СПУСТЯ», «ПРЫЖОК / ЦЕНОЙ / ЖИЗНИ»,
-«РАВЕНСТВО / КОНЧИЛОСЬ». Грамматика обязана быть безупречной («ВО ДВОРЕ», не «В ДВОРЕ»).
-accent одной смысловой строки: "yellow" (жёлтые буквы) или "box" (жёлтая плашка, чёрные буквы —
-для самого ударного короткого слова), остальные false (белые). kicker — микро-метка 1-2 слова.
-Headline каждый раз НОВЫЙ, из конфликта/поворота ИМЕННО этого сценария: не повторяй
-структуру предыдущих обложек и не строй всё по одной формуле.
+HEADLINE — САМОЕ ВАЖНОЕ. Его рисует сама image-модель, поэтому он должен быть предельно коротким:
+жёстко максимум 5 слов, идеально 2–4; максимум 3 строки по 1–3 слова. Это не пересказ сценария,
+а ударная обложечная формула: конфликт, неожиданный факт, опасность, потеря, абсурд, шок, поворот.
+Плохо → хорошо: «ТИГР / ВО ДВОРЕ / НЕ БЕГИ» → «ТИГР / У ДОМА»; «5000$ / СТАЛИ / 300$» →
+«ДЕНЬГИ / СГОРЕЛИ» или «ПОТЕРЯЛ / $5000»; «ДЕТЕЙ / РЕДАКТИРУЮТ / ДО / РОЖДЕНИЯ» → «ДЕТИ / НА ЗАКАЗ».
+Максимум ОДНА служебная связка (НА/ВО/НЕ/У…). Избегай стрелок, процентов, нескольких валют, длинных
+чисел и длинной пунктуации; одно число можно, если оно и есть hook. Грамматика безупречна
+(«ВО ДВОРЕ», не «В ДВОРЕ»). Headline каждый раз НОВЫЙ, не повторяй структуру прошлых обложек.
+accent одной смысловой строки: "yellow" (жёлтые буквы) или "box" (жёлтая плашка, чёрные буквы),
+остальные false (белые); одна акцентная строка, не больше.
 
-Headline — НЕ пересказ, а ударная обложечная формула. Всего 2–5 слов, чем короче — тем сильнее:
-«ТИГР / У ДОМА» бьёт сильнее, чем «ТИГР / ВО ДВОРЕ / НЕ БЕГИ»; «ДЕНЬГИ / СГОРЕЛИ» — чем
-«5000$ / СТАЛИ / 300$». Максимум ОДНА служебная связка (НА/ВО/НЕ/У…) на весь headline.
-Числа оставляй, только если число — САМ hook, и выражай его проще (одно число, без цепочек
-цифр и валют). Одна акцентная строка, не больше.
+kicker ПО УМОЛЧАНИЮ НЕ НУЖЕН — верни null. Каждое лишнее слово повышает риск, что генератор
+нарисует мусорный текст. Добавляй kicker (1–2 слова) только если он реально усиливает дизайн.
 
 typographyDirection — выбери направление типографики ПОД этот headline и сцену (для обложек, где
 текст рисует image-модель): BOTTOM_MASSIVE (огромный многострочник снизу) | SIDE_STACK (столбик
@@ -96,10 +97,20 @@ typographyDirection — выбери направление типографик
 
 Ответь СТРОГО валидным JSON:
 {"headlineLines":[{"text":"РАВЕНСТВО","accent":false},{"text":"КОНЧИЛОСЬ","accent":"yellow"}],
-"kicker":"РАЗБОР","typographyDirection":"BOTTOM_MASSIVE","emotion":"...",
+"kicker":null,"typographyDirection":"BOTTOM_MASSIVE","emotion":"...",
 "scene":{"mainSubject":"...","storyObject":"...","environment":"..."},
 "composition":{"facePosition":"center","faceScale":"very_large","allowHands":false},
 "design_notes":["..."]}`;
+
+/** Kicker по умолчанию отсутствует; допускаются только 1–2 коротких слова (§17). */
+export function acceptKicker(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  const text = String(value).trim().replace(/\s+/g, " ");
+  if (!text || /^(null|none|нет)$/i.test(text)) return undefined;
+  const parts = text.split(" ");
+  if (parts.length > 2 || text.length > 16) return undefined;
+  return text.slice(0, 16);
+}
 
 export async function generateCoverConcept(
   topic: string,
@@ -144,7 +155,8 @@ export async function generateCoverConcept(
     return {
       headline,
       headlineLines,
-      kicker: json.kicker ? String(json.kicker).slice(0, 24) : undefined,
+      // kicker необязателен и рискован (лишний текст → брак QC): принимаем только 1–2 коротких слова
+      kicker: acceptKicker(json.kicker),
       typographyDirection: (["BOTTOM_MASSIVE", "SIDE_STACK", "ONE_WORD_DOMINANT", "ACCENT_BOX", "INTEGRATED_POSTER"] as const).includes(json.typographyDirection)
         ? json.typographyDirection
         : "BOTTOM_MASSIVE",

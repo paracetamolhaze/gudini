@@ -13,7 +13,10 @@ import type { CoverConcept } from "./cover";
 
 export const DEFAULT_FULL_AI_MODEL = "google/gemini-3.1-flash-image";
 
-/** Kill switch: FULL_AI_COVER=false мгновенно возвращает старый пайплайн обложек. */
+/**
+ * Выключатель обложек: FULL_AI_COVER=false — обложки не генерируются вовсе.
+ * Это НЕ переключение на другой способ: подменных обложек в системе не существует.
+ */
 export const fullAiCoverEnabled = () => process.env.FULL_AI_COVER !== "false";
 export const fullAiCoverModel = () => process.env.FULL_AI_COVER_MODEL || DEFAULT_FULL_AI_MODEL;
 

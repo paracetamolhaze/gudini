@@ -14,6 +14,7 @@ type Project = {
   processing: { state: "idle" | "running" | "done" | "error"; step: string; progress: number; error?: string };
   subtitlesSource?: string;
   cover?: string | null;
+  coverStatus?: "ok" | "failed";
   brollCount?: number;
   meta: Meta | null;
   publications: Publication[];
@@ -546,18 +547,102 @@ function ProcessStep({
                 : "по тексту сценария"}
             {project.brollCount ? ` · перебивок: ${project.brollCount}` : ""}
           </p>
-          {project.cover && (
-            <div style={{ textAlign: "center", marginTop: 10 }}>
-              <img
-                src={`/api/projects/${project.id}/video?which=cover&t=${Date.now()}`}
-                alt="Обложка"
-                style={{ maxWidth: 160, borderRadius: 10, border: "1px solid var(--border)" }}
-              />
-              <p className="hint">Обложка (кадр + заголовок)</p>
-            </div>
-          )}
+          <CoverBlock project={project} reload={reload} />
         </div>
       )}
+    </div>
+  );
+}
+
+/* ================== Обложка (только Full-AI + QC) ================== */
+
+function CoverBlock({ project, reload }: { project: Project; reload: () => Promise<Project | null> }) {
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [headline, setHeadline] = useState("");
+  const [error, setError] = useState("");
+
+  const regenerate = async (customHeadline?: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/projects/${project.id}/cover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(customHeadline ? { headline: customHeadline } : {}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Не удалось перегенерировать");
+      await reload();
+      setEditing(false);
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (busy) {
+    return (
+      <div style={{ textAlign: "center", marginTop: 12 }}>
+        <p className="hint">Генерирую обложку и проверяю качество… (до 3 попыток)</p>
+      </div>
+    );
+  }
+
+  if (project.cover) {
+    return (
+      <div style={{ textAlign: "center", marginTop: 10 }}>
+        <img
+          src={`/api/projects/${project.id}/video?which=cover&t=${Date.now()}`}
+          alt="Обложка"
+          style={{ maxWidth: 160, borderRadius: 10, border: "1px solid var(--border)" }}
+        />
+        <p className="hint">Обложка (ИИ, прошла контроль качества)</p>
+        <button className="btn btn-secondary" onClick={() => regenerate()} style={{ marginTop: 6 }}>
+          Перегенерировать обложку
+        </button>
+        {error && <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>{error}</p>}
+      </div>
+    );
+  }
+
+  if (project.coverStatus !== "failed") return null;
+
+  return (
+    <div style={{ textAlign: "center", marginTop: 12 }}>
+      <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>
+        Не удалось сгенерировать качественную обложку.
+      </p>
+      {editing ? (
+        <div style={{ maxWidth: 320, margin: "8px auto 0" }}>
+          <input
+            className="input"
+            value={headline}
+            onChange={(e) => setHeadline(e.target.value)}
+            placeholder="Короткий заголовок, 2–4 слова"
+            maxLength={40}
+          />
+          <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
+            <button className="btn" disabled={!headline.trim()} onClick={() => regenerate(headline)}>
+              Сгенерировать
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditing(false)}>
+              Отмена
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
+          <button className="btn" onClick={() => regenerate()}>
+            Перегенерировать
+          </button>
+          <button className="btn btn-secondary" onClick={() => setEditing(true)}>
+            Изменить заголовок
+          </button>
+        </div>
+      )}
+      {error && <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>{error}</p>}
     </div>
   );
 }

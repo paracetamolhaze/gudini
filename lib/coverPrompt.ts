@@ -209,18 +209,23 @@ export function buildFullCoverPrompt(concept: CoverConcept): string {
     "shallow depth of field, professional key-art retouch.";
 
   const typography =
-    "Design the headline as an integral part of this thumbnail composition — custom-designed for THIS image, " +
-    "not a pasted template. Extremely bold, condensed display typography; massive, aggressive, editorial; it must " +
-    "compete visually with the face. Large Cyrillic capital letters, very tight line spacing, strong contrast " +
-    "against the background. Main text colors: white and warm yellow; black shadow/outline allowed for separation. " +
+    "Create the complete final vertical social-media cover, including professionally designed Russian typography. " +
+    "The typography must be an integral part of the composition, not a generic text overlay. " +
+    "Use extremely bold condensed Cyrillic display typography. The headline must be huge, immediately readable at " +
+    "thumbnail size, with tight line spacing and strong hierarchy. Use white, warm yellow and black as the primary " +
+    "typography palette. You may use white text, yellow accent text, a yellow box with black text, different word " +
+    "sizes, asymmetrical typography, and text integrated around the subject. " +
+    "Do not force the same layout on every cover. " +
     (TYPOGRAPHY_DIRECTIONS[concept.typographyDirection ?? "BOTTOM_MASSIVE"] ?? TYPOGRAPHY_DIRECTIONS.BOTTOM_MASSIVE);
 
   const exactText =
-    `The cover MUST contain the following exact Russian headline:\n"${headline}"\n` +
-    "Render the text exactly as written: do not change wording, do not translate, do not add extra words, " +
-    "do not misspell Cyrillic characters." +
-    (concept.kicker ? ` Optional small kicker label: "${concept.kicker.toUpperCase()}".` : "") +
-    " No other readable text, watermarks or logos anywhere.";
+    `The exact Russian headline is:\n"${headline}"\n` +
+    "You MUST render these exact words. Do not replace words, do not invent additional headline words, " +
+    "do not translate, do not misspell Cyrillic, do not generate pseudo-text." +
+    (concept.kicker ? ` One small kicker label is also allowed: "${concept.kicker.toUpperCase()}".` : "") +
+    " Do not generate ANY other readable text anywhere in the image except the exact headline" +
+    (concept.kicker ? " and that kicker" : "") +
+    ": no captions, signs, labels, fake UI, random numbers, logos, watermarks or Russian-looking pseudo-words.";
 
   const anatomy =
     "Correct human anatomy: no extra, fused or malformed fingers, no extra limbs, no warped eyes, no malformed " +

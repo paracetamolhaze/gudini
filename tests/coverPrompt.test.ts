@@ -83,8 +83,8 @@ test("Full-cover: секции в порядке IDENTITY→STORY→COMPOSITION�
     "Vertical 9:16 viral cover",
     "Expression:",
     "photorealistic editorial photograph",
-    "integral part of this thumbnail composition",
-    "exact Russian headline",
+    "integral part of the composition",
+    "The exact Russian headline is",
     "Correct human anatomy",
     "Strictly not",
   ];
@@ -113,6 +113,17 @@ test("Full-cover: руки запрещены по умолчанию, kicker п
   const p = buildFullCoverPrompt(c);
   assert.ok(p.includes("NO HANDS OR FINGERS"));
   assert.ok(p.includes('"ГЕННЫЙ ШОК"'));
+});
+
+test("Full-cover: без kicker разрешён ТОЛЬКО headline, layout не навязывается", () => {
+  const c = concept();
+  c.kicker = undefined;
+  const p = buildFullCoverPrompt(c);
+  assert.ok(p.includes("Do not generate ANY other readable text"));
+  assert.ok(p.includes("fake UI"), "перечислены запрещённые виды лишнего текста");
+  assert.ok(!p.includes("kicker"), "кикера нет — про него в промпте ни слова");
+  assert.ok(p.includes("Do not force the same layout on every cover"));
+  assert.ok(p.includes("You MUST render these exact words"));
 });
 
 test("Prompt v4: длинные значения от Claude обрезаются, лимит не пробивается", () => {

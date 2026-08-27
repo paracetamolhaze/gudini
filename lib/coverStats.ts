@@ -1,34 +1,32 @@
 import fs from "fs";
 import path from "path";
 import type { CoverQcStatus } from "./coverQc";
-import type { CoverTypographyMode } from "./coverTypography";
 
 /**
- * Накопительная статистика обложек: сколько Full-AI проходит с первого раза,
- * сколько спасает retry, сколько уходит в фолбэк. После первых 50–100 обложек
- * по этим числам решается, оставлять ли Full-AI дефолтом.
+ * Статистика обложек. Фолбэков в системе нет, поэтому и счётчиков фолбэка нет:
+ * обложка либо проходит QC на одной из трёх попыток, либо это COVER_FAILED.
  */
 
 export type CoverRun = {
-  mode: CoverTypographyMode;
   attempts: number;
-  qc: CoverQcStatus | "SKIPPED";
-  fallbackUsed: boolean;
+  status: "PASS" | "COVER_FAILED" | "ERROR";
+  qc: CoverQcStatus | "NONE";
   cost: number;
   error?: string;
 };
 
 export type CoverStats = {
-  totalFullAi: number;
-  passFirstTry: number;
-  passSecondTry: number;
-  fallback: number;
-  rendererDirect: number;
+  totalCovers: number;
+  passFirst: number;
+  passSecond: number;
+  passThird: number;
+  failedAfterThree: number;
   textMismatch: number;
   extraText: number;
   unreadableText: number;
   identityFail: number;
   anatomyFail: number;
+  visualArtifacts: number;
   qcUnavailable: number;
   errors: number;
   totalCost: number;
@@ -38,16 +36,17 @@ export type CoverStats = {
 const STATS_FILE = path.join(process.cwd(), "data", "cover-stats.json");
 
 const EMPTY: CoverStats = {
-  totalFullAi: 0,
-  passFirstTry: 0,
-  passSecondTry: 0,
-  fallback: 0,
-  rendererDirect: 0,
+  totalCovers: 0,
+  passFirst: 0,
+  passSecond: 0,
+  passThird: 0,
+  failedAfterThree: 0,
   textMismatch: 0,
   extraText: 0,
   unreadableText: 0,
   identityFail: 0,
   anatomyFail: 0,
+  visualArtifacts: 0,
   qcUnavailable: 0,
   errors: 0,
   totalCost: 0,
@@ -64,15 +63,16 @@ export function readCoverStats(file = STATS_FILE): CoverStats {
 /** Чистый апдейт счётчиков — тестируется без файловой системы. */
 export function applyCoverRun(stats: CoverStats, run: CoverRun): CoverStats {
   const s = { ...stats };
+  s.totalCovers += 1;
   s.totalCost = Number((s.totalCost + (run.cost || 0)).toFixed(6));
   if (run.error) s.errors += 1;
 
-  if (run.mode === "FULL_AI") {
-    s.totalFullAi += 1;
-    if (run.fallbackUsed) s.fallback += 1;
-    else if (run.qc === "PASS") (run.attempts <= 1 ? (s.passFirstTry += 1) : (s.passSecondTry += 1));
-  } else {
-    s.rendererDirect += 1;
+  if (run.status === "PASS") {
+    if (run.attempts <= 1) s.passFirst += 1;
+    else if (run.attempts === 2) s.passSecond += 1;
+    else s.passThird += 1;
+  } else if (run.status === "COVER_FAILED") {
+    s.failedAfterThree += 1;
   }
 
   switch (run.qc) {
@@ -81,6 +81,7 @@ export function applyCoverRun(stats: CoverStats, run: CoverRun): CoverStats {
     case "UNREADABLE_TEXT": s.unreadableText += 1; break;
     case "IDENTITY_PROBLEM": s.identityFail += 1; break;
     case "ANATOMY_PROBLEM": s.anatomyFail += 1; break;
+    case "VISUAL_ARTIFACTS": s.visualArtifacts += 1; break;
     case "QC_UNAVAILABLE": s.qcUnavailable += 1; break;
   }
   s.updatedAt = new Date().toISOString();

@@ -16,9 +16,11 @@ import { buildAss, buildCalloutsAss } from "./subtitles";
 import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
 import { planEdit } from "./editPlanner";
-import { generateCoverConcept, generateAiCover } from "./cover";
-import { buildCover, CoverPipelineResult } from "./coverPipeline";
+import { generateCoverConcept } from "./cover";
+import { breakHeadline } from "./coverLayout";
+import { buildCover } from "./coverPipeline";
 import { fullAiCoverEnabled } from "./coverProvider";
+import type { CoverStatus } from "./store";
 import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE } from "./editPlan";
 
 const running = new Set<string>();
@@ -192,46 +194,10 @@ export async function processProject(id: string): Promise<void> {
       setStep(id, "Монтаж видео", 38 + Math.round(f * 52)),
     );
 
-    // --- Обложка: ИИ-key-art с reference-лицом; фолбэк — кадр из видео ---
+    // --- Обложка: ТОЛЬКО Full-AI (Gemini Flash рисует всё) + QC. Фолбэков нет:
+    // не прошла QC за 3 попытки → COVER_FAILED и кнопка «Перегенерировать» в интерфейсе.
     setStep(id, "Обложка", 92);
-    const coverOffset = Math.min(Math.max(1, effDur * 0.25), Math.max(0.1, effDur - 0.2));
-    let cover: string | null = null;
-    try {
-      const concept = await generateCoverConcept(project.topic, project.script, meta.title);
-      if (!concept) {
-        console.warn("Cover fallback: INVALID_CONCEPT — концепт не сгенерировался/не распарсился");
-      } else {
-        fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
-        // Hybrid Cover Pipeline (FULL_AI + QC + фолбэк на рендерер).
-        // FULL_AI_COVER=false — мгновенный откат на прежний путь (Runway + рендерер).
-        const useHybrid = fullAiCoverEnabled() && !!getSettings().openrouterKey;
-        const result = useHybrid ? await buildCover(dir, concept) : await generateAiCover(dir, concept);
-        if (result.ok) {
-          cover = "cover.jpg";
-          if (useHybrid) {
-            const r = result as CoverPipelineResult;
-            console.log(
-              `Cover: mode=${r.mode} attempts=${r.attempts} qc=${r.qc} fallback=${r.fallbackUsed} cost=$${r.cost.total}`,
-            );
-          }
-        } else console.warn(`Cover fallback: ${result.reason}`);
-      }
-    } catch (e: any) {
-      // причины в кодах: NO_REFERENCE | RUNWAY_ERROR | MODERATION_REJECT | DOWNLOAD_FAILED
-      console.warn("Cover fallback:", String(e?.message ?? e).slice(0, 200));
-    }
-    if (!cover) {
-      try {
-        fs.writeFileSync(path.join(dir, "cover.ass"), buildCoverAss(meta.title || project.topic), "utf8");
-        await runFfmpeg(
-          ["-ss", String(coverOffset), "-i", "out.mp4", "-frames:v", "1", "-vf", "ass=cover.ass", "-q:v", "2", "cover.jpg"],
-          { cwd: dir },
-        );
-        cover = "cover.jpg";
-      } catch (e) {
-        console.warn("Обложка не сгенерировалась:", e);
-      }
-    }
+    const { cover, coverStatus } = await makeCover(dir, project.topic, project.script, meta.title);
 
     // --- Self-check результата (+ чёрные кадры вокруг монтажных точек) ---
     setStep(id, "Проверка результата", 97);
@@ -245,7 +211,7 @@ export async function processProject(id: string): Promise<void> {
       processedVideo: "out.mp4",
       subtitlesSource,
       cover,
-      coverOffsetSec: coverOffset,
+      coverStatus,
       brollCount: plan.events.filter((e) => e.type === "B_ROLL").length,
       meta,
       processing: { state: "done", step: "Готово", progress: 100 },
@@ -256,6 +222,50 @@ export async function processProject(id: string): Promise<void> {
     });
   } finally {
     running.delete(id);
+  }
+}
+
+/**
+ * Единственный способ получить обложку: Full-AI (Gemini Flash) + QC, до 3 попыток.
+ * Ни рендерера, ни Runway, ни кадра из видео — при провале обложки просто нет.
+ */
+export async function makeCover(
+  dir: string,
+  topic: string,
+  script: string | null,
+  title?: string | null,
+  headlineOverride?: string | null,
+): Promise<{ cover: string | null; coverStatus: CoverStatus }> {
+  // FULL_AI_COVER=false — обложки просто НЕ создаются (это выключатель, а не фолбэк
+  // на другой способ: подменных обложек в системе не существует)
+  if (!fullAiCoverEnabled()) {
+    console.log("Cover: FULL_AI_COVER=false — генерация обложек выключена");
+    return { cover: null, coverStatus: "failed" };
+  }
+  if (!getSettings().openrouterKey) {
+    console.warn("Cover: нет ключа OPENROUTER — обложка не создаётся");
+    return { cover: null, coverStatus: "failed" };
+  }
+  try {
+    const concept = await generateCoverConcept(topic, script, title);
+    if (!concept) {
+      console.warn("Cover: INVALID_CONCEPT — концепт не сгенерировался/не распарсился");
+      return { cover: null, coverStatus: "failed" };
+    }
+    // заголовок, заданный пользователем вручную, заменяет придуманный планировщиком
+    if (headlineOverride?.trim()) {
+      concept.headlineLines = breakHeadline(null, headlineOverride.trim());
+      concept.headline = concept.headlineLines.map((l) => l.text).join("\n");
+    }
+    fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
+    const r = await buildCover(dir, concept);
+    console.log(
+      `Cover: status=${r.status} attempts=${r.attempts} qc=[${r.qcHistory.join(", ")}] cost=$${r.cost.total}`,
+    );
+    return r.ok ? { cover: r.file ?? null, coverStatus: "ok" } : { cover: null, coverStatus: "failed" };
+  } catch (e: any) {
+    console.warn("Cover:", String(e?.message ?? e).slice(0, 200));
+    return { cover: null, coverStatus: "failed" };
   }
 }
 
@@ -395,22 +405,3 @@ async function selfCheck(dir: string, expectedDur: number, cutPoints: number[] =
   }
 }
 
-/** ASS-оверлей для обложки: крупный заголовок в верхней трети кадра. */
-function buildCoverAss(title: string): string {
-  const clean = title.replace(/[{}\\]/g, "").toUpperCase();
-  return `[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Title,Arial,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,10,3,8,70,70,220,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:00:30.00,Title,,0,0,0,,${clean}
-`;
-}

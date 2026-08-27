@@ -7,3 +7,5 @@ data/
 next-env.d.ts
 caddy.exe
 _*.ts
+_packdir/
+_research.json

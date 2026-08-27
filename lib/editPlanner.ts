@@ -73,6 +73,59 @@ sourceIntent для каждого B_ROLL:
  {"type":"B_ROLL","from":12,"to":19,"sourceIntent":"PERSON","factualSpecificity":"ENTITY","entity":"Jordan Henderson","query":"Jordan Henderson England football","queries":["Jordan Henderson England national team","Jordan Henderson footballer portrait","Jordan Henderson World Cup"],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["..."],"avoid":["..."]}},
  {"type":"B_ROLL","from":33,"to":38,"sourceIntent":"SPECIFIC_EVENT","factualSpecificity":"EXACT","entity":"Jordan Henderson","event":"jump over advertising board after match","query":"Jordan Henderson advertising board injury","queries":["Jordan Henderson advertising hoarding injury","Henderson celebration barrier injury","England Mexico Henderson injury"],"intent":{"subject":"...","action":"...","environment":"...","mood":"...","mustHave":["football","advertising board","stadium pitch"],"avoid":["skateboard","BMX","parkour","random athlete"]}}]}`;
 
+/**
+ * Второй проход: заполняет длинные участки, где виден только автор.
+ * Первый проход ищет точные кадры события; этот добирает визуалы попроще —
+ * фотографии людей и команд, честный контекст, релевантный сток.
+ */
+export async function planGapFillers(
+  topic: string,
+  script: string | null,
+  words: Word[],
+  duration: number,
+  gaps: { start: number; end: number }[],
+): Promise<RawPlanEvent[]> {
+  const key = getSettings().anthropicKey;
+  if (!key || !gaps.length) return [];
+  const client = new Anthropic({ apiKey: key });
+  const list = words.map((w, i) => `${i}:${w.word}[${w.start.toFixed(1)}]`).join(" ");
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 8000,
+    system:
+      PLANNER_SYSTEM +
+      `\n\nСЕЙЧАС ВТОРОЙ ПРОХОД. В ролике слишком долго видно только лицо автора. Тебе дают участки, ` +
+      `которые нужно закрыть визуалом. Правила смягчены: ФОТОГРАФИЯ — полноценный источник. ` +
+      `Если точного видео события нет, бери фото человека, фото команды, честный контекст ` +
+      `(рекламные щиты у поля, скамейка запасных, врачи на поле) или релевантный сток. ` +
+      `Подмена события чужим сюжетом по-прежнему запрещена. Один участок можно закрыть ДВУМЯ ` +
+      `короткими вставками по 1.5–3 сек. Верни ТОЛЬКО новые события внутри указанных участков.`,
+    messages: [
+      {
+        role: "user",
+        content:
+          `Тема: ${topic}\n\n` +
+          (script ? `Сценарий:\n${script}\n\n` : "") +
+          `Транскрипция (индекс:слово[секунда]):\n${list}\n\n` +
+          `Закрыть визуалом участки (сек): ${gaps.map((g) => `${g.start.toFixed(1)}–${g.end.toFixed(1)}`).join(", ")}`,
+      },
+    ],
+  });
+  const raw = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .replace(/^```(json)?/m, "")
+    .replace(/```$/m, "")
+    .trim();
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed.events) ? parsed.events : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Строит валидированный монтажный план. Возвращает null, если ИИ недоступен/упал. */
 export async function planEdit(
   topic: string,

@@ -40,9 +40,16 @@ type CacheEntry = StockCandidate & { file: string; at: string };
 export async function resolveBrollEvents(dir: string, events: EditEvent[]): Promise<EditEvent[]> {
   const brolls = events.filter((e) => e.type === "B_ROLL");
   const used = new Set<string>(); // не ставить один и тот же сток дважды в ролик
-  const usedWeb = new Set<string>(); // то же для веб-ассетов
+  const usedWeb = new Set<string>(); // то же для веб-ассетов (URL и хэш содержимого)
   const sources: WebAsset[] = [];
   const trace: BrollTrace[] = [];
+  const approvedFile = path.join(dir, "broll-approved.json");
+  const WEB_CACHE = path.join(CACHE_DIR, "web");
+  type Approved = WebAsset & { cacheFile: string };
+  let approved: Approved[] = [];
+  try {
+    approved = JSON.parse(fs.readFileSync(approvedFile, "utf8"));
+  } catch {}
 
   // Материалы прошлого монтажа удаляем: при повторном запуске план другой, и старый
   // файл под новым событием — это чужая перебивка (скачивание всё равно берётся из кэша).
@@ -61,6 +68,35 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
 
       const specificity = event.factualSpecificity ?? "GENERAL";
       const factual = specificity !== "GENERAL" || event.sourceIntent !== "GENERIC_STOCK";
+
+      // Уже одобренный визуал этой сущности переиспользуем без нового поиска:
+      // хороший подтверждённый кадр Хендерсона не должен теряться между прогонами.
+      if (event.entityName) {
+        const saved = approved.find(
+          (a) => a.entity === event.entityName && !usedWeb.has(a.directUrl) && fs.existsSync(a.cacheFile),
+        );
+        if (saved) {
+          const bytes = fs.readFileSync(saved.cacheFile);
+          const built = await buildWebAssetClip(saved, full, duration, bytes);
+          if (built.ok) {
+            usedWeb.add(saved.directUrl);
+            event.file = file;
+            sources.push({ ...saved, localPath: file });
+            trace.push({
+              query: saved.retrievalQuery,
+              candidates: [],
+              mode: "web",
+              sourceIntent: event.sourceIntent,
+              factualSpecificity: specificity,
+              entityName: event.entityName,
+              winner: saved.sourceDomain,
+              sourceUrl: saved.sourceUrl,
+              note: "переиспользован одобренный ранее визуал",
+            });
+            return;
+          }
+        }
+      }
 
       // --- 1) ФАКТИЧЕСКИЙ ПОИСК в открытых источниках (§18: до всякого стока) ---
       if (factual) {
@@ -115,11 +151,25 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
               }
             }
 
+            // дедуп по содержимому: разные ссылки могут вести к одному и тому же кадру,
+            // а разные кропы одной картинки — это один и тот же ассет
+            const hash = bytes ? crypto.createHash("sha1").update(bytes).digest("hex") : null;
+            if (hash && usedWeb.has(hash)) continue;
             usedWeb.add(asset.directUrl);
+            if (hash) usedWeb.add(hash);
             const built = await buildWebAssetClip(asset, full, duration, bytes ?? undefined);
             if (!built.ok) continue;
             event.file = file;
             sources.push({ ...asset, localPath: file });
+            // одобренный визуал сущности сохраняем, чтобы не потерять при перепланировании
+            if (event.entityName && bytes && hash) {
+              try {
+                fs.mkdirSync(WEB_CACHE, { recursive: true });
+                const cacheFile = path.join(WEB_CACHE, `${hash}${path.extname(new URL(asset.directUrl).pathname) || ".jpg"}`);
+                fs.writeFileSync(cacheFile, bytes);
+                approved = [...approved.filter((a) => a.directUrl !== asset.directUrl), { ...asset, entity: event.entityName, cacheFile }];
+              } catch {}
+            }
             trace.push({
               query: (event.queries ?? queries)[0] ?? "",
               intent: event.visualIntent,
@@ -178,7 +228,12 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
     if (trace.length) fs.writeFileSync(path.join(dir, "broll-trace.json"), JSON.stringify(trace, null, 2), "utf8");
     // откуда взят каждый кадр — всегда видно
     fs.writeFileSync(path.join(dir, "broll-sources.json"), JSON.stringify(sources, null, 2), "utf8");
+    if (approved.length) fs.writeFileSync(approvedFile, JSON.stringify(approved, null, 2), "utf8");
   } catch {}
+  const uniq = new Set(sources.map((s) => s.directUrl));
+  console.log(
+    `Перебивки: внешних ассетов ${sources.length}, уникальных ${uniq.size}, дублей ${sources.length - uniq.size}`,
+  );
   // b-ролл без материала → выкидываем событие
   return events.filter((e) => e.type !== "B_ROLL" || e.file);
 }

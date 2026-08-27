@@ -17,13 +17,23 @@ import { buildAss } from "./subtitles";
 import { applyScriptFormatting } from "./scriptFormat";
 import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
-import { planEdit } from "./editPlanner";
+import { planEdit, planGapFillers } from "./editPlanner";
 import { generateCoverConcept } from "./cover";
 import { resolveHeadline } from "./coverHeadline";
 import { buildCover } from "./coverPipeline";
 import { fullAiCoverEnabled } from "./coverProvider";
 import type { CoverStatus } from "./store";
-import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE, coverSpeechCuts } from "./editPlan";
+import {
+  EditPlan,
+  EditEvent,
+  DEFAULT_CAPTION_STYLE,
+  coverSpeechCuts,
+  visualCoverage,
+  aRollGaps,
+  validatePlan,
+} from "./editPlan";
+
+const overlapsEvents = (a: EditEvent, b: EditEvent) => a.start < b.end && b.start < a.end;
 
 const running = new Set<string>();
 // флаги читаются в момент вызова — тестируемо и переключаемо без пересборки модуля
@@ -199,6 +209,30 @@ export async function processProject(id: string): Promise<void> {
       plan.events = coverSpeechCuts(plan.events, seamPoints, effDur);
       setStep(id, "Подбор перебивок", 28);
       plan.events = await resolveBrollEvents(dir, plan.events);
+
+      // Ролик должен быть динамичным: если внешние визуалы занимают меньше половины
+      // экранного времени, делаем ВТОРОЙ проход и добираем фото/контекст на длинных
+      // участках с одним лицом. Максимум два прохода — это поиск, а не генерация.
+      let coverage = visualCoverage(plan.events, effDur);
+      const gaps = aRollGaps(plan.events, effDur);
+      console.log(`Покрытие визуалом: ${(coverage * 100).toFixed(0)}% | длинных участков A-roll: ${gaps.length}`);
+      if (coverage < 0.55 && gaps.length) {
+        setStep(id, "Добор перебивок", 32);
+        try {
+          const extraRaw = await planGapFillers(project.topic, project.script, words, effDur, gaps);
+          const extra = validatePlan(extraRaw, words, effDur).filter(
+            (e) => e.type === "B_ROLL" && !plan!.events.some((x) => x.type === "B_ROLL" && overlapsEvents(x, e)),
+          );
+          if (extra.length) {
+            const resolved = await resolveBrollEvents(dir, [...plan.events, ...extra]);
+            plan.events = resolved;
+            coverage = visualCoverage(plan.events, effDur);
+            console.log(`После второго прохода покрытие: ${(coverage * 100).toFixed(0)}%`);
+          }
+        } catch (e) {
+          console.warn("Второй проход подбора пропущен:", String(e).slice(0, 120));
+        }
+      }
     } else {
       // старый путь: только б-роллы по эвристике/простому плану
       setStep(id, "Подбор перебивок", 28);

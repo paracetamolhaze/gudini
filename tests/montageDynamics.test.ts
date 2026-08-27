@@ -78,7 +78,7 @@ test("4: единственный переход — hard cut, никаких э
   assert.ok(source.includes("afade=t=in:d=0.015"), "микрофейд 15мс на стыках аудио");
 });
 
-test("5: длительности вставок укладываются в 1.8–5.0 сек, лимит 14", () => {
+test("5: длительности вставок укладываются в 1.5–5.0 сек, лимит 18", () => {
   const raw = Array.from({ length: 20 }, (_, i) => ({
     type: "B_ROLL",
     from: 10 + i * 8,
@@ -88,9 +88,9 @@ test("5: длительности вставок укладываются в 1.8
   }));
   const events = validatePlan(raw as any, words, 80);
   assert.ok(events.length > 8, `слишком мало вставок: ${events.length}`);
-  assert.ok(events.length <= 14, `превышен лимит: ${events.length}`);
+  assert.ok(events.length <= 18, `превышен лимит: ${events.length}`);
   for (const e of events) {
     const d = e.end - e.start;
-    assert.ok(d >= 1.7 && d <= 5.05, `длительность вне диапазона: ${d.toFixed(2)}с`);
+    assert.ok(d >= 1.4 && d <= 5.05, `длительность вне диапазона: ${d.toFixed(2)}с`);
   }
 });

@@ -45,18 +45,30 @@ const boardIntent: VisualIntent = {
   avoid: ["skateboard", "skatepark", "parkour"],
 };
 
-test("3: кандидат без обязательного условия отклоняется, а не выбирается «лучшим из плохих»", () => {
-  const stadiumOnly: AssetAnalysis = {
-    description: "an empty football stadium at sunset",
-    objects: ["stadium", "football", "pitch", "grass", "seats"],
-    environment: "football stadium",
-    action: "static shot",
+test("3: без домена сюжета — отказ; с доменом, но неполный — годится как контекст", () => {
+  // нет футбола вообще → отказ, каким бы «похожим» ни было действие
+  const gymJump: AssetAnalysis = {
+    description: "a man jumps over a box in a gym",
+    objects: ["gym", "box", "athlete", "fitness"],
+    environment: "gym",
+    action: "jumping over an obstacle",
     updatedAt: "2026",
   };
-  const r = scoreRelevance(boardIntent, stadiumOnly);
-  assert.equal(r.specificityFail, true, "нет рекламного щита — событие уходит в A-roll");
-  assert.equal(r.relevance, 0);
-  assert.ok(r.reason.includes("advertising board"));
+  const bad = scoreRelevance(boardIntent, gymJump);
+  assert.equal(bad.specificityFail, true);
+  assert.ok(bad.reason.includes("football"), "не выполнено главное условие домена");
+
+  // футбольный контекст без самого щита — честный контекстный кадр, а не подмена события
+  const stadiumOnly: AssetAnalysis = {
+    description: "football players on a pitch during a match",
+    objects: ["stadium", "football", "pitch", "grass", "players"],
+    environment: "football stadium",
+    action: "playing football",
+    updatedAt: "2026",
+  };
+  const ctx = scoreRelevance(boardIntent, stadiumOnly);
+  assert.equal(ctx.specificityFail, false, "контекстный визуал лучше пустого A-roll");
+  assert.ok(ctx.relevance > 0, "контекст получает ненулевую релевантность");
 });
 
 test("4: скейтер не заменяет футболиста у рекламного щита", () => {

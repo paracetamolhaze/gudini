@@ -126,9 +126,43 @@ const SOURCE_INTENTS: VisualSourceIntent[] = [
  * кадра меняла цвет A-roll), TEXT_CALLOUT отключён (крупная типографика — только на обложке).
  */
 const LIMITS: Record<string, { min: number; max: number; count: number }> = {
-  // короткие частые вставки: смена визуального состояния каждые ~2.5–4.5 сек
-  B_ROLL: { min: 1.8, max: 5.0, count: 14 },
+  // короткие частые вставки: визуальное состояние меняется каждые ~2–4 сек
+  B_ROLL: { min: 1.5, max: 5.0, count: 18 },
 };
+
+/** Доля ролика, занятая внешними визуалами. Цель 0.55–0.65, минимум 0.50. */
+export function visualCoverage(events: EditEvent[], duration: number): number {
+  if (duration <= 0) return 0;
+  const spans = events
+    .filter((e) => e.type === "B_ROLL" && e.file)
+    .map((e) => ({ start: e.start, end: e.end }))
+    .sort((a, b) => a.start - b.start);
+  let covered = 0;
+  let cursor = -Infinity;
+  for (const s of spans) {
+    const from = Math.max(s.start, cursor);
+    if (s.end > from) {
+      covered += s.end - from;
+      cursor = s.end;
+    }
+  }
+  return Number((covered / duration).toFixed(3));
+}
+
+/** Куски, где подряд слишком долго видно только автора, — кандидаты на доп. поиск. */
+export function aRollGaps(events: EditEvent[], duration: number, maxGap = 5.5): { start: number; end: number }[] {
+  const spans = events
+    .filter((e) => e.type === "B_ROLL" && e.file)
+    .sort((a, b) => a.start - b.start);
+  const gaps: { start: number; end: number }[] = [];
+  let cursor = 0;
+  for (const s of spans) {
+    if (s.start - cursor > maxGap) gaps.push({ start: round2(cursor), end: round2(s.start) });
+    cursor = Math.max(cursor, s.end);
+  }
+  if (duration - cursor > maxGap) gaps.push({ start: round2(cursor), end: round2(duration) });
+  return gaps;
+}
 
 /**
  * Сдвигает перебивки так, чтобы они закрывали склейки после чистки речи.

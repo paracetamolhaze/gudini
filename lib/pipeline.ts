@@ -183,18 +183,19 @@ export async function processProject(id: string): Promise<void> {
     // --- Монтажный план: ИИ-режиссёр → валидация → материалы; fallback — старый конвейер ---
     setStep(id, "Режиссёрский план", 24);
     let plan: EditPlan | null = null;
+    // точки видимых склеек на чистом таймлайне — планировщик постарается их накрыть
+    const seamPoints = segments
+      .slice(1)
+      .map((_, i) => segments.slice(0, i + 1).reduce((sum, x) => sum + (x.end - x.start), 0))
+      .filter((t) => t > 0.5 && t < effDur - 0.5);
     if (smartEditing()) {
       try {
-        plan = await planEdit(project.topic, project.script, words, effDur);
+        plan = await planEdit(project.topic, project.script, words, effDur, seamPoints);
       } catch (e) {
         console.warn("Планировщик упал, fallback:", e);
       }
     }
     if (plan) {
-      // точки видимых склеек на чистом таймлайне — их надо закрыть перебивками
-      const seamPoints = segments
-        .slice(1)
-        .map((_, i) => segments.slice(0, i + 1).reduce((s, x) => s + (x.end - x.start), 0));
       plan.events = coverSpeechCuts(plan.events, seamPoints, effDur);
       setStep(id, "Подбор перебивок", 28);
       plan.events = await resolveBrollEvents(dir, plan.events);

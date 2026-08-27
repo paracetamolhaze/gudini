@@ -79,6 +79,8 @@ export async function planEdit(
   script: string | null,
   words: Word[],
   duration: number,
+  /** моменты видимых склеек после чистки речи — их желательно накрыть перебивкой */
+  seamPoints: number[] = [],
 ): Promise<EditPlan | null> {
   const key = getSettings().anthropicKey;
   if (!key || words.length < 10) return null;
@@ -95,7 +97,13 @@ export async function planEdit(
         content:
           `Тема: ${topic}\n\n` +
           (script ? `Оригинальный сценарий:\n${script}\n\n` : "") +
-          `Транскрипция (индекс:слово), длительность ${duration.toFixed(1)} сек:\n${list}`,
+          `Транскрипция (индекс:слово), длительность ${duration.toFixed(1)} сек:\n${list}` +
+          (seamPoints.length
+            ? `\n\nСКЛЕЙКИ РЕЧИ на ${seamPoints.map((s) => s.toFixed(1)).join(", ")} сек. ` +
+              `В этих местах вырезаны запинки, и лицо автора заметно «прыгает». ` +
+              `Постарайся поставить перебивку так, чтобы она НАЧИНАЛАСЬ примерно за 0.3 сек до склейки ` +
+              `и заканчивалась после неё — тогда монтаж речи не будет виден.`
+            : ""),
       },
     ],
   });

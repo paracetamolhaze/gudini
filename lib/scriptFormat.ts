@@ -47,8 +47,52 @@ function scriptTokens(script: string): ScriptToken[] {
  * Совпадение ищется по скелету; при нескольких кандидатах берётся ближайший
  * по относительной позиции в тексте — так «1/8» не перепутается с другим числом.
  */
+/** Слова, из которых состоят числительные, произнесённые прописью. */
+const NUMERAL_WORDS = new Set([
+  "ноль", "один", "одна", "одно", "два", "две", "три", "четыре", "пять", "шесть", "семь", "восемь",
+  "девять", "десять", "одиннадцать", "двенадцать", "двадцать", "тридцать", "сорок", "пятьдесят",
+  "сто", "двести", "триста", "тысяча", "тысячи", "тысяч", "миллион", "миллиона", "миллионов",
+  "вторая", "третья", "четвёртая", "четвертая", "восьмая", "шестнадцатая", "половина", "целых",
+  "процент", "процента", "процентов", "доллар", "доллара", "долларов", "рубль", "рубля", "рублей",
+]);
+
+const norm = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]/gu, "");
+const stemOf = (s: string) => norm(s).slice(0, Math.max(4, norm(s).length - 2));
+
+/**
+ * Числительное, произнесённое прописью, заменяется канонической записью из сценария:
+ * «одна восьмая финала» → «1/8 финала». Находим по слову-якорю, которое идёт в сценарии
+ * СЛЕДОМ за числом, и схлопываем стоящие перед ним числительные в один токен.
+ */
+function collapseSpelledNumbers(words: Word[], script: string): Word[] {
+  const tokens = script.split(/\s+/).filter(Boolean);
+  const out = [...words];
+
+  for (let t = 0; t < tokens.length - 1; t++) {
+    const num = tokens[t].replace(/^[«"'(\[]+/, "").replace(/[»"')\],.!?;:…]+$/, "");
+    if (!/\d/.test(num)) continue;
+    const anchor = tokens[t + 1].replace(/[»"')\],.!?;:…]+$/, "");
+    if (!anchor || !/\p{L}/u.test(anchor)) continue;
+
+    for (let i = 1; i < out.length; i++) {
+      if (stemOf(out[i].word) !== stemOf(anchor)) continue;
+      if (norm(out[i - 1].word) === norm(num)) break; // уже в канонической записи
+      // сколько числительных стоит перед якорем
+      let from = i;
+      while (from > 0 && NUMERAL_WORDS.has(norm(out[from - 1].word)) && i - from < 3) from--;
+      if (from === i) break; // числительных нет — это другое место
+      out.splice(from, i - from, { word: num, start: out[from].start, end: out[i - 1].end });
+      console.log(`Субтитры: «${words.slice(from, i).map((w) => w.word).join(" ")}» → «${num}»`);
+      break;
+    }
+  }
+  return out;
+}
+
 export function applyScriptFormatting(words: Word[], script: string | null): Word[] {
   if (!script?.trim() || !words.length) return words;
+  // сначала числа прописью → каноническая запись («одна восьмая» → «1/8»)
+  words = collapseSpelledNumbers(words, script);
   const specials = scriptTokens(script);
   if (!specials.length) return words;
 

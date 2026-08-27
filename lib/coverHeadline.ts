@@ -119,6 +119,8 @@ export function scoreHeadline(input: string, anchors: string[] = []): HeadlineSc
 }
 
 export type HeadlineSelection = {
+  /** прошёл ли semantic preflight: хотя бы один кандидат сохранил предмет ролика */
+  ok: boolean;
   headlineCandidates: string[];
   scores: HeadlineScore[];
   selectedHeadline: string;
@@ -130,6 +132,10 @@ export type HeadlineSelection = {
  * Смысл важнее формы: если хотя бы один кандидат держит якорь, кандидаты без якоря
  * не побеждают никогда — иначе выигрывало бы «НЕ БЕГИ», из которого исчез тигр.
  * Дальше — баллы формы, затем информативность, затем краткость.
+ *
+ * ok=false означает, что якорь потеряли ВСЕ кандидаты. Это не повод платить за
+ * картинку с заведомо слабым заголовком — вызывающий код обязан запросить новые
+ * варианты текстом (это почти бесплатно), а не идти в генератор.
  */
 export function selectHeadline(candidates: string[], anchors: string[] = []): HeadlineSelection {
   const cleaned = candidates.map((c) => String(c ?? "").trim()).filter(Boolean);
@@ -148,7 +154,7 @@ export function selectHeadline(candidates: string[], anchors: string[] = []): He
   const anchorNote = anchors.length
     ? best.matchedAnchors.length
       ? `; предмет ролика сохранён (${best.matchedAnchors.join(", ")})`
-      : `; ВНИМАНИЕ: ни один вариант не удержал якоря (${anchors.join(", ")})`
+      : `; ОТКЛОНЕНО: ни один вариант не удержал якоря (${anchors.join(", ")}) — картинка не заказывается`
     : "";
   const reason = best.penalties.length
     ? `${best.score} баллов — лучший из ${scores.length}; замечания: ${best.penalties.join(", ")}${anchorNote}`
@@ -156,26 +162,40 @@ export function selectHeadline(candidates: string[], anchors: string[] = []): He
       (tie ? `; при равном счёте выбран самый информативный (${best.contentWords} смысловых слова)` : "") +
       anchorNote;
 
-  return { headlineCandidates: scores.map((s) => s.headline), scores, selectedHeadline: best.headline, reason };
+  return {
+    ok: anyAnchor,
+    headlineCandidates: scores.map((s) => s.headline),
+    scores,
+    selectedHeadline: best.headline,
+    reason,
+  };
 }
 
 /**
  * Применяет preflight к концепту: фиксирует победивший заголовок и пишет отчёт.
  * После этого headline не меняется — ни промптом, ни QC.
  */
-export function applyHeadlinePreflight(concept: CoverConcept, dir?: string): HeadlineSelection {
+export function applyHeadlinePreflight(
+  concept: CoverConcept,
+  dir?: string,
+  options: { attempt?: number; ignoreAnchor?: boolean } = {},
+): HeadlineSelection {
   const fromLines = concept.headlineLines.map((l) => l.text).join(" ");
   const candidates = concept.headlineCandidates?.length ? concept.headlineCandidates : [fromLines];
-  const selection = selectHeadline(candidates, concept.headlineAnchor ?? []);
+  // явный заголовок пользователя — его осознанный выбор, шлюз смысла к нему не применяем
+  const selection = selectHeadline(candidates, options.ignoreAnchor ? [] : (concept.headlineAnchor ?? []));
 
   concept.headlineLines = breakHeadline(null, selection.selectedHeadline);
   concept.headline = concept.headlineLines.map((l) => l.text).join("\n");
 
   if (dir) {
+    const attempt = options.attempt ?? 1;
     fs.writeFileSync(
-      path.join(dir, "cover-headline-preflight.json"),
+      path.join(dir, attempt > 1 ? `cover-headline-preflight-${attempt}.json` : "cover-headline-preflight.json"),
       JSON.stringify(
         {
+          attempt,
+          ok: selection.ok,
           headlineCandidates: selection.headlineCandidates,
           scores: selection.scores.map((s) => s.score),
           headlineAnchor: concept.headlineAnchor ?? [],
@@ -190,4 +210,45 @@ export function applyHeadlinePreflight(concept: CoverConcept, dir?: string): Hea
     );
   }
   return selection;
+}
+
+/** Жёсткое напоминание для повторной ТЕКСТОВОЙ попытки (картинка ещё не заказывалась). */
+export const STRICT_ANCHOR_NOTE =
+  "ВАЖНО: предыдущие варианты заголовка потеряли предмет ролика и были отклонены. " +
+  "Каждый из трёх новых вариантов ОБЯЗАН содержать хотя бы одно слово из headlineAnchor " +
+  "(можно в другой форме). Абстракции вроде «ВСЁ ПРОПАЛО», «БУДУЩЕЕ НАСТАЛО», «НЕ БЕГИ» запрещены.";
+
+export const MAX_HEADLINE_ATTEMPTS = 2;
+
+export type HeadlineResolution = {
+  ok: boolean;
+  attempts: number;
+  concept?: CoverConcept;
+  selection?: HeadlineSelection;
+};
+
+/**
+ * Semantic preflight как ШЛЮЗ перед платной генерацией.
+ * Текстовые попытки стоят доли цента, поэтому при потере смысла мы просим новые
+ * варианты (максимум 2 попытки) и только потом решаем, заказывать ли картинку.
+ * Если смысл не удержан и после этого — HEADLINE_FAILED, Gemini не вызывается вообще.
+ */
+export async function resolveHeadline(
+  makeConcept: (attempt: number, strictNote: string | null) => Promise<CoverConcept | null>,
+  dir?: string,
+  options: { ignoreAnchor?: boolean; maxAttempts?: number } = {},
+): Promise<HeadlineResolution> {
+  const maxAttempts = options.maxAttempts ?? MAX_HEADLINE_ATTEMPTS;
+  let last: { concept: CoverConcept; selection: HeadlineSelection } | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const concept = await makeConcept(attempt, attempt > 1 ? STRICT_ANCHOR_NOTE : null);
+    if (!concept) continue;
+    const selection = applyHeadlinePreflight(concept, dir, { attempt, ignoreAnchor: options.ignoreAnchor });
+    last = { concept, selection };
+    if (selection.ok) return { ok: true, attempts: attempt, concept, selection };
+    console.warn(`Cover preflight #${attempt}: ${selection.reason}`);
+  }
+
+  return { ok: false, attempts: maxAttempts, concept: last?.concept, selection: last?.selection };
 }

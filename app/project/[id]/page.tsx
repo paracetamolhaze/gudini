@@ -14,7 +14,7 @@ type Project = {
   processing: { state: "idle" | "running" | "done" | "error"; step: string; progress: number; error?: string };
   subtitlesSource?: string;
   cover?: string | null;
-  coverStatus?: "ok" | "failed";
+  coverStatus?: "ok" | "failed" | "headline_failed";
   brollCount?: number;
   meta: Meta | null;
   publications: Publication[];
@@ -607,12 +607,15 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
     );
   }
 
-  if (project.coverStatus !== "failed") return null;
+  if (project.coverStatus !== "failed" && project.coverStatus !== "headline_failed") return null;
 
+  const headlineFailed = project.coverStatus === "headline_failed";
   return (
     <div style={{ textAlign: "center", marginTop: 12 }}>
       <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>
-        Не удалось сгенерировать качественную обложку.
+        {headlineFailed
+          ? "Не удалось подобрать заголовок, сохраняющий тему ролика. Картинка не генерировалась — деньги не потрачены."
+          : "Не удалось сгенерировать качественную обложку."}
       </p>
       {editing ? (
         <div style={{ maxWidth: 320, margin: "8px auto 0" }}>
@@ -635,7 +638,7 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
       ) : (
         <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
           <button className="btn" onClick={() => regenerate()}>
-            Перегенерировать
+            {headlineFailed ? "Сгенерировать заголовок заново" : "Перегенерировать"}
           </button>
           <button className="btn btn-secondary" onClick={() => setEditing(true)}>
             Изменить заголовок

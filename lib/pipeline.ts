@@ -17,7 +17,7 @@ import { generateMeta } from "./ai";
 import { prepareBroll, resolveBrollEvents } from "./broll";
 import { planEdit } from "./editPlanner";
 import { generateCoverConcept } from "./cover";
-import { applyHeadlinePreflight } from "./coverHeadline";
+import { resolveHeadline } from "./coverHeadline";
 import { buildCover } from "./coverPipeline";
 import { fullAiCoverEnabled } from "./coverProvider";
 import type { CoverStatus } from "./store";
@@ -249,20 +249,37 @@ export async function makeCover(
     return { cover: null, coverStatus: "failed" };
   }
   try {
-    const concept = await generateCoverConcept(topic, script, title);
-    if (!concept) {
-      console.warn("Cover: INVALID_CONCEPT — концепт не сгенерировался/не распарсился");
-      return { cover: null, coverStatus: "failed" };
+    const override = headlineOverride?.trim();
+    // ШЛЮЗ: до платной картинки заголовок обязан пройти semantic preflight.
+    // Текстовые попытки почти бесплатны, поэтому при потере смысла просим новые
+    // варианты, а не оплачиваем картинку с заведомо слабым заголовком.
+    const resolved = await resolveHeadline(
+      async (_attempt, strictNote) => {
+        const concept = await generateCoverConcept(topic, script, title, strictNote);
+        if (concept && override) concept.headlineCandidates = [override]; // выбор пользователя
+        return concept;
+      },
+      dir,
+      { ignoreAnchor: !!override },
+    );
+
+    if (!resolved.ok || !resolved.concept) {
+      if (!resolved.concept) {
+        console.warn("Cover: INVALID_CONCEPT — концепт не сгенерировался/не распарсился");
+        return { cover: null, coverStatus: "failed" };
+      }
+      console.warn(
+        `Cover: HEADLINE_FAILED — за ${resolved.attempts} текстовые попытки заголовок так и не сохранил ` +
+          `предмет ролика (${resolved.concept.headlineAnchor?.join(", ") ?? "—"}); картинка НЕ заказывалась`,
+      );
+      return { cover: null, coverStatus: "headline_failed" };
     }
-    // заголовок, заданный пользователем вручную, побеждает без отбора
-    if (headlineOverride?.trim()) {
-      concept.headlineCandidates = [headlineOverride.trim()];
-    }
-    // Headline Preflight: из 3 текстовых вариантов детерминированно выбираем самый
-    // безопасный для отрисовки — это дешевле, чем ловить брак после платной генерации
-    const preflight = applyHeadlinePreflight(concept, dir);
+
+    const concept = resolved.concept;
+    const preflight = resolved.selection!;
     console.log(
-      `Cover preflight: ${preflight.headlineCandidates.map((h, i) => `«${h}» ${preflight.scores[i].score}`).join(" | ")} → «${preflight.selectedHeadline}»`,
+      `Cover preflight (попыток: ${resolved.attempts}): ` +
+        `${preflight.headlineCandidates.map((h, i) => `«${h}» ${preflight.scores[i].score}`).join(" | ")} → «${preflight.selectedHeadline}»`,
     );
     fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
     const r = await buildCover(dir, concept, {}, { manual });

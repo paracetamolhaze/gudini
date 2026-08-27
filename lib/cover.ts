@@ -130,6 +130,8 @@ export async function generateCoverConcept(
   topic: string,
   script: string | null,
   title?: string | null,
+  /** жёсткая корректирующая инструкция для повторной ТЕКСТОВОЙ попытки (см. resolveHeadline) */
+  strictNote?: string | null,
   styleHint?: string | null,
 ): Promise<CoverConcept | null> {
   const key = getSettings().anthropicKey;
@@ -146,7 +148,8 @@ export async function generateCoverConcept(
           `Тема: ${topic}\n` +
           (title ? `Рабочий заголовок ролика: ${title}\n` : "") +
           (styleHint ? `Пожелание по стилю: ${styleHint}\n` : "") +
-          (script ? `\nСценарий:\n${script}` : ""),
+          (script ? `\nСценарий:\n${script}` : "") +
+          (strictNote ? `\n\n${strictNote}` : ""),
       },
     ],
   });

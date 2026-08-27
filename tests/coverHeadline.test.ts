@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { scoreHeadline, selectHeadline, applyHeadlinePreflight, matchAnchors } from "../lib/coverHeadline";
+import { scoreHeadline, selectHeadline, applyHeadlinePreflight, matchAnchors, resolveHeadline } from "../lib/coverHeadline";
 import { buildCover } from "../lib/coverPipeline";
 import type { CoverConcept } from "../lib/cover";
 import type { CoverQcResult } from "../lib/coverQc";
@@ -12,11 +12,12 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "gudini-headline-"));
 }
 
-function concept(candidates: string[]): CoverConcept {
+function concept(candidates: string[], anchors: string[] = []): CoverConcept {
   return {
     headline: candidates[0],
     headlineLines: [{ text: candidates[0], accent: false }],
     headlineCandidates: candidates,
+    headlineAnchor: anchors,
     typographyDirection: "ACCENT_BOX",
     emotion: "frozen alarm",
     scene: { mainSubject: "person turning head", storyObject: "tiger in courtyard", environment: "courtyard" },
@@ -70,15 +71,67 @@ test("Anchor: заголовок обязан сохранить предмет 
   assert.deepEqual(matchAnchors("ВСЁ ПРОПАЛО", ["деньги"]), []);
 });
 
-test("Anchor: якорь сильнее формы, но не ломает отбор, если его не удержал никто", () => {
+test("Anchor: якорь сильнее формы; потеря якоря всеми = шлюз закрыт (ok=false)", () => {
   // кандидат с якорем побеждает, даже будучи длиннее и «хуже» по форме
   const r = selectHeadline(["НЕ БЕГИ", "ОПАСНЫЙ ТИГР ОКАЗАЛСЯ У ДОМА"], ["тигр"]);
+  assert.equal(r.ok, true);
   assert.equal(r.selectedHeadline, "ОПАСНЫЙ ТИГР ОКАЗАЛСЯ У ДОМА");
 
-  // если якорь потеряли все — выбираем лучший по форме и предупреждаем в reason
-  const none = selectHeadline(["ВСЁ ПРОПАЛО", "КОНЕЦ ИСТОРИИ НАСТУПИЛ БЫСТРО"], ["деньги"]);
-  assert.equal(none.selectedHeadline, "ВСЁ ПРОПАЛО");
-  assert.ok(none.reason.includes("ни один вариант не удержал якоря"));
+  // если якорь потеряли все — картинку заказывать нельзя
+  const none = selectHeadline(["ВСЁ ПРОПАЛО", "БУДУЩЕЕ НАСТАЛО"], ["деньги"]);
+  assert.equal(none.ok, false, "шлюз обязан закрыться до платной генерации");
+  assert.ok(none.reason.includes("картинка не заказывается"));
+});
+
+test("Шлюз: вторая ТЕКСТОВАЯ попытка спасает, картинка заказывается один раз", async () => {
+  const dir = tmpDir();
+  const notes: (string | null)[] = [];
+  const resolved = await resolveHeadline(
+    async (attempt, strictNote) => {
+      notes.push(strictNote);
+      return attempt === 1
+        ? concept(["ВСЁ ПРОПАЛО", "БУДУЩЕЕ НАСТАЛО", "КОНЕЦ БЛИЗОК"], ["деньги"])
+        : concept(["ДЕНЬГИ СГОРЕЛИ", "ПОТЕРЯЛ ВСЁ", "ДЕНЬГИ ИСПАРИЛИСЬ"], ["деньги"]);
+    },
+    dir,
+  );
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.attempts, 2);
+  assert.equal(resolved.selection!.selectedHeadline, "ДЕНЬГИ СГОРЕЛИ");
+  assert.equal(notes[0], null, "первая попытка идёт без корректирующей инструкции");
+  assert.ok(notes[1]?.includes("headlineAnchor"), "вторая попытка требует якорь жёстко");
+  assert.ok(fs.existsSync(path.join(dir, "cover-headline-preflight.json")));
+  assert.ok(fs.existsSync(path.join(dir, "cover-headline-preflight-2.json")), "обе попытки залогированы");
+});
+
+test("Шлюз: обе текстовые попытки провалились → HEADLINE_FAILED, генератор не вызывается", async () => {
+  const dir = tmpDir();
+  let textAttempts = 0;
+  const resolved = await resolveHeadline(
+    async () => {
+      textAttempts++;
+      return concept(["ВСЁ ПРОПАЛО", "БУДУЩЕЕ НАСТАЛО", "КОНЕЦ БЛИЗОК"], ["деньги", "потеря"]);
+    },
+    dir,
+  );
+  assert.equal(resolved.ok, false);
+  assert.equal(textAttempts, 2, "ровно 2 текстовые попытки — они почти бесплатны");
+  assert.equal(fs.existsSync(path.join(dir, "cover-attempt-1.png")), false, "картинка не заказывалась");
+  assert.equal(fs.existsSync(path.join(dir, "cover.jpg")), false);
+});
+
+test("Шлюз: заголовок пользователя проходит без проверки якоря", async () => {
+  const dir = tmpDir();
+  const resolved = await resolveHeadline(
+    async () => {
+      const c = concept(["ВСЁ ПРОПАЛО"], ["деньги"]);
+      return c;
+    },
+    dir,
+    { ignoreAnchor: true },
+  );
+  assert.equal(resolved.ok, true, "явный выбор пользователя не блокируется");
+  assert.equal(resolved.attempts, 1);
 });
 
 test("Preflight 4: после отбора image-генератор вызывается ровно один раз", async () => {

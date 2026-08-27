@@ -19,8 +19,12 @@ export type Publication = {
   at: string;
 };
 
-/** ok — обложка прошла QC; failed — единственная генерация не прошла QC (авто-повторов нет). */
-export type CoverStatus = "ok" | "failed";
+/**
+ * ok — обложка прошла QC;
+ * failed — единственная генерация не прошла QC (авто-повторов нет);
+ * headline_failed — заголовок не прошёл semantic preflight, картинка НЕ заказывалась (денег не потрачено).
+ */
+export type CoverStatus = "ok" | "failed" | "headline_failed";
 
 export type ProjectMeta = {
   title: string;

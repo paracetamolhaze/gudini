@@ -255,3 +255,88 @@ export function saveSettings(patch: Partial<Settings>) {
   } catch {}
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ ...saved, ...patch }, null, 2), "utf8");
 }
+
+// ===== Аккаунты платформ =====
+// Активный аккаунт лежит в <platform>Tokens — публикация читает только его.
+// savedAccounts хранит все подключённые, чтобы можно было переключаться без переподключения.
+
+const TOKENS_KEY: Record<Platform, "youtubeTokens" | "tiktokTokens" | "instagramTokens"> = {
+  youtube: "youtubeTokens",
+  tiktok: "tiktokTokens",
+  instagram: "instagramTokens",
+};
+
+function readSaved(): Settings {
+  try {
+    return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Подключение аккаунта: сохраняет его в список и делает активным.
+ * Повторный вход тем же аккаунтом обновляет токены, а не создаёт дубль.
+ */
+export function connectAccount(platform: Platform, id: string, label: string, tokens: PlatformTokens) {
+  const saved = readSaved();
+  const list = (saved.savedAccounts?.[platform] ?? []).filter((a) => a.id !== id);
+  list.push({ id, label, at: new Date().toISOString(), tokens });
+  saveSettings({
+    [TOKENS_KEY[platform]]: tokens,
+    savedAccounts: { ...saved.savedAccounts, [platform]: list },
+    activeAccounts: { ...saved.activeAccounts, [platform]: id },
+  } as Partial<Settings>);
+}
+
+/** Переключение на ранее подключённый аккаунт — без повторного OAuth. */
+export function activateAccount(platform: Platform, id: string): boolean {
+  const saved = readSaved();
+  const account = saved.savedAccounts?.[platform]?.find((a) => a.id === id);
+  if (!account) return false;
+  saveSettings({
+    [TOKENS_KEY[platform]]: account.tokens,
+    activeAccounts: { ...saved.activeAccounts, [platform]: id },
+  } as Partial<Settings>);
+  return true;
+}
+
+/** Удаление аккаунта. Если он был активным — платформа остаётся неподключённой. */
+export function removeAccount(platform: Platform, id: string) {
+  const saved = readSaved();
+  const list = (saved.savedAccounts?.[platform] ?? []).filter((a) => a.id !== id);
+  const patch: Partial<Settings> = {
+    savedAccounts: { ...saved.savedAccounts, [platform]: list },
+  };
+  if (saved.activeAccounts?.[platform] === id) {
+    patch[TOKENS_KEY[platform]] = undefined;
+    patch.activeAccounts = { ...saved.activeAccounts, [platform]: undefined };
+  }
+  saveSettings(patch);
+}
+
+/** Обновление токенов активного аккаунта (например, после refresh) — синхронно в списке. */
+export function updateActiveTokens(platform: Platform, tokens: PlatformTokens) {
+  const saved = readSaved();
+  const activeId = saved.activeAccounts?.[platform];
+  const patch: Partial<Settings> = { [TOKENS_KEY[platform]]: tokens } as Partial<Settings>;
+  if (activeId) {
+    patch.savedAccounts = {
+      ...saved.savedAccounts,
+      [platform]: (saved.savedAccounts?.[platform] ?? []).map((a) => (a.id === activeId ? { ...a, tokens } : a)),
+    };
+  }
+  saveSettings(patch);
+}
+
+/** Список аккаунтов платформы для UI. */
+export function listAccounts(platform: Platform): Array<{ id: string; label: string; at: string; active: boolean }> {
+  const saved = readSaved();
+  const activeId = saved.activeAccounts?.[platform];
+  return (saved.savedAccounts?.[platform] ?? []).map((a) => ({
+    id: a.id,
+    label: a.label,
+    at: a.at,
+    active: a.id === activeId,
+  }));
+}

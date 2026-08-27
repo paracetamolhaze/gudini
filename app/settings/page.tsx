@@ -24,6 +24,16 @@ type SettingsView = {
   igAppSecret: string;
   publicBaseUrl: string;
   connected: { youtube: boolean; tiktok: boolean; instagram: boolean };
+  accounts: Record<PlatformName, Account[]>;
+};
+
+type PlatformName = "youtube" | "tiktok" | "instagram";
+type Account = { id: string; label: string; at: string; active: boolean };
+
+const PLATFORM_TITLES: Record<PlatformName, string> = {
+  youtube: "YouTube",
+  tiktok: "TikTok",
+  instagram: "Instagram",
 };
 
 export default function SettingsPage() {
@@ -71,6 +81,22 @@ function Settings() {
       const fresh = await (await fetch("/api/settings")).json();
       setS(fresh);
     } else setError("Не удалось сохранить");
+  }
+
+  async function account_(platform: PlatformName, id: string, action: "activate" | "remove") {
+    setError("");
+    const res = await fetch("/api/settings/accounts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform, id, action }),
+    });
+    const j = await res.json().catch(() => null);
+    if (j?.error) {
+      setError(j.error);
+      return;
+    }
+    const fresh = await fetch("/api/settings").then((r) => r.json());
+    setS(fresh);
   }
 
   async function connect(platform: string) {
@@ -301,6 +327,38 @@ function Settings() {
         </p>
         <label>Публичный URL сервера (после деплоя, для Instagram)</label>
         <input type="text" value={s.publicBaseUrl} onChange={(e) => field("publicBaseUrl", e.target.value)} placeholder="https://mysite.com" />
+      </div>
+
+      <div className="card">
+        <h3 style={{ margin: "0 0 4px", fontSize: 15 }}>👥 Подключённые аккаунты</h3>
+        <p className="hint">
+          Публикация всегда идёт в активный аккаунт. Подключение нового не стирает старый — можно
+          переключаться без повторного входа.
+        </p>
+        {(Object.keys(PLATFORM_TITLES) as PlatformName[]).map((platform) => (
+          <div key={platform} style={{ marginTop: 12 }}>
+            <label>{PLATFORM_TITLES[platform]}</label>
+            {s.accounts[platform].length === 0 ? (
+              <p className="hint">Нет подключённых аккаунтов.</p>
+            ) : (
+              s.accounts[platform].map((account) => (
+                <div key={account.id} className="row" style={{ alignItems: "center", gap: 8, marginTop: 6 }}>
+                  <span>{account.label}</span>
+                  {account.active && <span className="badge success">активен</span>}
+                  <div className="spacer" />
+                  {!account.active && (
+                    <button className="btn btn-secondary btn-sm" onClick={() => account_(platform, account.id, "activate")}>
+                      Сделать активным
+                    </button>
+                  )}
+                  <button className="btn btn-secondary btn-sm" onClick={() => account_(platform, account.id, "remove")}>
+                    Удалить
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        ))}
       </div>
 
       {error && <div className="error-box">{error}</div>}

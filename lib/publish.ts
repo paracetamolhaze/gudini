@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { getProject, getSettings, projectDir, saveSettings, Platform, Publication, updateProject } from "./store";
+import { getProject, getSettings, projectDir, updateActiveTokens, Platform, Publication, updateProject } from "./store";
 
 export type PublishResult = Omit<Publication, "at">;
 
@@ -22,7 +22,7 @@ export async function publish(id: string, platform: Platform): Promise<Publicati
     if (platform === "youtube")
       result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? [], coverPath);
     else if (platform === "tiktok") result = await publishTikTok(videoPath);
-    else result = await publishInstagram(id, title, description, coverMs);
+    else result = await publishInstagram(id, title, description, coverMs, Boolean(coverPath && fs.existsSync(coverPath)));
   } catch (e: any) {
     result = { platform, status: "error", message: String(e?.message ?? e) };
   }
@@ -62,8 +62,10 @@ async function youtubeAccessToken(): Promise<string | null> {
   });
   if (!res.ok) throw new Error(`Не удалось обновить токен YouTube: ${await res.text()}`);
   const json: any = await res.json();
-  saveSettings({
-    youtubeTokens: { access_token: json.access_token, refresh_token, expires_at: Date.now() + json.expires_in * 1000 },
+  updateActiveTokens("youtube", {
+    access_token: json.access_token,
+    refresh_token,
+    expires_at: Date.now() + json.expires_in * 1000,
   });
   return json.access_token;
 }
@@ -111,22 +113,39 @@ async function publishYouTube(
   if (!res.ok) throw new Error(`YouTube API: ${res.status} ${(await res.text()).slice(0, 300)}`);
   const json: any = await res.json();
 
-  // пробуем поставить сгенерированную обложку (работает на верифицированных каналах)
-  if (coverPath && fs.existsSync(coverPath)) {
-    try {
-      await fetch(`https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${json.id}`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/jpeg" },
-        body: new Uint8Array(fs.readFileSync(coverPath)),
-      });
-    } catch {}
-  }
+  const coverNote =
+    coverPath && fs.existsSync(coverPath)
+      ? await setYoutubeThumbnail(token, json.id, coverPath)
+      : "Обложки нет — YouTube подставит кадр из видео.";
   return {
     platform: "youtube",
     status: "published",
     url: `https://youtube.com/shorts/${json.id}`,
-    message: "Залито приватным черновиком — откройте YouTube Studio, проверьте и опубликуйте.",
+    message: `Залито приватным черновиком — откройте YouTube Studio, проверьте и опубликуйте. ${coverNote}`,
   };
+}
+
+/** Установка обложки. Возвращает человеческую формулировку результата — молча не падаем. */
+async function setYoutubeThumbnail(token: string, videoId: string, coverPath: string): Promise<string> {
+  try {
+    const res = await fetch(`https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${videoId}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "image/jpeg" },
+      body: new Uint8Array(fs.readFileSync(coverPath)),
+    });
+    if (res.ok) return "Обложка установлена.";
+    const text = await res.text();
+    // самая частая причина: канал без подтверждения по телефону не имеет права на свои обложки
+    if (res.status === 403) {
+      return (
+        "ОБЛОЖКА НЕ ПРИМЕНЕНА: канал не верифицирован по телефону (youtube.com/verify). " +
+        "Видео залито, обложку можно поставить вручную в Studio."
+      );
+    }
+    return `ОБЛОЖКА НЕ ПРИМЕНЕНА (${res.status}): ${text.slice(0, 160)}`;
+  } catch (e: any) {
+    return `ОБЛОЖКА НЕ ПРИМЕНЕНА: ${String(e?.message ?? e).slice(0, 160)}`;
+  }
 }
 
 // ===== TikTok (Content Posting API) =====
@@ -177,7 +196,13 @@ async function publishTikTok(videoPath: string): Promise<PublishResult> {
 
 // ===== Instagram Reels (Graph API) =====
 
-async function publishInstagram(id: string, title: string, description: string, coverMs: number): Promise<PublishResult> {
+async function publishInstagram(
+  id: string,
+  title: string,
+  description: string,
+  coverMs: number,
+  hasCover: boolean,
+): Promise<PublishResult> {
   const s = getSettings();
   const token = s.instagramTokens?.access_token;
   const igUser = s.instagramTokens?.ig_user_id;
@@ -189,21 +214,26 @@ async function publishInstagram(id: string, title: string, description: string, 
     );
   }
 
-  const videoUrl = `${s.publicBaseUrl.replace(/\/$/, "")}/api/projects/${id}/video?which=processed`;
+  const base = s.publicBaseUrl.replace(/\/$/, "");
+  const videoUrl = `${base}/api/projects/${id}/video?which=processed`;
   const caption = `${title}\n\n${description}`.slice(0, 2200);
   // прямой вход через Instagram → graph.instagram.com; вход через Facebook → graph.facebook.com
   const graph = s.instagramTokens?.via === "ig" ? "https://graph.instagram.com" : "https://graph.facebook.com";
 
+  // своя обложка (cover_url) приоритетнее кадра по таймкоду: Instagram скачает её по ссылке
+  const params: Record<string, string> = {
+    media_type: "REELS",
+    video_url: videoUrl,
+    caption,
+    access_token: token,
+  };
+  if (hasCover) params.cover_url = `${base}/api/projects/${id}/video?which=cover`;
+  else params.thumb_offset = String(coverMs);
+
   const containerRes = await fetch(`${graph}/v21.0/${igUser}/media`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      media_type: "REELS",
-      video_url: videoUrl,
-      caption,
-      thumb_offset: String(coverMs),
-      access_token: token,
-    }),
+    body: new URLSearchParams(params),
   });
   if (!containerRes.ok) throw new Error(`IG container: ${(await containerRes.text()).slice(0, 300)}`);
   const container: any = await containerRes.json();
@@ -225,5 +255,9 @@ async function publishInstagram(id: string, title: string, description: string, 
   });
   if (!pubRes.ok) throw new Error(`IG publish: ${(await pubRes.text()).slice(0, 300)}`);
   const pub: any = await pubRes.json();
-  return { platform: "instagram", status: "published", message: `Опубликовано (media id ${pub.id})` };
+  return {
+    platform: "instagram",
+    status: "published",
+    message: `Опубликовано (media id ${pub.id}). ${hasCover ? "Обложка своя." : "Обложки нет — взят кадр из видео."}`,
+  };
 }

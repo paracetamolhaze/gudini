@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { coverFontFile, getSettings, hasFace, hasMusic, saveSettings } from "@/lib/store";
+import { coverFontFile, getSettings, hasFace, hasMusic, listAccounts, saveSettings } from "@/lib/store";
 
 function mask(value?: string): string {
   if (!value) return "";
@@ -32,6 +32,11 @@ export async function GET() {
       youtube: Boolean(s.youtubeTokens),
       tiktok: Boolean(s.tiktokTokens),
       instagram: Boolean(s.instagramTokens),
+    },
+    accounts: {
+      youtube: listAccounts("youtube"),
+      tiktok: listAccounts("tiktok"),
+      instagram: listAccounts("instagram"),
     },
   });
 }

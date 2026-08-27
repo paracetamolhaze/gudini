@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSettings, saveSettings } from "@/lib/store";
+import { connectAccount, getSettings } from "@/lib/store";
 import { requestOrigin } from "@/lib/origin";
 
 type Ctx = { params: Promise<{ platform: string }> };
@@ -29,13 +29,13 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       });
       const json: any = await res.json();
       if (!json.access_token) throw new Error(JSON.stringify(json).slice(0, 300));
-      saveSettings({
-        youtubeTokens: {
-          access_token: json.access_token,
-          refresh_token: json.refresh_token,
-          expires_at: Date.now() + (json.expires_in ?? 3600) * 1000,
-        },
-      });
+      const tokens = {
+        access_token: json.access_token,
+        refresh_token: json.refresh_token,
+        expires_at: Date.now() + (json.expires_in ?? 3600) * 1000,
+      };
+      const channel = await youtubeChannel(json.access_token);
+      connectAccount("youtube", channel.id, channel.title, tokens);
     } else if (platform === "tiktok") {
       const verifier = req.cookies.get("ttk_verifier")?.value;
       const body = new URLSearchParams({
@@ -53,14 +53,14 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       });
       const json: any = await res.json();
       if (!json.access_token) throw new Error(JSON.stringify(json).slice(0, 300));
-      saveSettings({
-        tiktokTokens: {
-          access_token: json.access_token,
-          refresh_token: json.refresh_token,
-          expires_at: Date.now() + (json.expires_in ?? 3600) * 1000,
-          open_id: json.open_id,
-        },
-      });
+      const tokens = {
+        access_token: json.access_token,
+        refresh_token: json.refresh_token,
+        expires_at: Date.now() + (json.expires_in ?? 3600) * 1000,
+        open_id: json.open_id,
+      };
+      const name = await tiktokName(json.access_token);
+      connectAccount("tiktok", json.open_id ?? name, name, tokens);
     } else if (platform === "instagram" && s.igAppId && s.igAppSecret) {
       // Прямой вход через Instagram: обмен кода → короткий токен → длинный токен (60 дней)
       const cleanCode = code.replace(/#_$/, "");
@@ -88,8 +88,12 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         if (longLived.access_token) accessToken = longLived.access_token;
       } catch {}
 
-      saveSettings({
-        instagramTokens: { access_token: accessToken, ig_user_id: String(token.user_id), via: "ig" },
+      const igId = String(token.user_id);
+      const name = await instagramName(accessToken, "https://graph.instagram.com");
+      connectAccount("instagram", igId, name, {
+        access_token: accessToken,
+        ig_user_id: igId,
+        via: "ig",
       });
     } else if (platform === "instagram") {
       const tokenRes = await fetch(
@@ -115,7 +119,12 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         igUserId = pages?.data?.find((p: any) => p.instagram_business_account)?.instagram_business_account?.id;
       } catch {}
 
-      saveSettings({ instagramTokens: { access_token: token.access_token, ig_user_id: igUserId, via: "fb" } });
+      const name = await instagramName(token.access_token, "https://graph.facebook.com/v21.0", igUserId);
+      connectAccount("instagram", igUserId ?? "fb", name, {
+        access_token: token.access_token,
+        ig_user_id: igUserId,
+        via: "fb",
+      });
     } else {
       return NextResponse.redirect(`${origin}/settings?error=unknown_platform`);
     }
@@ -125,4 +134,48 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       `${origin}/settings?error=${encodeURIComponent(String(e?.message ?? e).slice(0, 200))}`,
     );
   }
+}
+
+
+// ===== Имена аккаунтов для списка в настройках =====
+// Любая ошибка здесь не должна ломать подключение — падаем на нейтральную подпись.
+
+function fallbackLabel(prefix: string): string {
+  return `${prefix} · ${new Date().toLocaleDateString("ru-RU")}`;
+}
+
+async function youtubeChannel(token: string): Promise<{ id: string; title: string }> {
+  try {
+    const res = await fetch(
+      "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const json: any = await res.json();
+    const item = json?.items?.[0];
+    if (item?.id) return { id: item.id, title: item.snippet?.title ?? item.id };
+  } catch {}
+  // scope youtube.upload может не давать читать канал — это нормально
+  return { id: `yt-${Date.now()}`, title: fallbackLabel("Канал YouTube") };
+}
+
+async function tiktokName(token: string): Promise<string> {
+  try {
+    const res = await fetch("https://open.tiktokapis.com/v2/user/info/?fields=display_name", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const json: any = await res.json();
+    const name = json?.data?.user?.display_name;
+    if (name) return name;
+  } catch {}
+  return fallbackLabel("TikTok");
+}
+
+async function instagramName(token: string, graph: string, igUserId?: string): Promise<string> {
+  try {
+    const target = igUserId ?? "me";
+    const res = await fetch(`${graph}/${target}?fields=username&access_token=${token}`);
+    const json: any = await res.json();
+    if (json?.username) return `@${json.username}`;
+  } catch {}
+  return fallbackLabel("Instagram");
 }

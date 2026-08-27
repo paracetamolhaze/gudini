@@ -1,0 +1,512 @@
+{
+  "storyId": "b618fa26",
+  "version": 2,
+  "assets": [
+    {
+      "id": "4f2a2d01b2",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-af8d7be447-1.mp4",
+      "sourceUrl": "https://www.bbc.co.uk/sport/football/videos/cqj1n077784o",
+      "sourceDomain": "bbc.co.uk",
+      "sourceVideoId": "af8d7be447",
+      "segment": {
+        "start": 12.06,
+        "end": 15.26
+      },
+      "description": "A man wearing an England football tracksuit speaks during an interview with subtitles displayed on screen.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b10_405d"
+      ],
+      "relatedFactIds": [],
+      "role": "PERSON"
+    },
+    {
+      "id": "700e246854",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-af8d7be447-2.mp4",
+      "sourceUrl": "https://www.bbc.co.uk/sport/football/videos/cqj1n077784o",
+      "sourceDomain": "bbc.co.uk",
+      "sourceVideoId": "af8d7be447",
+      "segment": {
+        "start": 20.1,
+        "end": 23.3
+      },
+      "description": "A man in an England training jacket sits in a locker room speaking during an interview, with football jerseys hanging behind him.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b10_405d"
+      ],
+      "relatedFactIds": [],
+      "role": "PERSON"
+    },
+    {
+      "id": "55e76364c8",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-af8d7be447-5.mp4",
+      "sourceUrl": "https://www.bbc.co.uk/sport/football/videos/cqj1n077784o",
+      "sourceDomain": "bbc.co.uk",
+      "sourceVideoId": "af8d7be447",
+      "segment": {
+        "start": 44.22,
+        "end": 47.42
+      },
+      "description": "A man in an England football tracksuit speaks during an interview with subtitles about pain over two days and nights.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b10_405d",
+        "b11_2ee0"
+      ],
+      "relatedFactIds": [],
+      "role": "PERSON"
+    },
+    {
+      "id": "b9355bed6d",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-31ac58638c-0.mp4",
+      "sourceUrl": "https://www.espn.com/soccer/story/_/id/49283507/jordan-henderson-taken-hospital-wrist-injury-falling-mexico-victory-celebrations-england-world-cup",
+      "sourceDomain": "espn.com",
+      "sourceVideoId": "31ac58638c",
+      "segment": {
+        "start": 7.39,
+        "end": 10.59
+      },
+      "description": "A sports television presenter discusses a World Cup match result displayed on a graphic overlay.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b5_9770"
+      ],
+      "relatedFactIds": [],
+      "role": "CONTEXT"
+    },
+    {
+      "id": "d5c2020a06",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-31ac58638c-1.mp4",
+      "sourceUrl": "https://www.espn.com/soccer/story/_/id/49283507/jordan-henderson-taken-hospital-wrist-injury-falling-mexico-victory-celebrations-england-world-cup",
+      "sourceDomain": "espn.com",
+      "sourceVideoId": "31ac58638c",
+      "segment": {
+        "start": 22.16,
+        "end": 25.36
+      },
+      "description": "A television sports analyst sits in a studio discussing a World Cup match result displayed in a graphic below him.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b5_9770"
+      ],
+      "relatedFactIds": [],
+      "role": "CONTEXT"
+    },
+    {
+      "id": "1b0ac45eec",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-31ac58638c-2.mp4",
+      "sourceUrl": "https://www.espn.com/soccer/story/_/id/49283507/jordan-henderson-taken-hospital-wrist-injury-falling-mexico-victory-celebrations-england-world-cup",
+      "sourceDomain": "espn.com",
+      "sourceVideoId": "31ac58638c",
+      "segment": {
+        "start": 36.94,
+        "end": 40.14
+      },
+      "description": "A soccer player in an England jersey points into the crowd while celebrating on the pitch.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b6_f9dc"
+      ],
+      "relatedFactIds": [],
+      "role": "CONTEXT"
+    },
+    {
+      "id": "9b98419738",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-31ac58638c-3.mp4",
+      "sourceUrl": "https://www.espn.com/soccer/story/_/id/49283507/jordan-henderson-taken-hospital-wrist-injury-falling-mexico-victory-celebrations-england-world-cup",
+      "sourceDomain": "espn.com",
+      "sourceVideoId": "31ac58638c",
+      "segment": {
+        "start": 51.72,
+        "end": 54.92
+      },
+      "description": "A soccer player in an England jersey slides on his knees celebrating a goal in front of cameras and fans.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b6_f9dc"
+      ],
+      "relatedFactIds": [],
+      "role": "CONTEXT"
+    },
+    {
+      "id": "5a9c1602e8",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-31ac58638c-4.mp4",
+      "sourceUrl": "https://www.espn.com/soccer/story/_/id/49283507/jordan-henderson-taken-hospital-wrist-injury-falling-mexico-victory-celebrations-england-world-cup",
+      "sourceDomain": "espn.com",
+      "sourceVideoId": "31ac58638c",
+      "segment": {
+        "start": 66.49,
+        "end": 69.69
+      },
+      "description": "Two sports commentators discuss a World Cup match result on a television studio set with a city skyline backdrop.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b5_9770"
+      ],
+      "relatedFactIds": [],
+      "role": "CONTEXT"
+    },
+    {
+      "id": "6deee937e7",
+      "kind": "VIDEO_SEGMENT",
+      "file": "seg-31ac58638c-5.mp4",
+      "sourceUrl": "https://www.espn.com/soccer/story/_/id/49283507/jordan-henderson-taken-hospital-wrist-injury-falling-mexico-victory-celebrations-england-world-cup",
+      "sourceDomain": "espn.com",
+      "sourceVideoId": "31ac58638c",
+      "segment": {
+        "start": 81.27,
+        "end": 84.47
+      },
+      "description": "Four sports analysts sit around a round desk on a TV studio set discussing a World Cup match result displayed in the lower graphics.",
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      },
+      "compatibleBeatIds": [
+        "b5_9770"
+      ],
+      "relatedFactIds": [],
+      "role": "CONTEXT"
+    },
+    {
+      "id": "8e2a5f55ec",
+      "kind": "IMAGE",
+      "file": "img-8e2a5f55ec.jpg",
+      "sourceUrl": "https://www.the-independent.com/sport/football/jordan-henderson-injury-england-mexico-world-cup-b3009454.html",
+      "sourceDomain": "the-independent.com",
+      "description": "FIFA medical staff carry a stretcher through a group of England football players on the pitch during a match.",
+      "role": "EVENT",
+      "compatibleBeatIds": [
+        "b9_5e99"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "c353286a66",
+      "kind": "IMAGE",
+      "file": "img-c353286a66.jpg",
+      "sourceUrl": "https://www.theguardian.com/football/2026/jul/06/jordan-henderson-wrist-injury-england-mexico-world-cup",
+      "sourceDomain": "theguardian.com",
+      "description": "A group of staff and officials carry an injured player off the pitch on a stretcher during a football match.",
+      "role": "EVENT",
+      "compatibleBeatIds": [
+        "b9_5e99"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "ddc5ced84e",
+      "kind": "IMAGE",
+      "file": "img-ddc5ced84e.jpg",
+      "sourceUrl": "https://www.nbcnews.com/news/us-news/englands-jordan-henderson-suffers-injury-wonderwall-celebration-world-rcna353156",
+      "sourceDomain": "nbcnews.com",
+      "description": "Soccer players celebrate a goal in a pile on the pitch while a teammate reacts with an open-mouthed shout nearby.",
+      "role": "CONTEXT",
+      "compatibleBeatIds": [
+        "b6_f9dc"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "be5088bf5c",
+      "kind": "IMAGE",
+      "file": "img-be5088bf5c.jpg",
+      "sourceUrl": "https://www.goal.com/en/lists/video-jordan-henderson-injured-arm-england-world-cup-mexico-brentford-hospital/blt13fc65cc4f98c1bd",
+      "sourceDomain": "goal.com",
+      "description": "An injured soccer player receives medical attention on the field while teammates stand around watching.",
+      "role": "EVENT",
+      "compatibleBeatIds": [
+        "b8_8516"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "ac5af40990",
+      "kind": "IMAGE",
+      "file": "img-ac5af40990.jpg",
+      "sourceUrl": "https://www.the-independent.com/topic/jordan-henderson",
+      "sourceDomain": "the-independent.com",
+      "description": "A man lies in a hospital bed giving a thumbs up while his bandaged arm rests on a towel.",
+      "role": "EVENT",
+      "compatibleBeatIds": [
+        "b9_5e99",
+        "b11_2ee0"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "d2fe821940",
+      "kind": "IMAGE",
+      "file": "img-d2fe821940.jpg",
+      "sourceUrl": "https://india.com/sports/fifa-world-cup-2026-jordan-hendersons-campaign-ends-after-fringe-injury-while-celebrating-englands-victory-8467285",
+      "sourceDomain": "india.com",
+      "description": "A footballer in a red Liverpool kit stands with hands on hips looking dejected during a match.",
+      "role": "PERSON",
+      "compatibleBeatIds": [
+        "b2_2464"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "a1514aab00",
+      "kind": "IMAGE",
+      "file": "img-a1514aab00.jpg",
+      "sourceUrl": "https://dailymail.com/sport/football/article-15959629/jordan-henderson-england-injury-kansas-city.html",
+      "sourceDomain": "dailymail.com",
+      "description": "A soccer player collides with an advertising board on the sideline and falls to the ground while others watch nearby.",
+      "role": "EVENT",
+      "compatibleBeatIds": [
+        "b7_cd32",
+        "b8_8516"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "141e1f777e",
+      "kind": "IMAGE",
+      "file": "img-141e1f777e.jpg",
+      "sourceUrl": "https://www.football365.com/news/jordan-henderson-in-a-bit-of-bother-and-stretchered-off-after-fall-over-hoardings",
+      "sourceDomain": "football365.com",
+      "description": "FIFA medical staff carry an injured player off the pitch on a stretcher while England footballers gather around in concern.",
+      "role": "EVENT",
+      "compatibleBeatIds": [
+        "b9_5e99"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "bef5843a08",
+      "kind": "IMAGE",
+      "file": "img-bef5843a08.jpg",
+      "sourceUrl": "https://www.indy100.com/sport/jordan-henderson-fall-yellow-card-2677165865",
+      "sourceDomain": "indy100.com",
+      "description": "A soccer player speaks at a press conference with a football placed in front of him on the table.",
+      "role": "PERSON",
+      "compatibleBeatIds": [
+        "b10_405d"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    },
+    {
+      "id": "40aa84a206",
+      "kind": "IMAGE",
+      "file": "img-40aa84a206.jpg",
+      "sourceUrl": "https://www.foxnews.com/sports/england-player-injures-wrist-hopping-ad-board-during-team-world-cup-victory-celebration-vs-mexico",
+      "sourceDomain": "foxnews.com",
+      "description": "A soccer player in a red England jersey applauds fans after a match.",
+      "role": "CONTEXT",
+      "compatibleBeatIds": [
+        "b6_f9dc"
+      ],
+      "relatedFactIds": [],
+      "verification": {
+        "sourceVerified": true,
+        "visualVerified": true,
+        "version": 2
+      }
+    }
+  ],
+  "coverage": [
+    {
+      "beatId": "b0_2d3e",
+      "text": "Это первый футболист в мире, который не провёл на поле ни од",
+      "need": "ENTITY",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b1_08cf",
+      "text": "Чемпионат мира, 1/8 финала, Англия играет с Мексикой,",
+      "need": "CONTEXT",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b2_2464",
+      "text": "и в запасе сидит Джордан Хендерсон.",
+      "need": "ENTITY",
+      "videos": 0,
+      "images": 1,
+      "covered": true
+    },
+    {
+      "beatId": "b3_09ed",
+      "text": "Весь матч тренер его так и не выпускает.",
+      "need": "ENTITY",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b4_f1ba",
+      "text": "Но Хендерсон так заводится на скамейке, что начинает спорить",
+      "need": "EXACT_EVENT",
+      "videos": 0,
+      "images": 0,
+      "covered": false
+    },
+    {
+      "beatId": "b5_9770",
+      "text": "Дальше Англия побеждает и выходит в четвертьфинал.",
+      "need": "EXACT_EVENT",
+      "videos": 4,
+      "images": 0,
+      "covered": true
+    },
+    {
+      "beatId": "b6_f9dc",
+      "text": "После финальный свистка все бегут праздновать.",
+      "need": "CONTEXT",
+      "videos": 2,
+      "images": 2,
+      "covered": true
+    },
+    {
+      "beatId": "b7_cd32",
+      "text": "И Хендерсон на радостях решает перепрыгнуть через рекламный ",
+      "need": "EXACT_EVENT",
+      "videos": 0,
+      "images": 1,
+      "covered": true
+    },
+    {
+      "beatId": "b8_8516",
+      "text": "Спотыкается и неудачно падает на руку.",
+      "need": "EXACT_EVENT",
+      "videos": 0,
+      "images": 2,
+      "covered": true
+    },
+    {
+      "beatId": "b9_5e99",
+      "text": "В итоге его уносят с поля на носилках и везут в больницу.",
+      "need": "EXACT_EVENT",
+      "videos": 0,
+      "images": 4,
+      "covered": true
+    },
+    {
+      "beatId": "b10_405d",
+      "text": "Тренер подтвердил, что всё серьёзно и скорее всего для него ",
+      "need": "ENTITY",
+      "videos": 3,
+      "images": 1,
+      "covered": true
+    },
+    {
+      "beatId": "b11_2ee0",
+      "text": "Человек ни разу не коснулся мяча, а уезжает домой с жёлтой к",
+      "need": "ENTITY",
+      "videos": 1,
+      "images": 1,
+      "covered": true
+    }
+  ],
+  "coverageRatio": 0.67,
+  "sourceVideos": [
+    {
+      "id": "af8d7be447",
+      "url": "https://www.bbc.co.uk/sport/football/videos/cqj1n077784o",
+      "durationSec": 51.243,
+      "segments": 3,
+      "method": "extractor"
+    },
+    {
+      "id": "31ac58638c",
+      "url": "https://www.espn.com/soccer/story/_/id/49283507/jordan-henderson-taken-hospital-wrist-injury-falling-mexico-victory-celebrations-england-world-cup",
+      "durationSec": 91.659,
+      "segments": 6,
+      "method": "extractor"
+    }
+  ],
+  "createdAt": "2026-08-27T19:13:41.133Z"
+}

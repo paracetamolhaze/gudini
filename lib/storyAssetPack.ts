@@ -7,10 +7,20 @@ import { StoryResearchPack } from "./storyResearch";
 import { ScriptBeat, MediaResearchNeed } from "./scriptBeats";
 import { braveVideos, braveImages } from "./braveSearch";
 import { analyzeAsset } from "./brollRelevance";
-import { fetchVideo, extractorReady } from "./videoFetch";
+import { fetchVideo, extractorReady, probeVideo } from "./videoFetch";
 import { verifySource } from "./storyAssets";
 import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
+import { taste } from "./montageTaste";
+
+const rank = (i: string) => (i === "HIGH" ? 0 : i === "MEDIUM" ? 1 : 2);
+const domainOf = (u: string) => {
+  try {
+    return new URL(u).hostname.replace(/^www\./, "");
+  } catch {
+    return "unknown";
+  }
+};
 
 /**
  * Медиатека истории, версия 2: два слоя.
@@ -279,10 +289,16 @@ export async function buildAssetPack(
       if (!src.ok) continue;
       seenVideo.add(vid);
 
+      // разведка: доступен ли поток и какой длины ролик — до скачивания
+      if (!v.directUrl) {
+        const pr = await probeVideo(v.url);
+        console.log(`  probe ${pr.platform} ${pr.ok ? `OK ${pr.durationSec ?? "?"}с (${pr.extractor})` : `— ${pr.reason}`}`);
+        if (!pr.ok) continue;
+      }
       const raw = path.join(mediaDir, `src-${vid}.mp4`);
       const got = await fetchVideo(v.directUrl, v.url, raw);
       if (!got.ok) {
-        console.log(`  видео ${v.url.slice(0, 60)} → ${got.reason}`);
+        console.log(`  скачивание ${v.url.slice(0, 55)} → ${got.reason}`);
         continue;
       }
       const cut = await cutSegments(raw, mediaDir, vid, 6);
@@ -311,14 +327,62 @@ export async function buildAssetPack(
     }
   }
 
-  // ---------- BEAT: добор под блоки, приоритет важным ----------
-  const ordered = [...needs].sort((a, b) => (a.importance === "HIGH" ? -1 : b.importance === "HIGH" ? 1 : 0));
+  // ---------- BEAT: добор под блоки. VIDEO-FIRST: видео ищется раньше картинок ----------
+  const T = taste();
+  const ordered = [...needs].sort((a, b) => rank(a.importance) - rank(b.importance));
   const seenImage = new Set<string>();
+
   for (const need of ordered) {
-    if (assets.length >= 26) break;
-    for (const q of beatQueries(research, need).slice(0, need.importance === "HIGH" ? 3 : 2)) {
+    if (assets.length >= 30) break;
+    const covered = () => assets.some((a) => a.compatibleBeatIds.includes(need.beatId));
+    const queries = beatQueries(research, need);
+
+    // 1) ВИДЕО под конкретный блок
+    const videoBudget = need.importance === "HIGH" ? T.beat_video_queries : Math.max(1, T.beat_video_queries - 1);
+    let gotVideo = false;
+    for (const q of queries.slice(0, videoBudget)) {
+      if (gotVideo || assets.length >= 30) break;
+      for (const v of (await braveVideos(q)).slice(0, 6)) {
+        if (gotVideo || assets.length >= 30) break;
+        const vid = sid(v.url);
+        if (seenVideo.has(vid)) continue;
+        const src = verifySource({ title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher }, research);
+        if (!src.ok) continue;
+        seenVideo.add(vid);
+
+        if (!v.directUrl) {
+          const pr = await probeVideo(v.url);
+          if (!pr.ok) continue;
+        }
+        const raw = path.join(mediaDir, `src-${vid}.mp4`);
+        const got = await fetchVideo(v.directUrl, v.url, raw);
+        if (!got.ok) continue;
+        const cut = await cutSegments(raw, mediaDir, vid, 4);
+        try {
+          fs.rmSync(raw, { force: true });
+        } catch {}
+        if (!cut.assets.length) continue;
+
+        sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
+        for (const a of cut.assets) {
+          assets.push({
+            ...a,
+            sourceUrl: v.url,
+            sourceDomain: domainOf(v.url),
+            compatibleBeatIds: [],
+            relatedFactIds: [],
+            role: "CONTEXT",
+          });
+        }
+        gotVideo = true;
+      }
+    }
+
+    // 2) ИЗОБРАЖЕНИЯ — только если видео под этот блок не нашлось
+    if (gotVideo) continue;
+    for (const q of queries.slice(0, T.beat_image_queries)) {
       for (const im of (await braveImages(q)).slice(0, 6)) {
-        if (assets.length >= 26) break;
+        if (assets.length >= 30) break;
         const key = im.imageUrl.split("?")[0];
         if (seenImage.has(key)) continue;
         const src = verifySource({ title: im.title, description: im.description, sourceUrl: im.url }, research);
@@ -341,13 +405,7 @@ export async function buildAssetPack(
             kind: "IMAGE",
             file: path.basename(file),
             sourceUrl: im.url,
-            sourceDomain: (() => {
-              try {
-                return new URL(im.url).hostname.replace(/^www\./, "");
-              } catch {
-                return "unknown";
-              }
-            })(),
+            sourceDomain: domainOf(im.url),
             description: an.description,
             role: "CONTEXT",
             compatibleBeatIds: [],

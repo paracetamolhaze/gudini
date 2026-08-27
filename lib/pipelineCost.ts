@@ -15,6 +15,8 @@ export type PipelineCost = {
   braveWebRequests: number;
   pageFetches: number;
   videoDownloads: number;
+  ytdlpProbes: number;
+  ytdlpSuccesses: number;
   visionCalls: number;
   speechCleanupCalls: number;
   editPlannerCalls: number;
@@ -31,6 +33,8 @@ const EMPTY: PipelineCost = {
   braveWebRequests: 0,
   pageFetches: 0,
   videoDownloads: 0,
+  ytdlpProbes: 0,
+  ytdlpSuccesses: 0,
   visionCalls: 0,
   speechCleanupCalls: 0,
   editPlannerCalls: 0,

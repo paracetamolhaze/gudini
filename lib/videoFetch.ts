@@ -93,6 +93,85 @@ async function viaExtractor(pageUrl: string, out: string): Promise<FetchResult> 
   }
 }
 
+export type ProbeInfo = {
+  url: string;
+  platform: string;
+  extractor?: string;
+  ok: boolean;
+  durationSec?: number;
+  title?: string;
+  formats?: number;
+  reason?: string;
+};
+
+/** Журнал всех обращений к экстрактору — для отчёта по retrieval. */
+export const probeLog: ProbeInfo[] = [];
+export function resetProbeLog(): void {
+  probeLog.length = 0;
+}
+
+function platformOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Разведка ролика БЕЗ скачивания: есть ли доступные форматы, какая длительность.
+ * Решение принимается по конкретному URL, а не по домену: площадка не блокируется
+ * заранее, но если поток отдаётся только после входа или подписи — идём дальше.
+ */
+export async function probeVideo(pageUrl: string): Promise<ProbeInfo> {
+  const platform = platformOf(pageUrl);
+  if (extractorAvailable === null) extractorAvailable = await hasExtractor();
+  if (!extractorAvailable) {
+    const info = { url: pageUrl, platform, ok: false, reason: "экстрактор не установлен" };
+    probeLog.push(info);
+    return info;
+  }
+  addCost({ ytdlpProbes: 1 });
+  try {
+    const { stdout } = await run(
+      "yt-dlp",
+      [
+        "--no-playlist",
+        "--no-warnings",
+        "--skip-download",
+        "--socket-timeout", "15",
+        "--print", "%(extractor)s\t%(duration)s\t%(format_count)s\t%(title).80s",
+        "--user-agent", UA,
+        pageUrl,
+      ],
+      { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    const [extractor, dur, formats, title] = String(stdout).trim().split("\n")[0].split("\t");
+    const info: ProbeInfo = {
+      url: pageUrl,
+      platform,
+      extractor,
+      ok: true,
+      durationSec: Number(dur) || undefined,
+      formats: Number(formats) || undefined,
+      title,
+    };
+    probeLog.push(info);
+    addCost({ ytdlpSuccesses: 1 });
+    return info;
+  } catch (e: any) {
+    const msg = String(e?.stderr ?? e?.message ?? e);
+    const reason = /cookies|sign in|log in|login|private|DRM|PO Token|not available|age|bot/i.test(msg)
+      ? "поток недоступен без входа/подписи"
+      : /Unsupported URL/i.test(msg)
+        ? "площадка не поддерживается экстрактором"
+        : msg.replace(/\s+/g, " ").slice(0, 110);
+    const info = { url: pageUrl, platform, ok: false, reason };
+    probeLog.push(info);
+    return info;
+  }
+}
+
 /** Пытается получить видео: сначала прямой файл, затем экстрактор страницы. */
 export async function fetchVideo(directUrl: string | undefined, pageUrl: string, out: string): Promise<FetchResult> {
   fs.mkdirSync(path.dirname(out), { recursive: true });

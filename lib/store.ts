@@ -329,8 +329,28 @@ export function updateActiveTokens(platform: Platform, tokens: PlatformTokens) {
   saveSettings(patch);
 }
 
+/**
+ * Аккаунт, подключённый до появления списка, переносим в него при первом обращении.
+ * Иначе следующее подключение затрёт его молча — ровно та проблема, ради которой список и заводился.
+ */
+function migrateLegacyAccount(platform: Platform) {
+  const saved = readSaved();
+  const tokens = saved[TOKENS_KEY[platform]];
+  if (!tokens) return;
+  if ((saved.savedAccounts?.[platform] ?? []).length > 0) return;
+  const id = `legacy-${platform}`;
+  saveSettings({
+    savedAccounts: {
+      ...saved.savedAccounts,
+      [platform]: [{ id, label: "Подключён ранее", at: new Date().toISOString(), tokens }],
+    },
+    activeAccounts: { ...saved.activeAccounts, [platform]: id },
+  });
+}
+
 /** Список аккаунтов платформы для UI. */
 export function listAccounts(platform: Platform): Array<{ id: string; label: string; at: string; active: boolean }> {
+  migrateLegacyAccount(platform);
   const saved = readSaved();
   const activeId = saved.activeAccounts?.[platform];
   return (saved.savedAccounts?.[platform] ?? []).map((a) => ({

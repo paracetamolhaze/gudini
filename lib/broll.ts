@@ -172,7 +172,21 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
               continue;
             }
             if (hash) usedWeb.add(hash);
-            const built = await buildWebAssetClip(asset, full, duration, bytes ?? undefined);
+            // для видео выбираем осмысленный момент внутри ролика, а не первые секунды
+            const scoreFrame = event.visualIntent
+              ? async (framePath: string) => {
+                  try {
+                    const frameBytes = fs.readFileSync(framePath);
+                    const an = await analyzeAsset(`frame:${framePath}:${Date.now()}`, "", frameBytes);
+                    if (!an) return 0;
+                    const r = scoreRelevance(event.visualIntent!, an);
+                    return r.avoidViolation || r.specificityFail ? 0 : r.relevance;
+                  } catch {
+                    return 0;
+                  }
+                }
+              : undefined;
+            const built = await buildWebAssetClip(asset, full, duration, bytes ?? undefined, scoreFrame);
             if (!built.ok) {
               usedWeb.delete(asset.directUrl);
               continue;

@@ -20,6 +20,12 @@ export type AssetAnalysis = {
   objects: string[]; // существительные + синонимы/категории, en, lowercase
   environment: string;
   action: string;
+  /** скриншот страницы/поста/статьи/таблицы — не визуал, а документ */
+  isScreenshot?: boolean;
+  /** крупный читаемый текст занимает заметную часть кадра */
+  hasLargeText?: boolean;
+  /** крупный водяной знак поверх кадра */
+  hasLargeWatermark?: boolean;
   updatedAt: string;
 };
 
@@ -56,10 +62,11 @@ function writeAnalysisCache(cache: Record<string, AssetAnalysis>) {
   } catch {}
 }
 
-const VISION_SYSTEM = `You describe a stock-video preview frame for editorial matching.
+const VISION_SYSTEM = `You inspect a candidate frame for use as b-roll in a short video.
 Reply with STRICT JSON only:
-{"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words"}
-Be generous with objects: include category words (e.g. for a tiger: tiger, big cat, predator, animal, wildlife).`;
+{"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words","isScreenshot":<true if this is a screenshot of a web page, social post, article, chat, table, chart or app UI rather than a photograph or video frame>,"hasLargeText":<true if readable text occupies a noticeable part of the frame (headlines, captions burned in, subtitles, tweet text)>,"hasLargeWatermark":<true if a large watermark or logo covers a significant area>}
+Be generous with objects: include category words (e.g. for a tiger: tiger, big cat, predator, animal, wildlife).
+Judge isScreenshot strictly: a photo of a person holding a phone is NOT a screenshot; a captured tweet or article IS.`;
 
 /**
  * Vision-описание ассета по превью; кэшируется по ключу.
@@ -115,6 +122,9 @@ export async function analyzeAsset(
       objects: Array.isArray(json.objects) ? json.objects.map((o: unknown) => String(o).toLowerCase()) : [],
       environment: String(json.environment ?? "").toLowerCase(),
       action: String(json.action ?? "").toLowerCase(),
+      isScreenshot: json.isScreenshot === true,
+      hasLargeText: json.hasLargeText === true,
+      hasLargeWatermark: json.hasLargeWatermark === true,
       updatedAt: new Date().toISOString(),
     };
     const fresh = readAnalysisCache();
@@ -149,6 +159,28 @@ export function scoreRelevance(
     const hits = words.filter((w) => haystack.includes(stem(w))).length;
     return hits / words.length >= threshold;
   };
+
+  // Скриншот страницы, поста или статьи — это документ, а не визуал события.
+  // Такой кадр в вертикальном ролике читается как случайная картинка из интернета.
+  const junk = analysis.isScreenshot
+    ? "скриншот страницы/поста"
+    : analysis.hasLargeText
+      ? "крупный читаемый текст в кадре"
+      : analysis.hasLargeWatermark
+        ? "крупный водяной знак"
+        : null;
+  if (junk) {
+    return {
+      relevance: 0,
+      subjectMatch: 0,
+      environmentMatch: 0,
+      actionMatch: 0,
+      specificityMatch: 0,
+      avoidViolation: true,
+      specificityFail: false,
+      reason: junk,
+    };
+  }
 
   // avoid — жёсткое отклонение, но только при полном совпадении термина
   const violated = intent.avoid.find((a) => termHit(a, 1));

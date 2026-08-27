@@ -1,3 +1,4 @@
+import { mediaFromPage, searchArchiveOrg, isProtectedPlatform } from "./brollVideo";
 /**
  * Публичные источники визуала для фактических перебивок.
  *
@@ -286,6 +287,25 @@ export async function searchWebImages(query: string): Promise<WebAsset[]> {
   return [];
 }
 
+/** Обычный веб-поиск: возвращает СТРАНИЦЫ, из которых потом достаём медиа. */
+export async function searchWebPages(query: string): Promise<string[]> {
+  const key = braveKey();
+  if (!key) return [];
+  try {
+    const url = new URL("https://api.search.brave.com/res/v1/web/search");
+    url.searchParams.set("q", query);
+    url.searchParams.set("count", "10");
+    const res = await fetch(url, { headers: { ...UA, Accept: "application/json", "X-Subscription-Token": key } });
+    if (!res.ok) return [];
+    const json: any = await res.json();
+    return (json.web?.results ?? [])
+      .map((r: any) => String(r.url ?? ""))
+      .filter((u: string) => u && !isProtectedPlatform(u));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Собирает кандидатов по НЕСКОЛЬКИМ запросам из всех доступных источников (§10).
  * Дедуп по прямой ссылке; порядок — приоритет источника.
@@ -315,14 +335,22 @@ export async function findWebAssets(
     }
   }
 
-  // Видео приоритетнее фотографии для действий: сначала собираем всё видео
-  // по всем запросам, потом уже изображения.
+  // VIDEO-FIRST: сначала собираем всё видео по всем запросам, потом изображения.
   for (const q of queries.slice(0, 8)) {
     try {
       add(await searchWebVideos(q));
     } catch {}
     try {
       add(await searchWikimedia(q, true));
+    } catch {}
+    try {
+      add(await searchArchiveOrg(q));
+    } catch {}
+    // страницы из веб-поиска — это точка обнаружения: достаём из них вложенное медиа,
+    // а не вставляем скриншот страницы
+    try {
+      const pages = await searchWebPages(q);
+      for (const page of pages.slice(0, 4)) add(await mediaFromPage(page, q));
     } catch {}
   }
   for (const q of queries.slice(0, 8)) {

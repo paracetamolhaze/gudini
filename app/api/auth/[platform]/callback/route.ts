@@ -88,9 +88,12 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         if (longLived.access_token) accessToken = longLived.access_token;
       } catch {}
 
-      const igId = String(token.user_id);
-      const name = await instagramName(accessToken, "https://graph.instagram.com");
-      connectAccount("instagram", igId, name, {
+      // Публикация работает только с ID профессионального аккаунта (17841...),
+      // а обмен кода отдаёт app-scoped ID (2805...) — на нём Graph отвечает
+      // «Object with ID does not exist» (code 100, subcode 33).
+      const profile = await instagramProfile(accessToken);
+      const igId = profile.userId ?? String(token.user_id);
+      connectAccount("instagram", igId, profile.name, {
         access_token: accessToken,
         ig_user_id: igId,
         via: "ig",
@@ -178,4 +181,23 @@ async function instagramName(token: string, graph: string, igUserId?: string): P
     if (json?.username) return `@${json.username}`;
   } catch {}
   return fallbackLabel("Instagram");
+}
+
+/**
+ * Прямой вход через Instagram: /me отдаёт и app-scoped id, и user_id.
+ * Для контент-публикации нужен именно user_id — ID профессионального аккаунта.
+ */
+async function instagramProfile(token: string): Promise<{ userId?: string; name: string }> {
+  try {
+    const res = await fetch(
+      `https://graph.instagram.com/v21.0/me?fields=user_id,username&access_token=${token}`,
+    );
+    const json: any = await res.json();
+    return {
+      userId: json?.user_id ? String(json.user_id) : undefined,
+      name: json?.username ? `@${json.username}` : fallbackLabel("Instagram"),
+    };
+  } catch {
+    return { name: fallbackLabel("Instagram") };
+  }
 }

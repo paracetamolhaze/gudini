@@ -235,7 +235,17 @@ async function publishInstagram(
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params),
   });
-  if (!containerRes.ok) throw new Error(`IG container: ${(await containerRes.text()).slice(0, 300)}`);
+  if (!containerRes.ok) {
+    const text = await containerRes.text();
+    // code 100 / subcode 33: сохранён не тот ID аккаунта — лечится переподключением
+    if (/error_subcode":\s*33|does not exist, cannot be loaded/.test(text)) {
+      throw new Error(
+        "Instagram не принял ID аккаунта. Переподключите Instagram в Настройках: " +
+          "сохранён служебный ID вместо ID профессионального аккаунта.",
+      );
+    }
+    throw new Error(`IG container: ${text.slice(0, 300)}`);
+  }
   const container: any = await containerRes.json();
 
   // ждём обработки контейнера

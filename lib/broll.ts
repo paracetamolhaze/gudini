@@ -85,11 +85,20 @@ export async function resolveBrollEvents(dir: string, events: EditEvent[]): Prom
               if (!bytes) continue;
               const analysis = await analyzeAsset(`web:${asset.directUrl}`, asset.directUrl, bytes).catch(() => null);
               if (!analysis) continue;
-              const rel = scoreRelevance(event.visualIntent, analysis, {
-                sourceIntent: event.sourceIntent,
-                entityName: event.entityName,
-              });
-              if (rel.avoidViolation || rel.specificityFail || rel.relevance < 0.5) {
+              // Личность здесь подтверждает ИСТОЧНИК (статья Wikipedia «Jordan Henderson» —
+              // это точно он), а не зрение: модель видит «футболиста», имени она не знает.
+              // Поэтому entity-проверку зрению не передаём, оно судит только о содержимом кадра.
+              const rel = scoreRelevance(event.visualIntent, analysis);
+              const identityProven = Boolean(event.entityName) && verifyEntity(asset, event.entityName);
+              // EXACT — на кадре должно быть само событие; ENTITY с подтверждённым источником —
+              // достаточно, что это нужный человек, обстановка может быть любой
+              const accepted =
+                specificity === "EXACT"
+                  ? !rel.avoidViolation && !rel.specificityFail && rel.relevance >= 0.5
+                  : identityProven
+                    ? !rel.avoidViolation
+                    : !rel.avoidViolation && !rel.specificityFail && rel.relevance >= 0.5;
+              if (!accepted) {
                 trace.push({
                   query: asset.retrievalQuery,
                   candidates: [

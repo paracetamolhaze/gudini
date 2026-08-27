@@ -7,6 +7,8 @@ import { mediaFromPage, isDirectMedia } from "./brollVideo";
 import { analyzeAsset } from "./brollRelevance";
 import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
+import Anthropic from "@anthropic-ai/sdk";
+import { getSettings } from "./store";
 
 /**
  * Story Asset Pack — медиатека ОДНОЙ истории, собранная до монтажа.
@@ -41,6 +43,8 @@ export type StoryAsset = {
     reasons: string[];
   };
   videoSegments?: { start: number; end: number; description: string }[];
+  /** EVENT — видно само событие; PERSON — участник вне события; CONTEXT — обстановка */
+  role?: "EVENT" | "PERSON" | "CONTEXT" | "OFF_STORY";
 };
 
 export type StoryAssetPack = {
@@ -383,16 +387,113 @@ export async function buildStoryAssetPack(
     });
   }
 
+  // привязка к фактам и отсев чужих материалов по описанию кадра
+  const annotated = await annotateAssets(assets, research);
+
   const pack: StoryAssetPack = {
     storyId: research.storyId,
     verificationVersion: VERIFICATION_VERSION,
-    assets,
+    assets: annotated,
     createdAt: new Date().toISOString(),
   };
   try {
     fs.writeFileSync(path.join(dir, "story-asset-pack.json"), JSON.stringify(pack, null, 2), "utf8");
   } catch {}
   return pack;
+}
+
+const ANNOTATE_SYSTEM = `Ты — ассистент видеоредактора. Тебе дают историю с фактами и список
+найденных материалов с описанием того, ЧТО НА НИХ ВИДНО.
+
+Для каждого материала реши:
+1) относится ли он к ЭТОЙ истории (те же участники/команды/событие) — belongs;
+2) какие факты он может проиллюстрировать — factIds (может быть пусто);
+3) показывает ли он САМО событие или только участника/контекст — role.
+
+Строго: материал, где видны другие команды, другая форма, другие люди или другой инцидент,
+к истории НЕ относится, даже если страница про неё. Кадр студийного разговора или интервью —
+это участник, а не событие.
+
+Ответь СТРОГО валидным JSON:
+{"items":[{"id":"...","belongs":true,"factIds":["f1"],"role":"EVENT|PERSON|CONTEXT","visible":"кратко что видно"}]}
+role: EVENT — видно само событие; PERSON — виден участник вне события; CONTEXT — обстановка истории.`;
+
+/**
+ * Привязывает материалы к фактам и отсекает чужие.
+ * Источниковая проверка работает по метаданным страницы и пропускает случаи, когда
+ * страница про нашу историю, а на кадре — другая команда. Здесь решение принимается
+ * по ОПИСАНИЮ КАДРА, уже полученному зрением, поэтому дополнительных vision-вызовов нет.
+ */
+export async function annotateAssets(
+  assets: StoryAsset[],
+  research: StoryResearchPack,
+): Promise<StoryAsset[]> {
+  const key = getSettings().anthropicKey;
+  if (!key || !assets.length) return assets;
+
+  const facts = research.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");
+  const list = assets
+    .map((a) => {
+      const segs = a.videoSegments?.length
+        ? ` | сегменты: ${a.videoSegments.map((s, i) => `#${i} ${s.description.slice(0, 70)}`).join(" ; ")}`
+        : "";
+      return `id=${a.id} [${a.mediaType}] источник ${a.sourceDomain}: ${a.description.slice(0, 120)}${segs}`;
+    })
+    .join("\n");
+
+  try {
+    const client = new Anthropic({ apiKey: key });
+    const response = await client.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 4000,
+      system: ANNOTATE_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          content:
+            `История: ${research.canonicalEvent}\n` +
+            (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
+            `Участники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
+            `Факты:\n${facts}\n\nМатериалы:\n${list}`,
+        },
+      ],
+    });
+    addCost({ researchLlmCalls: 1 });
+    const raw = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n")
+      .replace(/^```(json)?/m, "")
+      .replace(/```$/m, "")
+      .trim();
+    const json = JSON.parse(raw);
+    const byId = new Map<string, any>((Array.isArray(json.items) ? json.items : []).map((i: any) => [String(i.id), i]));
+    const known = new Set(research.facts.map((f) => f.id));
+
+    return assets.map((a) => {
+      const info = byId.get(a.id);
+      if (!info || info.belongs === false) {
+        return {
+          ...a,
+          relatedFactIds: [],
+          role: "OFF_STORY" as const,
+          verification: {
+            ...a.verification,
+            sourceVerified: false,
+            reasons: [...a.verification.reasons, "материал не относится к этой истории"],
+          },
+        };
+      }
+      return {
+        ...a,
+        relatedFactIds: (Array.isArray(info.factIds) ? info.factIds.map(String) : []).filter((f: string) => known.has(f)),
+        role: (["EVENT", "PERSON", "CONTEXT"] as const).includes(info.role) ? info.role : "CONTEXT",
+        description: info.visible ? String(info.visible).slice(0, 160) : a.description,
+      };
+    });
+  } catch {
+    return assets;
+  }
 }
 
 /** Ассет считается пригодным, только если проверен ТЕКУЩЕЙ версией правил. */

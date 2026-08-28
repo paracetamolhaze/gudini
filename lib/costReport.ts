@@ -110,6 +110,8 @@ export function formatCostReport(opts: ReportOptions | string = {}): string {
 
   const cover = o.includeHistoricalCover ? historicalCoverCost(o.dataDir) : null;
   let historicalTotal = 0;
+  const notRunStages: CostStage[] = [];
+  const unknownStages: CostStage[] = [];
 
   for (const g of GROUPS) {
     L.push("");
@@ -135,19 +137,22 @@ export function formatCostReport(opts: ReportOptions | string = {}): string {
           const val = stage === "Cover Generation" ? cover.generation : stage === "Cover QC" ? cover.qc : null;
           if (val !== null) {
             historicalTotal += val;
-            L.push(`  ${stage.padEnd(24)} ${usd(val).padStart(11)}   HISTORICAL / NOT RUN THIS JOB`);
+            L.push(`  ${stage.padEnd(24)} ${usd(val).padStart(11)}   HISTORICAL — NOT RUN THIS JOB   ${cover.provider}`);
             continue;
           }
-          L.push(`  ${stage.padEnd(24)} ${"unknown".padStart(11)}   HISTORICAL / значение не сохранено`);
+          // цену старой стадии восстановить нельзя — так и пишем, заново её не запускаем
+          unknownStages.push(stage);
+          L.push(`  ${stage.padEnd(24)} ${"UNKNOWN".padStart(11)}   HISTORICAL — значение не сохранено`);
           continue;
         }
+        notRunStages.push(stage);
         L.push(`  ${stage.padEnd(24)} ${"NOT RUN".padStart(11)}`);
         continue;
       }
       const i = infoOf(stage);
       const flag = i && !isAllowed(stage, i.provider.split("+")[0] as CostProvider) ? "  ← ЧУЖОЙ ПРОВАЙДЕР" : "";
       L.push(
-        `  ${stage.padEnd(24)} ${usd(t.cost).padStart(11)}   ${(i?.provider ?? "").padEnd(12)} ${i?.calls ?? 0} выз.${flag}`,
+        `  ${stage.padEnd(24)} ${usd(t.cost).padStart(11)}   CURRENT   ${(i?.provider ?? "").padEnd(11)} ${i?.calls ?? 0} выз.${flag}`,
       );
     }
   }
@@ -271,20 +276,42 @@ export function formatCostReport(opts: ReportOptions | string = {}): string {
   }
 
   const packCost = s.stages.filter((x) => ASSET_PACK_STAGES.includes(x.stage)).reduce((n, x) => n + x.cost, 0);
-  const notRun = GROUPS.flatMap((g) => g.stages).filter(
-    (st) => !byStage.has(st) && !(cover && COVER_STAGES.includes(st)),
-  );
+  const byProv = new Map<CostProvider, number>();
+  for (const e of entries) byProv.set(e.provider, (byProv.get(e.provider) ?? 0) + e.estimatedCost);
+  const asrCost = (byProv.get("elevenlabs") ?? 0) + (byProv.get("openai") ?? 0);
 
   L.push("");
   L.push(bar);
-  L.push(`ASSET PACK COST:          ${usd(packCost)}   — только сборка медиатеки`);
-  L.push(`CURRENT RUN COST:         ${usd(s.totals.variableApiCost)}   — вызовы, сделанные в этом прогоне`);
-  if (notRun.length) {
-    L.push(`FULL VIDEO VARIABLE COST: неполная — не запускались: ${notRun.join(", ")}`);
-    L.push(`  (посчитано на сегодня: ${usd(s.totals.variableApiCost + historicalTotal)} = прогон + обложка из прошлого прогона)`);
+  L.push("1. CURRENT RUN COST — только этот запуск");
+  L.push(`  Anthropic    ${usd(byProv.get("anthropic") ?? 0).padStart(11)}`);
+  L.push(`  Brave        ${usd(byProv.get("brave") ?? 0).padStart(11)}`);
+  L.push(`  OpenRouter   ${usd(byProv.get("openrouter") ?? 0).padStart(11)}`);
+  L.push(`  Other paid   ${usd(asrCost).padStart(11)}`);
+  L.push("  " + "-".repeat(24));
+  L.push(`  CURRENT RUN  ${usd(s.totals.variableApiCost).padStart(11)}`);
+  L.push(`  ASSET PACK   ${usd(packCost).padStart(11)}   — сборка медиатеки внутри этого запуска`);
+
+  L.push("");
+  L.push("2. FULL VIDEO VARIABLE COST — один production-ролик");
+  const knownSoFar = s.totals.variableApiCost + historicalTotal;
+  if (notRunStages.length || unknownStages.length) {
+    L.push("  FULL VIDEO VARIABLE COST: INCOMPLETE");
+    L.push(`  KNOWN COST SO FAR: ${usd(knownSoFar)}`);
+    if (notRunStages.length) L.push(`  NOT RUN (нулём не считаем): ${notRunStages.join(", ")}`);
+    if (unknownStages.length) L.push(`  UNKNOWN (цена не сохранена): ${unknownStages.join(", ")}`);
   } else {
-    L.push(`FULL VIDEO VARIABLE COST: ${usd(s.totals.variableApiCost + historicalTotal)}`);
+    L.push(`  FULL VIDEO VARIABLE COST: ${usd(knownSoFar)}`);
   }
+
+  L.push("");
+  L.push("PROVIDER TOTALS / ONE VIDEO");
+  L.push(`  Anthropic       ${usd(byProv.get("anthropic") ?? 0).padStart(11)}`);
+  L.push(`  Brave           ${usd(byProv.get("brave") ?? 0).padStart(11)}`);
+  L.push(`  OpenRouter      ${usd((byProv.get("openrouter") ?? 0) + historicalTotal).padStart(11)}   (только обложка)`);
+  L.push(`  Transcription   ${asrCost ? usd(asrCost).padStart(11) : "NOT RUN".padStart(11)}`);
+  L.push(`  Other paid      ${"$0".padStart(11)}`);
+  L.push(`  yt-dlp          ${"$0".padStart(11)}`);
+  L.push(`  FFmpeg          ${"$0".padStart(11)}`);
   L.push(bar);
 
   const infra = infrastructurePerVideo();

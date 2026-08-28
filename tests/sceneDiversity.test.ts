@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { groupScenes, hamming, SAME_SCENE_DISTANCE } from "../lib/sceneHash";
 import { resetLedger, recordTokens } from "../lib/costLedger";
 import { formatCostReport } from "../lib/costReport";
+import { packFingerprint } from "../lib/storyAssetPack";
 
 test("1: почти одинаковые планы — одна сцена, разные моменты — разные", () => {
   const base = 0b1010101010101010101010101010101010101010101010101010101010101010n;
@@ -32,7 +33,39 @@ test("2: невыполненная стадия помечается NOT RUN, �
   assert.match(report, /Script Beats\s+\$0\.0100/, "выполненная стадия показывает цену");
   assert.match(report, /Cover Generation\s+NOT RUN/, "невыполненная помечена NOT RUN");
   assert.match(report, /CURRENT RUN COST/, "стоимость прогона отдельной строкой");
-  assert.match(report, /FULL VIDEO VARIABLE COST: неполная/, "полная цена ролика не выдумывается");
-  assert.match(report, /ASSET PACK COST/, "стоимость медиатеки отдельной строкой");
+  assert.match(report, /FULL VIDEO VARIABLE COST: INCOMPLETE/, "полная цена ролика не выдумывается");
+  assert.match(report, /KNOWN COST SO FAR: \$/, "показано, что известно на сегодня");
+  assert.match(report, /NOT RUN \(нулём не считаем\)/, "невыполненные стадии перечислены");
+  assert.match(report, /ASSET PACK\s+\$/, "стоимость медиатеки отдельной строкой");
   assert.match(report, /CURRENT RUN COST/, "стоимость текущего прогона отдельной строкой");
+  assert.match(report, /PROVIDER TOTALS \/ ONE VIDEO/, "итоги по провайдерам на один ролик");
+});
+
+test("3: медиатека пересобирается только при изменении входных данных", () => {
+  const research: any = {
+    storyId: "s1",
+    canonicalEvent: "событие",
+    facts: [{ id: "f1" }, { id: "f2" }],
+    entities: [{ name: "A" }, { name: "B" }],
+  };
+  const beats: any[] = [
+    { id: "b1", visualNeed: "EXACT_EVENT" },
+    { id: "b2", visualNeed: "CONTEXT" },
+  ];
+  const base = packFingerprint(research, beats);
+
+  // повторный рендер того же ролика не меняет отпечаток — платить снова не за что
+  assert.equal(packFingerprint(research, beats), base, "те же данные — тот же отпечаток");
+  // порядок фактов и участников роли не играет
+  const shuffled = { ...research, facts: [{ id: "f2" }, { id: "f1" }], entities: [{ name: "B" }, { name: "A" }] };
+  assert.equal(packFingerprint(shuffled as any, beats), base, "перестановка не делает пакет невалидным");
+
+  // а вот изменение истории или блоков — делает
+  assert.notEqual(packFingerprint({ ...research, canonicalEvent: "другое" } as any, beats), base, "другая история");
+  assert.notEqual(packFingerprint({ ...research, facts: [{ id: "f1" }] } as any, beats), base, "другие факты");
+  assert.notEqual(
+    packFingerprint(research, [{ id: "b1", visualNeed: "CONTEXT" }, beats[1]] as any),
+    base,
+    "изменилась потребность блока в визуале",
+  );
 });

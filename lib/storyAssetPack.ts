@@ -146,6 +146,8 @@ export type BeatCoverage = {
 export type StoryAssetPackV2 = {
   storyId: string;
   version: number;
+  /** отпечаток входных данных: по нему видно, устарел ли пакет */
+  fingerprint?: string;
   assets: PackAsset[];
   coverage: BeatCoverage[];
   /** доля блоков, у которых есть хоть какой-то материал (оценка >= 1) */
@@ -160,6 +162,49 @@ export type StoryAssetPackV2 = {
 };
 
 const sid = (s: string) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 10);
+
+/**
+ * Отпечаток входных данных медиатеки.
+ *
+ * Пересборка пакета стоит денег: это поиск, скачивание, зрение и сопоставление.
+ * Платить второй раз имеет смысл, только если изменилось что-то, от чего пакет
+ * зависит: сама история, её факты, блоки сценария или версия правил отбора.
+ * Повторный рендер того же ролика новых расходов вызывать не должен.
+ */
+export function packFingerprint(research: StoryResearchPack, beats: ScriptBeat[]): string {
+  const T = taste();
+  const payload = JSON.stringify({
+    story: research.storyId,
+    event: research.canonicalEvent,
+    facts: research.facts.map((f) => f.id).sort(),
+    entities: research.entities.map((e) => e.name).sort(),
+    beats: beats.map((b) => `${b.id}:${b.visualNeed}`),
+    packVersion: PACK_VERSION,
+    // правила отбора: их ужесточение делает старый пакет невалидным
+    rules: [T.min_usable_video_segments, T.min_total_assets, T.min_beat_coverage, T.core_download_shortlist],
+  });
+  return crypto.createHash("sha1").update(payload).digest("hex").slice(0, 16);
+}
+
+/**
+ * Готовый пакет для этих же входных данных, если он уже собран и оплачен.
+ * Возвращает null, когда отпечаток не совпал — тогда пересборка оправдана.
+ */
+export function reusablePack(dir: string, fingerprint: string): StoryAssetPackV2 | null {
+  try {
+    const file = path.join(dir, "story-asset-pack.json");
+    if (!fs.existsSync(file)) return null;
+    const pack = JSON.parse(fs.readFileSync(file, "utf8")) as StoryAssetPackV2;
+    if (pack.fingerprint !== fingerprint || pack.version !== PACK_VERSION) return null;
+    // файлы материалов должны быть на месте, иначе пакет только на бумаге
+    const media = path.join(dir, "story-assets");
+    const alive = pack.assets.filter((a) => fs.existsSync(path.join(media, a.file)));
+    if (alive.length !== pack.assets.length || !alive.length) return null;
+    return pack;
+  } catch {
+    return null;
+  }
+}
 
 /** Запросы за ГЛАВНЫМ видео истории: событие целиком, разными формулировками. */
 function coreVideoQueries(r: StoryResearchPack): string[] {
@@ -460,6 +505,15 @@ export async function buildAssetPack(
   dir: string,
 ): Promise<StoryAssetPackV2> {
   const T0 = taste();
+  const fingerprint = packFingerprint(research, beats);
+  const existing = reusablePack(dir, fingerprint);
+  if (existing) {
+    console.log(
+      `Медиатека уже собрана для этих данных (отпечаток ${fingerprint}): ` +
+        `${existing.assets.length} материалов. Повторная сборка не нужна и не оплачивается.`,
+    );
+    return existing;
+  }
   const mediaDir = path.join(dir, "story-assets");
   fs.mkdirSync(mediaDir, { recursive: true });
   const assets: PackAsset[] = [];
@@ -725,6 +779,7 @@ export async function buildAssetPack(
   const pack: StoryAssetPackV2 = {
     storyId: research.storyId,
     version: PACK_VERSION,
+    fingerprint,
     assets: usable,
     coverage,
     coverageRatio,

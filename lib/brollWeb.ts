@@ -287,10 +287,12 @@ export async function searchWebPages(query: string): Promise<string[]> {
   const key = braveKey();
   if (!key) return [];
   try {
+    assertProvider("Media Research", "brave");
     const url = new URL("https://api.search.brave.com/res/v1/web/search");
     url.searchParams.set("q", query);
     url.searchParams.set("count", "10");
     const res = await fetch(url, { headers: { ...UA, Accept: "application/json", "X-Subscription-Token": key } });
+    recordRequest({ stage: "Media Research", provider: "brave", endpoint: "brave/web/search" });
     if (!res.ok) return [];
     const json: any = await res.json();
     return (json.web?.results ?? [])

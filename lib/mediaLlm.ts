@@ -1,62 +1,61 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
-import { recordTokens, CostStage } from "./costLedger";
+import { recordTokens, CostStage, CostProvider } from "./costLedger";
+import { assertProvider, ProviderPolicyError } from "./providerPolicy";
 
 /**
- * Транспорт для текстовых LLM-вызовов медиа-конвейера.
+ * Транспорт для текстовых и зрительных вызовов основного видео-конвейера.
  *
- * Промпты и схемы ответов остаются прежними — меняется только то, через кого
- * идёт запрос. Нужно, чтобы медиа-конвейер не зависел от одного биллинга:
- * когда на прямом счёте Anthropic кончились деньги, вся сборка медиатеки встала,
- * хотя OpenRouter в проекте уже подключён и оплачен.
+ * Провайдер здесь ровно один — Anthropic. OpenRouter сюда не подключается даже
+ * при недоступности Anthropic: подмена провайдера молча меняет качество разбора
+ * истории и цену ролика, а понять постфактум, чем собран конкретный ролик,
+ * становится невозможно. Кончился доступ — задача останавливается с внятной
+ * ошибкой, и решение о смене провайдера принимает человек.
  *
- * MEDIA_LLM_PROVIDER = anthropic | openrouter
- * MEDIA_LLM_MODEL    = модель провайдера (у каждого своё имя)
+ * OpenRouter в проекте остаётся, но только внутри конвейера обложек.
+ *
+ * MEDIA_LLM_MODEL — модель Anthropic для стадий конвейера.
+ * MEDIA_VISION_MODEL — отдельная модель для разбора кадров, если нужна другая.
  */
 
-export type MediaLlmProvider = "anthropic" | "openrouter";
+/** У медиа-конвейера провайдер один и не выбирается. */
+export const MEDIA_PROVIDER = "anthropic" as const;
 
-const DEFAULT_MODELS: Record<MediaLlmProvider, string> = {
-  anthropic: "claude-sonnet-5",
-  openrouter: "anthropic/claude-sonnet-4.5",
-};
+const DEFAULT_MODEL = "claude-sonnet-5";
 
-export function mediaProvider(): MediaLlmProvider {
-  const raw = String(process.env.MEDIA_LLM_PROVIDER ?? "").toLowerCase();
-  if (raw === "openrouter") return "openrouter";
-  if (raw === "anthropic") return "anthropic";
-  // по умолчанию идём туда, где есть ключ: сперва прямой Anthropic, иначе OpenRouter
-  return getSettings().anthropicKey ? "anthropic" : "openrouter";
+export function mediaProvider(): typeof MEDIA_PROVIDER {
+  const requested = String(process.env.MEDIA_LLM_PROVIDER ?? "").toLowerCase();
+  if (requested && requested !== "anthropic") {
+    // Явная попытка увести конвейер на чужого провайдера — это ошибка настройки,
+    // а не повод тихо согласиться.
+    throw new ProviderPolicyError("Media Research", requested as CostProvider, ["anthropic"]);
+  }
+  return MEDIA_PROVIDER;
 }
 
 export function mediaModel(): string {
-  return process.env.MEDIA_LLM_MODEL || DEFAULT_MODELS[mediaProvider()];
+  return process.env.MEDIA_LLM_MODEL || DEFAULT_MODEL;
 }
 
 export function mediaLlmAvailable(): boolean {
-  const s = getSettings();
-  return mediaProvider() === "openrouter" ? Boolean(s.openrouterKey) : Boolean(s.anthropicKey);
+  return Boolean(getSettings().anthropicKey);
 }
 
-
-/** Списание фактической стоимости, которую назвал OpenRouter. */
-function recordOpenRouter(stage: CostStage, model: string, json: any, failed = false, retry = false): void {
-  const u = json?.usage ?? {};
-  recordTokens({
-    stage,
-    provider: "openrouter",
-    model,
-    inputTokens: Number(u.prompt_tokens ?? 0),
-    outputTokens: Number(u.completion_tokens ?? 0),
-    cacheReadTokens: Number(u.prompt_tokens_details?.cached_tokens ?? 0),
-    providerReportedCost: typeof u.cost === "number" ? u.cost : undefined,
-    failed,
-    retry,
-  });
+/** Ключ Anthropic или внятный отказ. Никакого перехода на другого провайдера. */
+function anthropicKeyOrFail(stage: CostStage): string {
+  const key = getSettings().anthropicKey;
+  if (!key) {
+    throw new Error(
+      `Стадия «${stage}» не выполнена: нет ключа Anthropic. ` +
+        "Медиа-конвейер работает только через Anthropic, автоматический переход на другого провайдера запрещён.",
+    );
+  }
+  return key;
 }
 
 /** Списание по фактическому расходу токенов Anthropic. */
 function recordAnthropic(stage: CostStage, model: string, response: any, failed = false, retry = false): void {
+  assertProvider(stage, "anthropic");
   const u = response?.usage ?? {};
   recordTokens({
     stage,
@@ -105,42 +104,10 @@ async function completeOnce(
   { system, user, maxTokens = 8000, stage = "Media Research" }: CompleteArgs,
   isRetry = false,
 ): Promise<string> {
-  const provider = mediaProvider();
   const model = mediaModel();
-  const settings = getSettings();
+  mediaProvider(); // проверка настройки: чужой провайдер здесь запрещён
 
-  if (provider === "openrouter") {
-    const key = settings.openrouterKey;
-    if (!key) throw new Error("MEDIA_LLM_PROVIDER=openrouter, но ключ OPENROUTER не задан");
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        // просим вернуть фактическую стоимость: свою цифру придумывать не будем
-        usage: { include: true },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
-    });
-    const json: any = await res.json().catch(() => ({}));
-    if (!res.ok || json.error) {
-      // неудачный запрос провайдер мог оттарифицировать — он тоже идёт в стоимость
-      recordOpenRouter(stage, model, json, true, isRetry);
-      throw new Error(`OpenRouter ${res.status}: ${JSON.stringify(json.error ?? {}).slice(0, 200)}`);
-    }
-    recordOpenRouter(stage, model, json, false, isRetry);
-    const text = json.choices?.[0]?.message?.content;
-    if (typeof text !== "string" || !text.trim()) throw new Error("OpenRouter вернул пустой ответ");
-    return text.trim();
-  }
-
-  const key = settings.anthropicKey;
-  if (!key) throw new Error("MEDIA_LLM_PROVIDER=anthropic, но ключ ANTHROPIC_API_KEY не задан");
-  const client = new Anthropic({ apiKey: key });
+  const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({
     model,
     max_tokens: maxTokens,
@@ -184,44 +151,10 @@ async function visionOnce(
 ): Promise<string> {
   const frames = images ?? (image ? [image] : []);
   if (!frames.length) throw new Error("зрению не передан ни один кадр");
-  const provider = mediaProvider();
   const model = process.env.MEDIA_VISION_MODEL || mediaModel();
-  const settings = getSettings();
+  mediaProvider();
 
-  if (provider === "openrouter") {
-    const key = settings.openrouterKey;
-    if (!key) throw new Error("MEDIA_LLM_PROVIDER=openrouter, но ключ OPENROUTER не задан");
-    const parts = frames.map((f) => ({
-      type: "image_url" as const,
-      image_url: { url: "url" in f ? f.url : `data:${f.mediaType};base64,${f.base64}` },
-    }));
-    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        usage: { include: true },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: [...parts, { type: "text", text: user }] },
-        ],
-      }),
-    });
-    const json: any = await res.json().catch(() => ({}));
-    if (!res.ok || json.error) {
-      recordOpenRouter(stage, model, json, true, isRetry);
-      throw new Error(`OpenRouter vision ${res.status}: ${JSON.stringify(json.error ?? {}).slice(0, 200)}`);
-    }
-    recordOpenRouter(stage, model, json, false, isRetry);
-    const text = json.choices?.[0]?.message?.content;
-    if (typeof text !== "string" || !text.trim()) throw new Error("OpenRouter vision вернул пустой ответ");
-    return text.trim();
-  }
-
-  const key = settings.anthropicKey;
-  if (!key) throw new Error("MEDIA_LLM_PROVIDER=anthropic, но ключ ANTHROPIC_API_KEY не задан");
-  const client = new Anthropic({ apiKey: key });
+  const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({
     model,
     max_tokens: maxTokens,

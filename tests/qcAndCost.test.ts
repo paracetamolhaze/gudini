@@ -69,11 +69,11 @@ test("3: материал о другом турнире отклоняется,
 test("4: стоимость собирается по всем провайдерам, счёт провайдера важнее тарифа", () => {
   resetLedger();
   // цена названа провайдером — берём её, а не свою
-  recordTokens({ stage: "Beat Matching", provider: "openrouter", model: "anthropic/claude-sonnet-4.5", inputTokens: 10_000, outputTokens: 1_000, providerReportedCost: 0.07 });
+  recordTokens({ stage: "Beat Matching", provider: "anthropic", model: "claude-sonnet-5", inputTokens: 10_000, outputTokens: 1_000, providerReportedCost: 0.07 });
   // цены нет — считаем по тарифу: 3$/млн вход + 15$/млн выход
   recordTokens({ stage: "Script Beats", provider: "anthropic", model: "claude-sonnet-5", inputTokens: 1_000_000, outputTokens: 100_000 });
   recordRequest({ stage: "Media Research", provider: "brave", endpoint: "brave/videos/search" });
-  recordFlat({ stage: "Cover Generation", provider: "openrouter", model: "google/gemini-3.1-flash-image", cost: 0.068 });
+  recordFlat({ stage: "Cover Generation", provider: "openrouter", model: "google/gemini-3.1-flash-image", cost: 0.068 });  // обложка — единственное место OpenRouter
 
   const s = summarize();
   const beats = s.stages.find((x) => x.stage === "Script Beats")!;
@@ -86,8 +86,8 @@ test("4: стоимость собирается по всем провайде�
 
 test("5: неудачные и повторные вызовы попадают в стоимость", () => {
   resetLedger();
-  recordTokens({ stage: "Cover QC", provider: "openrouter", model: "anthropic/claude-sonnet-4.5", inputTokens: 2_000, outputTokens: 100, providerReportedCost: 0.01, failed: true });
-  recordTokens({ stage: "Cover QC", provider: "openrouter", model: "anthropic/claude-sonnet-4.5", inputTokens: 2_000, outputTokens: 100, providerReportedCost: 0.01, retry: true });
+  recordTokens({ stage: "Cover QC", provider: "openrouter", model: "anthropic/claude-haiku-4.5", inputTokens: 2_000, outputTokens: 100, providerReportedCost: 0.01, failed: true });
+  recordTokens({ stage: "Cover QC", provider: "openrouter", model: "anthropic/claude-haiku-4.5", inputTokens: 2_000, outputTokens: 100, providerReportedCost: 0.01, retry: true });
   const s = summarize();
   assert.equal(s.totals.failedOrRetryCalls, 2, "оба вызова учтены");
   assert.equal(Number(s.totals.failedOrRetryCost.toFixed(4)), 0.02);

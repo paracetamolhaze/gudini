@@ -27,11 +27,12 @@ test("1: почти одинаковые планы — одна сцена, р�
 
 test("2: невыполненная стадия помечается NOT RUN, а не нулём", () => {
   resetLedger();
-  recordTokens({ stage: "Script Beats", provider: "openrouter", model: "anthropic/claude-sonnet-4.5", inputTokens: 1000, outputTokens: 200, providerReportedCost: 0.01 });
+  recordTokens({ stage: "Script Beats", provider: "anthropic", model: "claude-sonnet-5", inputTokens: 1000, outputTokens: 200, providerReportedCost: 0.01 });
   const report = formatCostReport("TEST");
   assert.match(report, /Script Beats\s+\$0\.0100/, "выполненная стадия показывает цену");
   assert.match(report, /Cover Generation\s+NOT RUN/, "невыполненная помечена NOT RUN");
-  assert.match(report, /FULL VIDEO VARIABLE COST\s+недоступна/, "полная цена ролика не выдумывается");
+  assert.match(report, /CURRENT RUN COST/, "стоимость прогона отдельной строкой");
+  assert.match(report, /FULL VIDEO VARIABLE COST: неполная/, "полная цена ролика не выдумывается");
   assert.match(report, /ASSET PACK COST/, "стоимость медиатеки отдельной строкой");
-  assert.match(report, /CURRENT JOB COST/, "стоимость текущей задачи отдельной строкой");
+  assert.match(report, /CURRENT RUN COST/, "стоимость текущего прогона отдельной строкой");
 });

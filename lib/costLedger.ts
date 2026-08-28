@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { assertProvider } from "./providerPolicy";
 
 /**
  * Учёт денег по одному ролику: каждый платный вызов записывается отдельной строкой.
@@ -92,6 +93,10 @@ export function resetLedger(): void {
 }
 
 export function record(e: CostEntry): void {
+  // Проверка стоит именно здесь: любой платный вызов обязан пройти через учёт,
+  // поэтому здесь же его видит и политика провайдеров. Обойти одно, не обойдя
+  // другое, невозможно.
+  assertProvider(e.stage, e.provider);
   entries.push(e);
 }
 

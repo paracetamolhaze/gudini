@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { groupScenes, hamming, SAME_SCENE_DISTANCE } from "../lib/sceneHash";
-import { resetLedger, recordTokens } from "../lib/costLedger";
+import { resetLedger, recordTokens, projectRequestCost } from "../lib/costLedger";
 import { formatCostReport } from "../lib/costReport";
 import { packFingerprint } from "../lib/storyAssetPack";
+import { beatsFingerprint } from "../lib/scriptBeats";
 
 test("1: почти одинаковые планы — одна сцена, разные моменты — разные", () => {
   const base = 0b1010101010101010101010101010101010101010101010101010101010101010n;
@@ -67,5 +68,37 @@ test("3: медиатека пересобирается только при и�
     packFingerprint(research, [{ id: "b1", visualNeed: "CONTEXT" }, beats[1]] as any),
     base,
     "изменилась потребность блока в визуале",
+  );
+});
+
+test("4: оценка стоимости резервируется ДО запроса", () => {
+  // запрос со зрением дороже текстового: кадры считаются отдельно
+  const text = projectRequestCost({ model: "claude-sonnet-5", promptChars: 6000, maxTokens: 2000 });
+  const vision = projectRequestCost({ model: "claude-sonnet-5", promptChars: 6000, images: 6, maxTokens: 2000 });
+  assert.ok(vision > text, "кадры увеличивают оценку");
+  assert.ok(text > 0, "оценка не нулевая");
+
+  // выход считается по max_tokens — намеренно пессимистично
+  const small = projectRequestCost({ model: "claude-sonnet-5", promptChars: 6000, maxTokens: 500 });
+  assert.ok(small < text, "меньший потолок ответа — меньшая оценка");
+
+  // неизвестный тариф не должен превращаться в ноль
+  assert.ok(projectRequestCost({ model: "неизвестная-модель", promptChars: 100, maxTokens: 100 }) > 0.1);
+});
+
+test("5: блоки сценария переиспользуются при неизменных входных данных", () => {
+  const research: any = {
+    storyId: "s1",
+    canonicalEvent: "событие",
+    facts: [{ id: "f1" }],
+    entities: [{ name: "A" }],
+  };
+  const a = beatsFingerprint("текст сценария", research);
+  assert.equal(beatsFingerprint("текст сценария", research), a, "тот же сценарий — тот же отпечаток");
+  assert.notEqual(beatsFingerprint("другой текст", research), a, "правка сценария требует нового разбора");
+  assert.notEqual(
+    beatsFingerprint("текст сценария", { ...research, facts: [{ id: "f2" }] } as any),
+    a,
+    "смена фактов требует нового разбора",
   );
 });

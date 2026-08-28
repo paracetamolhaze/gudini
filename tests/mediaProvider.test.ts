@@ -31,7 +31,10 @@ test("1: все три стадии ходят через общий транс�
 test("2: обязательная стадия падает, а не возвращает пустоту", () => {
   // разбор сценария
   assert.ok(beats.includes("throw new Error"), "buildScriptBeats бросает ошибку");
-  assert.ok(!/} catch {\s*return null;/.test(beats), "нет тихого возврата null");
+  // чтение сохранённого кэша может вернуть null — это не проглатывание стадии.
+  // Проверяем именно сам разбор: после вызова модели тихого null быть не должно.
+  const buildFn = beats.slice(beats.indexOf("export async function buildScriptBeats"));
+  assert.ok(!/mediaComplete[\s\S]*?} catch {\s*return null;/.test(buildFn), "разбор не возвращает null после вызова модели");
   // сопоставление с блоками — именно здесь были потеряны готовые сегменты
   assert.ok(
     pack.includes("Сопоставление с блоками не выполнено"),

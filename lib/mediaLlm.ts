@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
-import { recordTokens, assertBudget, CostStage, CostProvider } from "./costLedger";
+import { recordTokens, assertBudget, projectRequestCost, CostStage, CostProvider } from "./costLedger";
 import { assertProvider, ProviderPolicyError } from "./providerPolicy";
 
 /**
@@ -163,7 +163,10 @@ async function visionOnce(
   const model = modelOverride || process.env.MEDIA_VISION_MODEL || mediaModel();
   mediaProvider();
   assertProvider(stage, "anthropic");
-  assertBudget(stage);
+  assertBudget(
+    stage,
+    projectRequestCost({ model, promptChars: system.length + user.length, images: frames.length, maxTokens }),
+  );
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({

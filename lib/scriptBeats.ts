@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { mediaComplete, parseJson, mediaLlmAvailable } from "./mediaLlm";
 import { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
@@ -61,13 +63,74 @@ const BEATS_SYSTEM = `Ты — режиссёр монтажа. Тебе даю�
 const bid = (s: string, i: number) => `b${i}_${crypto.createHash("sha1").update(s).digest("hex").slice(0, 4)}`;
 
 /**
+ * Версия разбора сценария на блоки. Меняется вместе с промптом или схемой
+ * ответа: тогда сохранённые блоки действительно устарели.
+ */
+export const BEATS_VERSION = 1;
+
+export type SavedBeats = {
+  version: number;
+  fingerprint: string;
+  beats: ScriptBeat[];
+  needs: MediaResearchNeed[];
+  createdAt: string;
+};
+
+/** Отпечаток входных данных разбора: сценарий, история и версия самого разбора. */
+export function beatsFingerprint(script: string, research: StoryResearchPack): string {
+  const payload = JSON.stringify({
+    script: script.trim(),
+    story: research.storyId,
+    event: research.canonicalEvent,
+    facts: research.facts.map((f) => f.id).sort(),
+    entities: research.entities.map((e) => e.name).sort(),
+    beatsVersion: BEATS_VERSION,
+  });
+  return crypto.createHash("sha1").update(payload).digest("hex").slice(0, 16);
+}
+
+const BEATS_FILE = "script-beats.json";
+
+/**
+ * Ранее разобранные блоки для тех же входных данных.
+ * Разбор сценария — платный вызов, и повторять его при неизменных сценарии
+ * и истории незачем: результат будет тот же.
+ */
+export function reusableBeats(dir: string, fingerprint: string): SavedBeats | null {
+  try {
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, BEATS_FILE), "utf8")) as SavedBeats;
+    if (saved.version !== BEATS_VERSION || saved.fingerprint !== fingerprint) return null;
+    if (!Array.isArray(saved.beats) || !saved.beats.length) return null;
+    return saved;
+  } catch {
+    return null;
+  }
+}
+
+export function saveBeats(dir: string, saved: SavedBeats): void {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, BEATS_FILE), JSON.stringify(saved, null, 2), "utf8");
+  } catch {}
+}
+
+/**
  * Режет сценарий на блоки и сразу формирует план медиа-исследования.
  * Один вызов модели: блоки и потребность в визуале определяются вместе.
  */
 export async function buildScriptBeats(
   script: string,
   research: StoryResearchPack,
-): Promise<{ beats: ScriptBeat[]; needs: MediaResearchNeed[] }> {
+  dir?: string,
+): Promise<{ beats: ScriptBeat[]; needs: MediaResearchNeed[]; reused?: boolean }> {
+  const fingerprint = beatsFingerprint(script, research);
+  if (dir) {
+    const saved = reusableBeats(dir, fingerprint);
+    if (saved) {
+      console.log(`Блоки сценария уже разобраны (отпечаток ${fingerprint}): ${saved.beats.length}. Платный вызов не нужен.`);
+      return { beats: saved.beats, needs: saved.needs, reused: true };
+    }
+  }
   if (!mediaLlmAvailable() || !script.trim()) {
     throw new Error("Разбор сценария на блоки невозможен: нет доступного LLM-провайдера");
   }
@@ -117,6 +180,7 @@ export async function buildScriptBeats(
     });
 
     if (!beats.length) throw new Error("Разбор сценария на блоки: модель не вернула ни одного блока");
-    return { beats, needs };
+    if (dir) saveBeats(dir, { version: BEATS_VERSION, fingerprint, beats, needs, createdAt: new Date().toISOString() });
+    return { beats, needs, reused: false };
   }
 }

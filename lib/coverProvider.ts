@@ -5,7 +5,7 @@ import { runFfmpeg } from "./ffmpeg";
 import { computeLayout, buildCoverHeadlineAss, resolveCoverFontFile } from "./coverLayout";
 import type { CoverConcept } from "./cover";
 import { assertProvider } from "./providerPolicy";
-import { assertBudget } from "./costLedger";
+import { assertBudget, IMAGE_PRICES } from "./costLedger";
 
 /**
  * Провайдер изображений обложек: Gemini Flash через OpenRouter.
@@ -28,7 +28,7 @@ export type GeneratedImage = { file: string; cost: number; width: number; height
 export async function generateCoverImage(prompt: string, outFile: string): Promise<GeneratedImage> {
   // OpenRouter разрешён только обложке — проверяем до платного запроса
   assertProvider("Cover Generation", "openrouter");
-  assertBudget("Cover Generation");
+  assertBudget("Cover Generation", IMAGE_PRICES["google/gemini-3.1-flash-image"] ?? 0.07);
   const key = getSettings().openrouterKey;
   if (!key) throw new Error("NO_OPENROUTER_KEY");
   if (!hasFace()) throw new Error("NO_REFERENCE");

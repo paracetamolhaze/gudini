@@ -25,6 +25,8 @@ export type MontageV3Result = {
   montage: MontagePlan;
   pack: StoryAssetPackV2;
   beats: ScriptBeat[];
+  /** блоки сценария взяты из сохранённых — разбор не оплачивался заново */
+  beatsReused: boolean;
   /** медиатека взята готовой, деньги на поиск и зрение не потрачены */
   packReused: boolean;
   warnings: string[];
@@ -66,7 +68,7 @@ export async function runMontageV3(args: {
   const { research, script, words, duration, dir, speechCuts = [] } = args;
   const warnings: string[] = [];
 
-  const { beats, needs } = await buildScriptBeats(script, research);
+  const { beats, needs, reused: beatsReused } = await buildScriptBeats(script, research, dir);
   const packFile = path.join(dir, "story-asset-pack.json");
   const before = fs.existsSync(packFile) ? fs.statSync(packFile).mtimeMs : 0;
 
@@ -95,5 +97,5 @@ export async function runMontageV3(args: {
     captionStyle: { ...DEFAULT_CAPTION_STYLE },
   };
 
-  return { plan, montage, pack, beats, packReused, warnings };
+  return { plan, montage, pack, beats, beatsReused: Boolean(beatsReused), packReused, warnings };
 }

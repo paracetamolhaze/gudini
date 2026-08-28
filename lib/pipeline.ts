@@ -229,7 +229,7 @@ export async function processProject(id: string): Promise<void> {
         speechCuts: seamPoints,
       });
       console.log(
-        `Montage V3: блоков ${v3.beats.length}, материалов ${v3.pack.assets.length} ` +
+        `Montage V3: блоков ${v3.beats.length}${v3.beatsReused ? " (переиспользованы)" : ""}, материалов ${v3.pack.assets.length} ` +
           `(медиатека ${v3.packReused ? "переиспользована — поиск и зрение не оплачивались" : "собрана заново"}), ` +
           `вставок ${v3.montage.events.length}, покрытие ${(v3.montage.stats.externalCoverage * 100).toFixed(0)}%`,
       );

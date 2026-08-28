@@ -308,10 +308,16 @@ export function costGuard(): { warn: number; max: number; hardLimit: boolean } {
 
 /** Задача остановлена лимитом расходов. */
 export class CostLimitError extends Error {
-  constructor(readonly spent: number, readonly limit: number, readonly stage: CostStage) {
+  constructor(
+    readonly spent: number,
+    readonly limit: number,
+    readonly stage: CostStage,
+    readonly projected = 0,
+  ) {
     super(
-      `Лимит расходов задачи исчерпан: потрачено ${spent.toFixed(4)}$ при пределе ${limit}$. ` +
-        `Стадия «${stage}» остановлена ДО отправки платного запроса. ` +
+      `Лимит расходов задачи исчерпан: потрачено ${spent.toFixed(4)}$` +
+        (projected ? `, следующий запрос оценён в ${projected.toFixed(4)}$` : "") +
+        ` при пределе ${limit}$. Стадия «${stage}» остановлена ДО отправки платного запроса. ` +
         "Поднимите MEDIA_JOB_MAX_COST_USD или снимите MEDIA_JOB_HARD_LIMIT.",
     );
     this.name = "CostLimitError";
@@ -319,17 +325,51 @@ export class CostLimitError extends Error {
 }
 
 /**
+ * Верхняя разумная оценка стоимости ЕЩЁ НЕ отправленного запроса.
+ *
+ * Точно предсказать длину ответа нельзя, поэтому оценка сознательно
+ * пессимистична: выход считается по max_tokens. Лучше зарезервировать больше
+ * и не отправить запрос, чем недооценить и перескочить предел последней тратой.
+ * После ответа провайдера учёт заменит оценку фактическим расходом.
+ */
+export function projectRequestCost(args: {
+  model: string;
+  /** длина промпта в символах: система плюс запрос */
+  promptChars: number;
+  /** сколько изображений уходит в запрос */
+  images?: number;
+  maxTokens: number;
+}): number {
+  const p = MODEL_PRICES[args.model];
+  // тариф неизвестен — берём заведомо крупную оценку, а не ноль
+  if (!p) return 0.5;
+  // ~3 символа на токен для кириллицы: намеренно меньше обычных 4, чтобы не занизить
+  const textTokens = Math.ceil(args.promptChars / 3);
+  // кадр 1080×1920 в base64 обходится примерно в полторы тысячи токенов
+  const imageTokens = (args.images ?? 0) * 1600;
+  const { cost } = priceTokens(args.model, {
+    inputTokens: textTokens + imageTokens,
+    outputTokens: args.maxTokens,
+  });
+  return cost;
+}
+
+/**
  * Разрешение на новый платный запрос. Вызывается ПЕРЕД обращением к провайдеру:
  * лимит имеет смысл, только если он останавливает трату, а не фиксирует её.
+ *
+ * Проверяется не только потраченное, но и стоимость самого запроса: иначе
+ * при остатке в пять центов можно отправить запрос на двадцать и узнать
+ * о превышении уже по счёту.
  *
  * Историческая стоимость (например, уже сделанная обложка) в лимит не входит:
  * она относится к прошлым запускам и повторно не тратится.
  */
-export function assertBudget(stage: CostStage): void {
+export function assertBudget(stage: CostStage, projectedCost = 0): void {
   const { max, hardLimit } = costGuard();
   if (!hardLimit || !Number.isFinite(max) || max <= 0) return;
   const spent = summarize().totals.variableApiCost;
-  if (spent >= max) throw new CostLimitError(spent, max, stage);
+  if (spent + projectedCost > max) throw new CostLimitError(spent, max, stage, projectedCost);
 }
 
 /** Проверяет накопленную сумму и называет стадию-виновника. Решение принимает вызывающий. */

@@ -1,6 +1,6 @@
 import { mediaFromPage, searchArchiveOrg, searchReddit } from "./brollVideo";
 import { assertProvider } from "./providerPolicy";
-import { recordRequest, assertBudget } from "./costLedger";
+import { recordRequest, assertBudget, REQUEST_PRICES } from "./costLedger";
 /**
  * Публичные источники визуала для фактических перебивок.
  *
@@ -213,7 +213,7 @@ export async function searchWebVideos(query: string): Promise<WebAsset[]> {
   if (!key) return [];
   try {
     assertProvider("Media Research", "brave");
-    assertBudget("Media Research");
+    assertBudget("Media Research", REQUEST_PRICES["brave/videos/search"] ?? 0.005);
     const url = new URL("https://api.search.brave.com/res/v1/videos/search");
     url.searchParams.set("q", query);
     url.searchParams.set("count", "20");
@@ -256,8 +256,8 @@ export async function searchWebImages(query: string): Promise<WebAsset[]> {
   try {
     if (brave) {
       assertProvider("Media Research", "brave");
-      assertBudget("Media Research");
-    assertBudget("Media Research");
+      assertBudget("Media Research", REQUEST_PRICES["brave/videos/search"] ?? 0.005);
+    assertBudget("Media Research", REQUEST_PRICES["brave/videos/search"] ?? 0.005);
       const url = new URL("https://api.search.brave.com/res/v1/images/search");
       url.searchParams.set("q", query);
       url.searchParams.set("count", "10");
@@ -291,7 +291,7 @@ export async function searchWebPages(query: string): Promise<string[]> {
   if (!key) return [];
   try {
     assertProvider("Media Research", "brave");
-    assertBudget("Media Research");
+    assertBudget("Media Research", REQUEST_PRICES["brave/videos/search"] ?? 0.005);
     const url = new URL("https://api.search.brave.com/res/v1/web/search");
     url.searchParams.set("q", query);
     url.searchParams.set("count", "10");

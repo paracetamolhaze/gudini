@@ -8,6 +8,7 @@ import { renderPlan } from "../lib/pipeline";
 import { checkRenderConformance, checkPointsFor } from "../lib/renderConformance";
 import { frameHash, hamming } from "../lib/sceneHash";
 import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
+import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS } from "../lib/storyAssetPack";
 
 /**
  * Регрессия на НАСТОЯЩЕМ рендере, покадрово. Неподвижная картинка обязана быть
@@ -127,4 +128,30 @@ test("3: недоступный материал даёт ошибку пров�
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("4: решение по окну — отказ, если грязь рядом с началом", () => {
+  const clean = { description: "medics around a stretcher", objects: [], environment: "", action: "", updatedAt: "" };
+  const outro = { ...clean, description: "THANKS FOR WATCHING outro", hasChannelPromo: true, isTitleOrOutroCard: true, hasLargeText: true };
+
+  // ровно случай из готового ролика: чисто только начало, дальше чужая карточка
+  const rejected = segmentWindowDecision([clean, clean, outro, outro, outro] as any);
+  assert.equal(rejected.decision, "REJECT", "0.8с чистого — меньше полутора, сегмент не берём");
+  assert.equal(rejected.usableSec, 0.8);
+  assert.equal(rejected.points.length, WINDOW_OFFSETS.length, "исход есть у каждой точки окна");
+  assert.equal(rejected.points.filter((p) => p.verdict === null).length, 2);
+
+  // грязь ближе к концу — окно подрезается, а не выбрасывается
+  const trimmed = segmentWindowDecision([clean, clean, clean, clean, outro] as any);
+  assert.equal(trimmed.decision, "TRIM");
+  assert.equal(trimmed.usableSec, 2.4, "оставляем чистые 2.4с");
+
+  // чистое окно проходит целиком
+  const passed = segmentWindowDecision([clean, clean, clean, clean, clean] as any);
+  assert.equal(passed.decision, "PASS");
+  assert.equal(passed.usableSec, SEGMENT_WINDOW);
+
+  // неописанный кадр — не повод считать окно чистым
+  const unknown = segmentWindowDecision([null, clean, clean, clean, clean] as any);
+  assert.equal(unknown.decision, "REJECT");
 });

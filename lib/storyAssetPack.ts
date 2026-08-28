@@ -299,6 +299,78 @@ function beatQueries(r: StoryResearchPack, need: MediaResearchNeed): string[] {
   ].filter((q) => q.trim().length > 6);
 }
 
+/** Длина окна сегмента и точки его проверки: начало, четверти, конец. */
+export const SEGMENT_WINDOW = 3.2;
+export const WINDOW_OFFSETS = [0.05, 0.25, 0.5, 0.75, 0.95];
+/** Короче полутора секунд вставка бессмысленна. */
+export const MIN_CLEAN_SEC = 1.5;
+
+export type WindowDecision = {
+  decision: "PASS" | "TRIM" | "REJECT";
+  /** сколько секунд окна признано чистыми */
+  usableSec: number;
+  /** какая точка испортила окно (индекс в WINDOW_OFFSETS), -1 если все чистые */
+  firstBadIndex: number;
+  reason: string;
+  /** исход по каждой точке окна — без пропусков */
+  points: { offsetFrac: number; atSec: number; verdict: string | null }[];
+};
+
+/**
+ * Решение по ВСЕМУ окну сегмента, а не по одному кадру.
+ *
+ * Проверка единственной «представительной» точки признавала чистыми три секунды,
+ * внутри которых могла быть чужая финальная карточка с «SUBSCRIBE» — так она и
+ * попала в готовый ролик. Здесь известен исход каждой точки окна: грязь в хвосте
+ * позволяет подрезать окно до чистой границы, грязь в начале или середине —
+ * повод отказаться от сегмента целиком.
+ */
+export function segmentWindowDecision(
+  analyses: (import("./brollRelevance").AssetAnalysis | null)[],
+  windowSec = SEGMENT_WINDOW,
+): WindowDecision {
+  const points = WINDOW_OFFSETS.map((frac, i) => ({
+    offsetFrac: frac,
+    atSec: Number((windowSec * frac).toFixed(2)),
+    verdict: analyses[i] ? qcReject(analyses[i]!, { factualBeat: true }) : "кадр не описан",
+  }));
+
+  let cleanParts = 0;
+  while (cleanParts < points.length && points[cleanParts].verdict === null) cleanParts++;
+  const firstBadIndex = points.findIndex((p) => p.verdict !== null);
+
+  if (cleanParts === 0) {
+    return {
+      decision: "REJECT",
+      usableSec: 0,
+      firstBadIndex,
+      reason: String(points[0].verdict),
+      points,
+    };
+  }
+  if (firstBadIndex < 0) {
+    return { decision: "PASS", usableSec: windowSec, firstBadIndex: -1, reason: "всё окно чистое", points };
+  }
+
+  const usableSec = Number((windowSec * WINDOW_OFFSETS[cleanParts - 1]).toFixed(2));
+  if (usableSec < MIN_CLEAN_SEC) {
+    return {
+      decision: "REJECT",
+      usableSec,
+      firstBadIndex,
+      reason: `${points[firstBadIndex].verdict} на ${points[firstBadIndex].atSec}с — чистыми остаются только ${usableSec}с`,
+      points,
+    };
+  }
+  return {
+    decision: "TRIM",
+    usableSec,
+    firstBadIndex,
+    reason: `${points[firstBadIndex].verdict} на ${points[firstBadIndex].atSec}с — окно подрезано до ${usableSec}с`,
+    points,
+  };
+}
+
 /**
  * Режет исходное видео на самостоятельные сегменты: сэмплирует кадры, описывает
  * зрением и оставляет визуально разные моменты. Один сюжет даёт несколько вставок.
@@ -326,8 +398,8 @@ async function cutSegments(
   // 1) Снимаем кадры ПО ВСЕМУ окну будущего сегмента, а не одну «представительную»
   // точку. Проверка одного кадра признавала чистыми три секунды, внутри которых
   // могла быть чужая финальная карточка с «SUBSCRIBE» — так она и попала в ролик.
-  const WINDOW = 3.2;
-  const OFFSETS = [0.05, 0.25, 0.5, 0.75, 0.95]; // начало, четверти, конец окна
+  const WINDOW = SEGMENT_WINDOW;
+  const OFFSETS = WINDOW_OFFSETS;
   const shots: { at: number; frame: string; buffer: Buffer; hash: bigint | null; sample: number; part: number }[] = [];
   for (let i = 0; i < samples; i++) {
     const at = ((i + 0.5) / samples) * Math.max(0, duration - WINDOW);
@@ -377,31 +449,13 @@ async function cutSegments(
     if (!parts.length) continue;
 
     const at = parts[0].sh.at;
-    const verdicts = parts.map((x) => {
-      if (!x.an) return "нет описания кадра";
-      // Ролик документальный: объяснялка в студии и постановка не годятся.
-      return qcReject(x.an, { factualBeat: true });
-    });
-
-    // сколько частей подряд с начала окна чистые
-    let cleanParts = 0;
-    while (cleanParts < verdicts.length && verdicts[cleanParts] === null) cleanParts++;
-    const firstBad = verdicts.findIndex((v) => v !== null);
-
-    if (cleanParts === 0) {
-      countQcReason(String(verdicts[0] ?? "кадр не описан"));
+    const decision = segmentWindowDecision(parts.map((x) => x.an ?? null), WINDOW);
+    if (decision.decision === "REJECT") {
+      countQcReason(decision.reason);
       continue;
     }
-
-    // граница чистой части: доля последнего чистого замера от длины окна
-    const cleanFrac = OFFSETS[cleanParts - 1];
-    const usable = Number((WINDOW * cleanFrac).toFixed(2));
-    if (firstBad >= 0 && usable < MIN_CLEAN) {
-      countQcReason(`${verdicts[firstBad]} (чистого материала ${usable.toFixed(1)}с — мало)`);
-      continue;
-    }
-    const segLen = firstBad >= 0 ? usable : WINDOW;
-    if (firstBad >= 0) {
+    const segLen = decision.usableSec;
+    if (decision.decision === "TRIM") {
       trimmedSegments++;
       stages.segmentsTrimmed++;
     }

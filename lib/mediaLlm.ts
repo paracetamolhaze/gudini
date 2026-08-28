@@ -40,7 +40,7 @@ export function mediaLlmAvailable(): boolean {
 
 
 /** Списание фактической стоимости, которую назвал OpenRouter. */
-function recordOpenRouter(stage: CostStage, model: string, json: any, failed = false): void {
+function recordOpenRouter(stage: CostStage, model: string, json: any, failed = false, retry = false): void {
   const u = json?.usage ?? {};
   recordTokens({
     stage,
@@ -51,11 +51,12 @@ function recordOpenRouter(stage: CostStage, model: string, json: any, failed = f
     cacheReadTokens: Number(u.prompt_tokens_details?.cached_tokens ?? 0),
     providerReportedCost: typeof u.cost === "number" ? u.cost : undefined,
     failed,
+    retry,
   });
 }
 
 /** Списание по фактическому расходу токенов Anthropic. */
-function recordAnthropic(stage: CostStage, model: string, response: any, failed = false): void {
+function recordAnthropic(stage: CostStage, model: string, response: any, failed = false, retry = false): void {
   const u = response?.usage ?? {};
   recordTokens({
     stage,
@@ -66,6 +67,7 @@ function recordAnthropic(stage: CostStage, model: string, response: any, failed 
     cacheCreationTokens: Number(u.cache_creation_input_tokens ?? 0),
     cacheReadTokens: Number(u.cache_read_input_tokens ?? 0),
     failed,
+    retry,
   });
 }
 
@@ -77,8 +79,32 @@ export type CompleteArgs = {
   stage?: CostStage;
 };
 
+/**
+ * Один повтор при разовом сбое провайдера.
+ *
+ * Пустой ответ или 429/5xx — это икота сети, а не сломанная стадия: ронять из-за
+ * неё всю сборку так же неправильно, как молча её проглатывать. Повтор ровно один,
+ * и он попадает в отчёт о стоимости, иначе цена ролика окажется занижена.
+ */
+async function withOneRetry<T>(fn: (isRetry: boolean) => Promise<T>): Promise<T> {
+  try {
+    return await fn(false);
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    if (!/пустой ответ|429|5\d\d:|timeout|ECONNRESET|fetch failed/i.test(msg)) throw e;
+    return await fn(true);
+  }
+}
+
 /** Один текстовый запрос. Возвращает текст ответа или бросает ошибку — молча не глотаем. */
-export async function mediaComplete({ system, user, maxTokens = 8000, stage = "Media Research" }: CompleteArgs): Promise<string> {
+export async function mediaComplete(args: CompleteArgs): Promise<string> {
+  return withOneRetry((isRetry) => completeOnce(args, isRetry));
+}
+
+async function completeOnce(
+  { system, user, maxTokens = 8000, stage = "Media Research" }: CompleteArgs,
+  isRetry = false,
+): Promise<string> {
   const provider = mediaProvider();
   const model = mediaModel();
   const settings = getSettings();
@@ -103,10 +129,10 @@ export async function mediaComplete({ system, user, maxTokens = 8000, stage = "M
     const json: any = await res.json().catch(() => ({}));
     if (!res.ok || json.error) {
       // неудачный запрос провайдер мог оттарифицировать — он тоже идёт в стоимость
-      recordOpenRouter(stage, model, json, true);
+      recordOpenRouter(stage, model, json, true, isRetry);
       throw new Error(`OpenRouter ${res.status}: ${JSON.stringify(json.error ?? {}).slice(0, 200)}`);
     }
-    recordOpenRouter(stage, model, json);
+    recordOpenRouter(stage, model, json, false, isRetry);
     const text = json.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) throw new Error("OpenRouter вернул пустой ответ");
     return text.trim();
@@ -121,7 +147,7 @@ export async function mediaComplete({ system, user, maxTokens = 8000, stage = "M
     system,
     messages: [{ role: "user", content: user }],
   });
-  recordAnthropic(stage, model, response);
+  recordAnthropic(stage, model, response, false, isRetry);
   const text = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -148,7 +174,14 @@ export type VisionArgs = {
  * Описание кадров — обязательная часть сборки медиатеки: без него ни один
  * видео-сегмент не проходит дальше, поэтому оно не должно зависеть от отдельного счёта.
  */
-export async function mediaVision({ system, user, image, images, maxTokens = 2000, stage = "Vision Verification" }: VisionArgs): Promise<string> {
+export async function mediaVision(args: VisionArgs): Promise<string> {
+  return withOneRetry((isRetry) => visionOnce(args, isRetry));
+}
+
+async function visionOnce(
+  { system, user, image, images, maxTokens = 2000, stage = "Vision Verification" }: VisionArgs,
+  isRetry = false,
+): Promise<string> {
   const frames = images ?? (image ? [image] : []);
   if (!frames.length) throw new Error("зрению не передан ни один кадр");
   const provider = mediaProvider();
@@ -177,10 +210,10 @@ export async function mediaVision({ system, user, image, images, maxTokens = 200
     });
     const json: any = await res.json().catch(() => ({}));
     if (!res.ok || json.error) {
-      recordOpenRouter(stage, model, json, true);
+      recordOpenRouter(stage, model, json, true, isRetry);
       throw new Error(`OpenRouter vision ${res.status}: ${JSON.stringify(json.error ?? {}).slice(0, 200)}`);
     }
-    recordOpenRouter(stage, model, json);
+    recordOpenRouter(stage, model, json, false, isRetry);
     const text = json.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) throw new Error("OpenRouter vision вернул пустой ответ");
     return text.trim();
@@ -214,7 +247,7 @@ export async function mediaVision({ system, user, image, images, maxTokens = 200
       },
     ],
   });
-  recordAnthropic(stage, model, response);
+  recordAnthropic(stage, model, response, false, isRetry);
   const text = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)

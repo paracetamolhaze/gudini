@@ -5,82 +5,125 @@ import os from "os";
 import path from "path";
 import { runFfmpeg } from "../lib/ffmpeg";
 import { renderPlan } from "../lib/pipeline";
-import { checkRenderConformance } from "../lib/renderConformance";
+import { checkRenderConformance, checkPointsFor } from "../lib/renderConformance";
+import { frameHash, hamming } from "../lib/sceneHash";
 import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
 
 /**
- * Регрессия на настоящем рендере: неподвижная картинка обязана быть на экране
- * всю запланированную длительность. Раньше она показывалась 1/30 секунды,
- * и ни одна проверка этого не замечала. Всё локально, без единого API-вызова.
+ * Регрессия на НАСТОЯЩЕМ рендере, покадрово. Неподвижная картинка обязана быть
+ * на экране всю запланированную длительность: раньше она показывалась 1/30
+ * секунды, потому что JPEG — это один кадр, и без зацикливания overlay сразу
+ * пропускал A-roll. Всё локально, без единого API-вызова.
  */
 
-test("1: запланированное изображение присутствует все свои секунды", { timeout: 180_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-render-"));
-  try {
-    // цветной «A-roll» со звуком и заметно другая картинка-вставка
-    await runFfmpeg([
-      "-f", "lavfi", "-i", "testsrc2=s=1080x1920:d=6:r=30",
-      "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-c:a", "aac", "-shortest",
-      path.join(dir, "aroll.mp4"),
-    ]);
-    await runFfmpeg([
-      "-f", "lavfi", "-i", "smptebars=s=1080x1920", "-frames:v", "1",
-      path.join(dir, "still.png"),
-    ]);
-    fs.writeFileSync(path.join(dir, "subs.ass"), "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+const LAYOUT = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920";
 
+async function fixture(dir: string) {
+  // A-roll со звуком и заметно другая картинка-вставка; обе со структурой,
+  // потому что перцептивный хэш сравнивает рисунок кадра, а не среднюю яркость
+  await runFfmpeg([
+    "-f", "lavfi", "-i", "testsrc2=s=1080x1920:d=5:r=30",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=5",
+    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+    path.join(dir, "aroll.mp4"),
+  ]);
+  await runFfmpeg(["-f", "lavfi", "-i", "smptebars=s=1080x1920", "-frames:v", "1", path.join(dir, "still.png")]);
+  fs.writeFileSync(
+    path.join(dir, "subs.ass"),
+    "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+  );
+}
+
+/** Хэш кадра готового ролика в заданной секунде. */
+async function outHash(dir: string, at: number): Promise<bigint> {
+  const f = path.join(dir, `probe-${at}.jpg`);
+  await runFfmpeg(["-ss", String(at), "-i", path.join(dir, "out.mp4"), "-frames:v", "1", "-vf", LAYOUT, "-q:v", "4", f]);
+  const h = await frameHash(f, dir);
+  assert.ok(h !== null, `кадр на ${at}с разобран`);
+  return h!;
+}
+
+test("1: изображение видно всю вставку, а вне её — A-roll", { timeout: 240_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-img-"));
+  try {
+    await fixture(dir);
     const plan: EditPlan = {
       version: 1,
-      duration: 6,
+      duration: 5,
       captionStyle: { ...DEFAULT_CAPTION_STYLE },
-      events: [{ type: "B_ROLL", start: 2, end: 5, file: path.join(dir, "still.png") }],
+      events: [{ type: "B_ROLL", start: 1, end: 4, file: path.join(dir, "still.png") }],
     };
+    await renderPlan(dir, path.join(dir, "aroll.mp4"), plan, 5, () => {});
 
-    await renderPlan(dir, path.join(dir, "aroll.mp4"), plan, 6, () => {});
-    const out = path.join(dir, "out.mp4");
-    assert.ok(fs.existsSync(out), "рендер создал файл");
+    // эталоны: сама картинка и кадр исходного A-roll
+    const refImg = path.join(dir, "ref-img.jpg");
+    await runFfmpeg(["-i", path.join(dir, "still.png"), "-frames:v", "1", "-vf", LAYOUT, refImg]);
+    const imgHash = (await frameHash(refImg, dir))!;
 
-    // картинка должна быть видна и в начале, и в середине, и в конце вставки
-    for (const at of [2.2, 3.5, 4.8]) {
-      const shot = path.join(dir, `p-${at}.png`);
-      await runFfmpeg(["-ss", String(at), "-i", out, "-frames:v", "1", "-vf", "scale=2:2", shot]);
-      const px = fs.readFileSync(shot);
-      assert.ok(px.length > 0, `кадр на ${at}с снят`);
+    // 1.1 / 2.5 / 3.9 — внутри вставки: должна быть картинка
+    for (const at of [1.1, 2.5, 3.9]) {
+      const d = hamming(imgHash, await outHash(dir, at));
+      assert.ok(d <= 18, `на ${at}с должна быть картинка (расстояние ${d})`);
     }
-
-    // и то же самое — формальной сверкой плана с результатом
-    const conf = await checkRenderConformance(dir, out, plan);
-    assert.equal(conf.checked, 3, "проверены все три точки вставки");
-    assert.deepEqual(conf.issues, [], "изображение присутствует на всех точках");
-    assert.ok(conf.ok, "план и рендер совпали");
+    // 0.5 и 4.2 — вне вставки: картинки быть не должно
+    for (const at of [0.5, 4.2]) {
+      const d = hamming(imgHash, await outHash(dir, at));
+      assert.ok(d > 18, `на ${at}с картинки быть не должно (расстояние ${d})`);
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("2: сверка ловит вставку, которой нет в готовом файле", { timeout: 180_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-miss-"));
+test("2: сверка даёт результат по КАЖДОЙ точке и ловит пропавшую вставку", { timeout: 240_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-conf-"));
   try {
-    // Картинки со структурой: перцептивный хэш сравнивает рисунок кадра,
-    // а не среднюю яркость, и на однотонных заливках он неразличим.
-    await runFfmpeg([
-      "-f", "lavfi", "-i", "testsrc=s=1080x1920:d=4:r=30",
-      "-c:v", "libx264", "-pix_fmt", "yuv420p",
-      path.join(dir, "out.mp4"),
-    ]);
-    await runFfmpeg(["-f", "lavfi", "-i", "smptebars=s=1080x1920", "-frames:v", "1", path.join(dir, "still.png")]);
-
-    // план обещает красную вставку, а в файле её нет — это должно быть ошибкой
+    await fixture(dir);
     const plan: EditPlan = {
       version: 1,
-      duration: 4,
+      duration: 5,
       captionStyle: { ...DEFAULT_CAPTION_STYLE },
-      events: [{ type: "B_ROLL", start: 1, end: 3, file: path.join(dir, "still.png") }],
+      events: [{ type: "B_ROLL", start: 1, end: 4, file: path.join(dir, "still.png") }],
     };
-    const conf = await checkRenderConformance(dir, path.join(dir, "out.mp4"), plan);
-    assert.equal(conf.ok, false, "расхождение плана и результата — ошибка");
-    assert.equal(conf.issues.length, 3, "все три точки вставки помечены");
+
+    // сначала честный рендер — все точки должны сойтись
+    await renderPlan(dir, path.join(dir, "aroll.mp4"), plan, 5, () => {});
+    const good = await checkRenderConformance(dir, path.join(dir, "out.mp4"), plan);
+    assert.equal(good.points.length, good.expected, "результат есть по каждой запланированной точке");
+    assert.equal(good.expected, checkPointsFor(plan.events[0]).length, "три точки на вставку");
+    assert.equal(good.passed, good.expected, "все точки совпали");
+    assert.ok(good.ok);
+
+    // теперь ролик БЕЗ вставки: сверка обязана это увидеть
+    await runFfmpeg([
+      "-f", "lavfi", "-i", "testsrc2=s=1080x1920:d=5:r=30",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", path.join(dir, "bare.mp4"),
+    ]);
+    const bad = await checkRenderConformance(dir, path.join(dir, "bare.mp4"), plan);
+    assert.equal(bad.ok, false, "пропавшая вставка — жёсткий провал");
+    assert.equal(bad.points.length, bad.expected, "и здесь результат по каждой точке");
+    assert.equal(bad.failed, 3, "все три точки помечены как несовпавшие");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("3: недоступный материал даёт ошибку проверки, а не тишину", { timeout: 120_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-err-"));
+  try {
+    await fixture(dir);
+    await renderPlan(dir, path.join(dir, "aroll.mp4"), { version: 1, duration: 5, events: [], captionStyle: { ...DEFAULT_CAPTION_STYLE } }, 5, () => {});
+    const plan: EditPlan = {
+      version: 1,
+      duration: 5,
+      captionStyle: { ...DEFAULT_CAPTION_STYLE },
+      events: [{ type: "B_ROLL", start: 1, end: 4, file: path.join(dir, "нет-такого.jpg") }],
+    };
+    const r = await checkRenderConformance(dir, path.join(dir, "out.mp4"), plan);
+    assert.equal(r.points.length, 3, "точки не пропущены");
+    assert.equal(r.errored, 3, "каждая помечена ошибкой");
+    assert.equal(r.ok, false, "непроверяемая вставка не считается успехом");
+    assert.match(String(r.points[0].reason), /отсутствует на диске/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

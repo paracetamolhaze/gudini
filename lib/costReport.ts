@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { summarize, ledger, infrastructurePerVideo, checkGuard, CostStage, CostProvider } from "./costLedger";
-import { policyViolations, COVER_STAGES, isAllowed } from "./providerPolicy";
+import { policyViolations, COVER_STAGES, OPENROUTER_STAGE, isAllowed } from "./providerPolicy";
 
 /**
  * Отчёт о стоимости одного ролика.
@@ -256,14 +256,15 @@ export function formatCostReport(opts: ReportOptions | string = {}): string {
   L.push("    cost:  $0");
 
   // изоляция провайдеров — три обязательных ответа
-  const outsideCover = entries.filter((e) => e.provider === "openrouter" && !COVER_STAGES.includes(e.stage));
+  const outsideCover = entries.filter((e) => e.provider === "openrouter" && e.stage !== OPENROUTER_STAGE);
   const braveOutsideSearch = entries.filter((e) => e.provider === "brave" && e.model.startsWith("brave/") === false);
-  const anthropicOnCover = entries.filter((e) => e.provider === "anthropic" && COVER_STAGES.includes(e.stage));
+  // концепт и QC обложки на Anthropic — это норма; нарушением была бы генерация картинки
+const anthropicOnCover = entries.filter((e) => e.provider === "anthropic" && e.stage === OPENROUTER_STAGE);
   L.push("");
   L.push("ИЗОЛЯЦИЯ ПРОВАЙДЕРОВ");
-  L.push(`  OpenRouter calls outside COVER: ${outsideCover.length}`);
+  L.push(`  OpenRouter calls outside COVER IMAGE GENERATION: ${outsideCover.length}`);
   L.push(`  Brave calls outside SEARCH:     ${braveOutsideSearch.length}`);
-  L.push(`  Anthropic calls for COVER:      ${anthropicOnCover.length}`);
+  L.push(`  Anthropic calls for COVER IMAGE GENERATION: ${anthropicOnCover.length}`);
 
   const violations = policyViolations();
   if (violations.length || outsideCover.length || braveOutsideSearch.length || anthropicOnCover.length) {

@@ -86,8 +86,8 @@ test("4: стоимость собирается по всем провайде�
 
 test("5: неудачные и повторные вызовы попадают в стоимость", () => {
   resetLedger();
-  recordTokens({ stage: "Cover QC", provider: "openrouter", model: "anthropic/claude-haiku-4.5", inputTokens: 2_000, outputTokens: 100, providerReportedCost: 0.01, failed: true });
-  recordTokens({ stage: "Cover QC", provider: "openrouter", model: "anthropic/claude-haiku-4.5", inputTokens: 2_000, outputTokens: 100, providerReportedCost: 0.01, retry: true });
+  recordTokens({ stage: "Cover QC", provider: "anthropic", model: "claude-haiku-4-5-20251001", inputTokens: 2_000, outputTokens: 100, providerReportedCost: 0.01, failed: true });
+  recordTokens({ stage: "Cover QC", provider: "anthropic", model: "claude-haiku-4-5-20251001", inputTokens: 2_000, outputTokens: 100, providerReportedCost: 0.01, retry: true });
   const s = summarize();
   assert.equal(s.totals.failedOrRetryCalls, 2, "оба вызова учтены");
   assert.equal(Number(s.totals.failedOrRetryCost.toFixed(4)), 0.02);

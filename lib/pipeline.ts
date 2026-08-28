@@ -12,14 +12,12 @@ import {
   CutRegion,
 } from "./speechCleanupPlan";
 import { planSpeechCleanup } from "./speechCleanupPlanner";
+import { runMontageV3 } from "./montageV3Pipeline";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { buildAss } from "./subtitles";
 import { applyScriptFormatting } from "./scriptFormat";
 import { generateMeta } from "./ai";
-import { prepareBroll, resolveBrollEvents } from "./broll";
-import { planEdit, planGapFillers } from "./editPlanner";
 import { buildStoryAssetPack } from "./storyAssets";
-import { planFromAssetPack } from "./editPlannerPack";
 import { resetCost, writeCost } from "./pipelineCost";
 import { generateCoverConcept } from "./cover";
 import { resolveHeadline } from "./coverHeadline";
@@ -43,7 +41,11 @@ const running = new Set<string>();
 const smartEditing = () => process.env.SMART_EDITING !== "false";
 const smartSpeechCleanup = () => process.env.SMART_SPEECH_CLEANUP !== "false";
 // новый конвейер: исследование -> медиатека истории -> монтаж только из неё
-const storyAssetPipeline = () => process.env.STORY_ASSET_PIPELINE === "true";
+/**
+ * Montage V3 — производственный монтаж. Выключается только явно: значение по
+ * умолчанию включено, чтобы новый ролик не собрался старым путём по недосмотру.
+ */
+const montageV3 = () => process.env.MONTAGE_V3 !== "false";
 
 function setStep(id: string, step: string, progress: number) {
   updateProject(id, { processing: { state: "running", step, progress } });
@@ -207,80 +209,45 @@ export async function processProject(id: string): Promise<void> {
     // НОВЫЙ ПУТЬ: медиатека истории собирается ДО монтажа, планировщик выбирает
     // только из неё. Отката на слепой поиск по фразам здесь нет: если путь не
     // отработал, ролик выходит без перебивок, а причина видна в логе.
-    if (storyAssetPipeline()) {
+    // ПРОИЗВОДСТВЕННЫЙ ПУТЬ V3: история → блоки сценария → медиатека → режиссёр → валидатор.
+    // Отката на старый планировщик нет ни на одном шаге: молчаливая подмена монтажа
+    // однажды уже дала ролик, собранный непонятно чем, и разбираться было дороже.
+    if (montageV3()) {
       const research = getProject(id)?.research;
       if (!research) {
-        console.warn("Story pipeline: исследование истории отсутствует — перебивок не будет");
-      } else {
-        setStep(id, "Медиатека истории", 26);
-        const pack = await buildStoryAssetPack(research, dir);
-        console.log(
-          `Медиатека: ${pack.assets.length} проверенных материалов ` +
-            `(видео ${pack.assets.filter((a) => a.mediaType === "VIDEO").length})`,
+        throw new Error(
+          "Montage V3: у проекта нет исследования истории. Монтаж без проверенных фактов не собирается.",
         );
-        setStep(id, "Режиссёрский план", 30);
-        plan = await planFromAssetPack(dir, research, pack, words, effDur);
-        if (!plan) console.warn("Story pipeline: план не построен — ролик будет без перебивок");
       }
-      if (!plan) plan = { version: 1, duration: effDur, events: [], captionStyle: { ...DEFAULT_CAPTION_STYLE } };
-      plan.events = coverSpeechCuts(plan.events, seamPoints, effDur);
-    } else if (smartEditing()) {
-      try {
-        plan = await planEdit(project.topic, project.script, words, effDur, seamPoints);
-      } catch (e) {
-        console.warn("Планировщик упал, fallback:", e);
-      }
-    }
-    if (plan && storyAssetPipeline()) {
-      // материалы уже собраны планировщиком пакета — старый подбор не нужен
-      fs.writeFileSync(path.join(dir, "edit-plan.json"), JSON.stringify(plan, null, 2), "utf8");
-    } else
-    if (plan) {
-      plan.events = coverSpeechCuts(plan.events, seamPoints, effDur);
-      setStep(id, "Подбор перебивок", 28);
-      plan.events = await resolveBrollEvents(dir, plan.events);
-
-      // Ролик должен быть динамичным: если внешние визуалы занимают меньше половины
-      // экранного времени, делаем ВТОРОЙ проход и добираем фото/контекст на длинных
-      // участках с одним лицом. Максимум два прохода — это поиск, а не генерация.
-      let coverage = visualCoverage(plan.events, effDur);
-      const gaps = aRollGaps(plan.events, effDur);
-      console.log(`Покрытие визуалом: ${(coverage * 100).toFixed(0)}% | длинных участков A-roll: ${gaps.length}`);
-      if (coverage < 0.55 && gaps.length) {
-        setStep(id, "Добор перебивок", 32);
-        try {
-          const extraRaw = await planGapFillers(project.topic, project.script, words, effDur, gaps);
-          const extra = validatePlan(extraRaw, words, effDur).filter(
-            (e) => e.type === "B_ROLL" && !plan!.events.some((x) => x.type === "B_ROLL" && overlapsEvents(x, e)),
-          );
-          if (extra.length) {
-            const resolved = await resolveBrollEvents(dir, [...plan.events, ...extra]);
-            plan.events = resolved;
-            coverage = visualCoverage(plan.events, effDur);
-            console.log(`После второго прохода покрытие: ${(coverage * 100).toFixed(0)}%`);
-          }
-        } catch (e) {
-          console.warn("Второй проход подбора пропущен:", String(e).slice(0, 120));
-        }
-      }
-    } else {
-      // старый путь: только б-роллы по эвристике/простому плану
-      setStep(id, "Подбор перебивок", 28);
-      const clips = await prepareBroll(dir, words, project.topic).catch(() => []);
-      plan = {
-        version: 1,
+      setStep(id, "Блоки сценария и медиатека", 26);
+      const v3 = await runMontageV3({
+        research,
+        script: project.script ?? "",
+        words,
         duration: effDur,
-        captionStyle: { ...DEFAULT_CAPTION_STYLE },
-        events: clips.map((c) => ({
-          type: "B_ROLL" as const,
-          start: c.start,
-          end: c.end,
-          query: c.query,
-          file: c.file,
-        })),
-      };
+        dir,
+        speechCuts: seamPoints,
+      });
+      console.log(
+        `Montage V3: блоков ${v3.beats.length}, материалов ${v3.pack.assets.length} ` +
+          `(медиатека ${v3.packReused ? "переиспользована — поиск и зрение не оплачивались" : "собрана заново"}), ` +
+          `вставок ${v3.montage.events.length}, покрытие ${(v3.montage.stats.externalCoverage * 100).toFixed(0)}%`,
+      );
+      for (const w of v3.warnings) console.warn(`  предупреждение: ${w}`);
+
+      setStep(id, "Режиссёрский план", 30);
+      plan = v3.plan;
+      fs.writeFileSync(path.join(dir, "montage-plan.json"), JSON.stringify(v3.montage, null, 2), "utf8");
+      fs.writeFileSync(path.join(dir, "edit-plan.json"), JSON.stringify(plan, null, 2), "utf8");
+    } else {
+      // Старый монтаж из production удалён намеренно. Он подбирал перебивки
+      // по фразам без проверки фактов, и включить его «на время» означало бы
+      // однажды выпустить ролик, собранный не той системой, и не понять этого.
+      throw new Error(
+        "MONTAGE_V3=false: производственный монтаж отключён, а старого пути больше нет. " +
+          "Включите Montage V3 или остановите задачу.",
+      );
     }
-    fs.writeFileSync(path.join(dir, "edit-plan.json"), JSON.stringify(plan, null, 2), "utf8");
 
     // --- Субтитры (единственный текстовый слой в ролике) ---
     setStep(id, "Субтитры", 34);

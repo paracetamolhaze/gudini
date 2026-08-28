@@ -42,6 +42,16 @@ const domainOf = (u: string) => {
 
 export const PACK_VERSION = 2;
 
+/**
+ * Версия правил визуального контроля. Меняется, когда отбор материала становится
+ * строже: тогда старый пакет действительно невалиден и пересборка оправдана.
+ *
+ * Профиль монтажа (темп, длительности, вкус) сюда НЕ входит: он влияет на то,
+ * как материал расставлен, а не на то, годится ли он. Менять темп и заново
+ * платить за поиск и зрение было бы бессмысленно.
+ */
+export const QC_RULES_VERSION = 3;
+
 /** Счётчики по стадиям: видно, на каком шаге кандидаты исчезают. */
 export type StageCounts = {
   videoResults: number;
@@ -171,17 +181,24 @@ const sid = (s: string) => crypto.createHash("sha1").update(s).digest("hex").sli
  * зависит: сама история, её факты, блоки сценария или версия правил отбора.
  * Повторный рендер того же ролика новых расходов вызывать не должен.
  */
-export function packFingerprint(research: StoryResearchPack, beats: ScriptBeat[]): string {
-  const T = taste();
+export function packFingerprint(
+  research: StoryResearchPack,
+  beats: ScriptBeat[],
+  needs: MediaResearchNeed[] = [],
+): string {
   const payload = JSON.stringify({
+    // личность истории и её содержание
     story: research.storyId,
     event: research.canonicalEvent,
+    year: research.eventYear ?? null,
     facts: research.facts.map((f) => f.id).sort(),
     entities: research.entities.map((e) => e.name).sort(),
+    // блоки сценария и план медиа-исследования
     beats: beats.map((b) => `${b.id}:${b.visualNeed}`),
-    packVersion: PACK_VERSION,
-    // правила отбора: их ужесточение делает старый пакет невалидным
-    rules: [T.min_usable_video_segments, T.min_total_assets, T.min_beat_coverage, T.core_download_shortlist],
+    needs: needs.map((n) => `${n.beatId}:${n.intent}:${n.preferredMedia}`).sort(),
+    // версии проверок: их ужесточение делает уже собранный пакет невалидным
+    verificationVersion: PACK_VERSION,
+    qcRulesVersion: QC_RULES_VERSION,
   });
   return crypto.createHash("sha1").update(payload).digest("hex").slice(0, 16);
 }
@@ -505,7 +522,7 @@ export async function buildAssetPack(
   dir: string,
 ): Promise<StoryAssetPackV2> {
   const T0 = taste();
-  const fingerprint = packFingerprint(research, beats);
+  const fingerprint = packFingerprint(research, beats, needs);
   const existing = reusablePack(dir, fingerprint);
   if (existing) {
     console.log(

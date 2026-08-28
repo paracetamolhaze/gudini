@@ -9,7 +9,8 @@ import { CostStage, CostProvider } from "./costLedger";
  * Поэтому недоступность своего провайдера — это остановка задачи, а не переход
  * на чужого.
  *
- * OpenRouter — только обложки. Anthropic — понимание истории и монтаж.
+ * Anthropic — весь текст, рассуждение и зрение, включая концепт и проверку обложки.
+ * OpenRouter — ровно одна стадия: платная генерация картинки обложки.
  * Brave — только поиск. Расшифровка речи — только ASR-провайдер.
  */
 
@@ -42,14 +43,18 @@ export const STAGE_PROVIDERS: Record<CostStage, CostProvider[]> = {
   Metadata: ["anthropic"],
   // расшифровка речи — отдельный провайдер и только она
   Transcription: ["elevenlabs", "openai"],
-  // обложки — единственное место, где разрешён OpenRouter
-  "Cover Concept": ["openrouter", "anthropic"],
+  // Обложка: рассуждение и проверка — это тоже reasoning и зрение, значит Anthropic.
+  // OpenRouter остаётся ровно в одном месте — платная генерация картинки.
+  "Cover Concept": ["anthropic"],
   "Cover Generation": ["openrouter"],
-  "Cover QC": ["openrouter", "anthropic"],
+  "Cover QC": ["anthropic"],
 };
 
-/** Стадии, относящиеся к обложке: только им позволен OpenRouter. */
+/** Стадии обложки. OpenRouter разрешён только генерации изображения. */
 export const COVER_STAGES: CostStage[] = ["Cover Concept", "Cover Generation", "Cover QC"];
+
+/** Единственная стадия, которой позволен OpenRouter. */
+export const OPENROUTER_STAGE: CostStage = "Cover Generation";
 
 /** Стадии поиска: только им позволен Brave. */
 export const SEARCH_STAGES: CostStage[] = ["Media Research"];

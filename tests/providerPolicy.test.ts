@@ -12,8 +12,14 @@ test("1: чужой провайдер на чужой стадии запрещ
   assert.throws(() => assertProvider("Creative Director", "openrouter"), ProviderPolicyError);
   assert.throws(() => assertProvider("Script Beats", "brave"), ProviderPolicyError);
   // обложка — единственное место OpenRouter
+  // OpenRouter разрешён РОВНО одной стадии — платной генерации картинки
   assert.doesNotThrow(() => assertProvider("Cover Generation", "openrouter"));
   assert.throws(() => assertProvider("Cover Generation", "anthropic"), ProviderPolicyError);
+  // концепт и проверка обложки — это рассуждение и зрение, значит Anthropic
+  assert.doesNotThrow(() => assertProvider("Cover Concept", "anthropic"));
+  assert.doesNotThrow(() => assertProvider("Cover QC", "anthropic"));
+  assert.throws(() => assertProvider("Cover Concept", "openrouter"), ProviderPolicyError);
+  assert.throws(() => assertProvider("Cover QC", "openrouter"), ProviderPolicyError);
   // поиск — только Brave
   assert.ok(isAllowed("Media Research", "brave"));
   assert.ok(!isAllowed("Media Research", "openrouter"));
@@ -21,7 +27,7 @@ test("1: чужой провайдер на чужой стадии запрещ
   assert.ok(isAllowed("Transcription", "elevenlabs"));
   assert.ok(!isAllowed("Transcription", "anthropic"));
 
-  assert.equal(policyViolations().length, 5, "все нарушения записаны для отчёта");
+  assert.equal(policyViolations().length, 7, "все нарушения записаны для отчёта");
 });
 
 test("2: нарушение невозможно провести мимо учёта денег", () => {
@@ -41,9 +47,9 @@ test("3: отчёт отвечает на три вопроса об изоля�
   recordFlat({ stage: "Cover Generation", provider: "openrouter", model: "google/gemini-3.1-flash-image", cost: 0.068 });
 
   const report = formatCostReport({ title: "TEST" });
-  assert.match(report, /OpenRouter calls outside COVER: 0/);
+  assert.match(report, /OpenRouter calls outside COVER IMAGE GENERATION: 0/);
   assert.match(report, /Brave calls outside SEARCH:\s+0/);
-  assert.match(report, /Anthropic calls for COVER:\s+0/);
+  assert.match(report, /Anthropic calls for COVER IMAGE GENERATION: 0/);
   assert.ok(!report.includes("PROVIDER POLICY VIOLATION"), "нарушений нет — раздела нет");
   assert.match(report, /PROVIDER USAGE/);
   assert.match(report, /current run calls: 1/, "вызовы OpenRouter в этом прогоне видны отдельно");

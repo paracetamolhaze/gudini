@@ -1,4 +1,5 @@
 import { addCost } from "./pipelineCost";
+import { recordRequest } from "./costLedger";
 
 /**
  * Единая точка доступа к Brave Search. Раньше веб-поиск использовался как
@@ -57,6 +58,7 @@ function parseDuration(text?: string): number | undefined {
 export async function braveNews(query: string): Promise<BraveResult[]> {
   const json = await call("news/search", { q: query, count: "12" });
   addCost({ braveNewsRequests: 1 });
+  recordRequest({ stage: "Media Research", provider: "brave", endpoint: "brave/news/search" });
   return (json?.results ?? [])
     .filter((r: any) => r.url)
     .map((r: any) => ({
@@ -71,6 +73,7 @@ export async function braveNews(query: string): Promise<BraveResult[]> {
 export async function braveVideos(query: string): Promise<BraveVideo[]> {
   const json = await call("videos/search", { q: query, count: "20" });
   addCost({ braveVideoRequests: 1 });
+  recordRequest({ stage: "Media Research", provider: "brave", endpoint: "brave/videos/search" });
   return (json?.results ?? [])
     .filter((r: any) => r.url)
     .map((r: any) => ({
@@ -89,6 +92,7 @@ export async function braveVideos(query: string): Promise<BraveVideo[]> {
 export async function braveImages(query: string): Promise<BraveImage[]> {
   const json = await call("images/search", { q: query, count: "15" });
   addCost({ braveImageRequests: 1 });
+  recordRequest({ stage: "Media Research", provider: "brave", endpoint: "brave/images/search" });
   return (json?.results ?? [])
     .filter((r: any) => r.properties?.url)
     .map((r: any) => ({
@@ -104,6 +108,7 @@ export async function braveImages(query: string): Promise<BraveImage[]> {
 export async function braveWeb(query: string): Promise<BraveResult[]> {
   const json = await call("web/search", { q: query, count: "10" });
   addCost({ braveWebRequests: 1 });
+  recordRequest({ stage: "Media Research", provider: "brave", endpoint: "brave/web/search" });
   return (json?.web?.results ?? [])
     .filter((r: any) => r.url)
     .map((r: any) => ({

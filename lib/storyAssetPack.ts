@@ -5,7 +5,7 @@ import { mediaComplete, parseJson, mediaLlmAvailable } from "./mediaLlm";
 import { StoryResearchPack } from "./storyResearch";
 import { ScriptBeat, MediaResearchNeed } from "./scriptBeats";
 import { braveVideos, braveImages } from "./braveSearch";
-import { analyzeAsset } from "./brollRelevance";
+import { analyzeAsset, analyzeFrames, qcReject } from "./brollRelevance";
 import { fetchVideo, extractorReady, probeVideo } from "./videoFetch";
 import { verifySource } from "./storyAssets";
 import { addCost } from "./pipelineCost";
@@ -65,6 +65,14 @@ export type StageCounts = {
   ytDownloadOk: number;
   ytSourceVideosAccepted: number;
   ytSegments: number;
+  /** сколько кадров отсеял визуальный контроль и по каким причинам */
+  qcRejected: number;
+  qcRejectedLargeText: number;
+  qcRejectedReaction: number;
+  qcRejectedExplainerSkit: number;
+  qcRejectedOther: number;
+  /** источник о другом событии/турнире — отсев ещё до скачивания */
+  wrongEventRejected: number;
 };
 export const stages: StageCounts = {
   videoResults: 0, sourceVerifyPass: 0, probeAttempted: 0, probeOk: 0,
@@ -73,12 +81,28 @@ export const stages: StageCounts = {
   beforeBeatMatch: 0, beatCompatible: 0, shortlisted: 0,
   ytUrlsDiscovered: 0, ytDownloadAttempted: 0, ytDownloadOk: 0,
   ytSourceVideosAccepted: 0, ytSegments: 0,
+  qcRejected: 0, qcRejectedLargeText: 0, qcRejectedReaction: 0,
+  qcRejectedExplainerSkit: 0, qcRejectedOther: 0, wrongEventRejected: 0,
 };
+
+/** Причины отсева копятся, чтобы в отчёте было видно не только «сколько», но и «почему». */
+export const qcReasons: string[] = [];
+
+/** Раскладывает причину отказа по классам мусора для отчёта. */
+function countQcReason(reason: string): void {
+  stages.qcRejected++;
+  qcReasons.push(reason);
+  if (/текст/.test(reason)) stages.qcRejectedLargeText++;
+  else if (/реакц|призыв|интерфейс|заставка/.test(reason)) stages.qcRejectedReaction++;
+  else if (/постановка|скетч|объяснялка/.test(reason)) stages.qcRejectedExplainerSkit++;
+  else stages.qcRejectedOther++;
+}
 
 /** YouTube считаем отдельно: именно он раньше давал 45 находок и 0 скачиваний. */
 export const isYoutube = (u: string) => /(^|\.)(youtube\.com|youtu\.be)$/i.test(domainOf(u));
 export function resetStages(): void {
   for (const k of Object.keys(stages) as (keyof StageCounts)[]) stages[k] = 0;
+  qcReasons.length = 0;
 }
 
 export type AssetKind = "VIDEO_SEGMENT" | "IMAGE";
@@ -95,6 +119,8 @@ export type PackAsset = {
   description: string;
   role: "EVENT" | "PERSON" | "CONTEXT";
   compatibleBeatIds: string[];
+  /** оценка совместимости с каждым блоком: 1 обстановка, 2 хорошо, 3 точно */
+  beatScores?: Record<string, number>;
   relatedFactIds: string[];
   verification: { sourceVerified: boolean; visualVerified: boolean; version: number };
 };
@@ -216,6 +242,8 @@ async function cutSegments(
   const seenDesc: string[] = [];
   const failures: string[] = [];
 
+  // 1) снимаем ВСЕ кадры (ffmpeg бесплатен) — и только потом идём к модели один раз
+  const shots: { at: number; frame: string; buffer: Buffer }[] = [];
   for (let i = 0; i < samples; i++) {
     const at = ((i + 0.5) / samples) * Math.max(0, duration - 3);
     const frame = path.join(dir, `probe-${videoId}-${i}.jpg`);
@@ -225,10 +253,41 @@ async function cutSegments(
         { cwd: dir },
       );
       stages.framesSampled++;
-      const an = await analyzeAsset(`seg:${videoId}:${i}`, "", fs.readFileSync(frame));
-      addCost({ visionCalls: 1 });
-      if (!an) throw new Error("зрение не описало кадр");
-      if (an.isScreenshot || an.hasLargeWatermark) continue;
+      shots.push({ at, frame, buffer: fs.readFileSync(frame) });
+    } catch (e: any) {
+      failures.push(String(e?.message ?? e).slice(0, 120));
+    }
+  }
+
+  // 2) один запрос на всё видео вместо запроса на каждый кадр
+  let analyses: (Awaited<ReturnType<typeof analyzeFrames>>[number])[] = [];
+  try {
+    analyses = await analyzeFrames(`seg:${videoId}`, shots.map((x) => x.buffer));
+    addCost({ visionCalls: 1 });
+  } catch (e: any) {
+    for (const x of shots) {
+      try {
+        fs.rmSync(x.frame, { force: true });
+      } catch {}
+    }
+    throw new Error(`Разбор кадров не выполнен: ${String(e?.message ?? e).slice(0, 120)}`);
+  }
+
+  // 3) отсев мусора и нарезка выживших
+  for (const [i, shot] of shots.entries()) {
+    const an = analyses[i];
+    try {
+      if (!an) {
+        failures.push("зрение не описало кадр");
+        continue;
+      }
+      // Ролик документальный, поэтому объяснялка в студии и постановка не годятся
+      // и для кадров видео: рассказ о событии — не съёмка события.
+      const bad = qcReject(an, { factualBeat: true });
+      if (bad) {
+        countQcReason(bad);
+        continue;
+      }
       // почти одинаковые кадры не плодим: сегменты должны отличаться
       if (seenDesc.some((d) => similar(d, an.description))) continue;
       seenDesc.push(an.description);
@@ -236,7 +295,7 @@ async function cutSegments(
       const clip = path.join(dir, `seg-${videoId}-${i}.mp4`);
       await runFfmpeg(
         [
-          "-ss", at.toFixed(2),
+          "-ss", shot.at.toFixed(2),
           "-i", path.basename(file),
           "-t", "3.2",
           "-an",
@@ -253,22 +312,20 @@ async function cutSegments(
         sourceUrl: "",
         sourceDomain: "",
         sourceVideoId: videoId,
-        segment: { start: Number(at.toFixed(2)), end: Number((at + 3.2).toFixed(2)) },
+        segment: { start: Number(shot.at.toFixed(2)), end: Number((shot.at + 3.2).toFixed(2)) },
         description: an.description,
         verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
       });
       stages.segmentsExtracted++;
     } catch (e: any) {
-      // Отказ отдельного кадра — нормальная жизнь (битый кадр, неудачная нарезка).
-      // А вот отказ ВСЕХ кадров означает сломанную стадию, и делать вид,
-      // что материала просто нет, нельзя — это уже уничтожило готовые сегменты.
       failures.push(String(e?.message ?? e).slice(0, 120));
     } finally {
       try {
-        fs.rmSync(frame, { force: true });
+        fs.rmSync(shot.frame, { force: true });
       } catch {}
     }
   }
+
   if (!out.length && failures.length === samples) {
     throw new Error(`Разбор исходного видео не выполнен ни на одном кадре: ${failures[0]}`);
   }
@@ -283,20 +340,34 @@ function similar(a: string, b: string): boolean {
   return inter / Math.min(A.size, B.size) > 0.75;
 }
 
-const MATCH_SYSTEM = `Ты — ассистент монтажёра. Тебе дают историю, список ВИЗУАЛЬНЫХ БЛОКОВ сценария
-и список найденных материалов с описанием того, что на них видно.
+const MATCH_SYSTEM = `Ты — ассистент монтажёра. Тебе дают историю, пронумерованные ВИЗУАЛЬНЫЕ БЛОКИ
+сценария и пронумерованные МАТЕРИАЛЫ с описанием того, что на них видно.
 
-Для каждого материала укажи, какие блоки он может закрыть, и его честную роль:
-EVENT — видно само событие/действие истории;
+Построй МАТРИЦУ совместимости: для каждой пары «блок × материал» дай оценку
+
+3 — на кадре именно то, о чём говорит блок;
+2 — кадр хорошо иллюстрирует смысл блока, пусть и не буквально;
+1 — кадр годится как обстановка, прямой связи нет;
+0 — не подходит.
+
+Оценивай ПО СМЫСЛУ, а не по совпадению слов. Блок «после финального свистка все бегут
+праздновать» и материал «England players celebrating near the sideline» — это оценка 3,
+хотя слов «final whistle» в описании нет.
+
+Один материал может подходить НЕСКОЛЬКИМ блокам — так и укажи, не выбирай один.
+Материал не «занимается» блоком навсегда: расстановкой займётся режиссёр.
+
+Ставь 0, если на кадре другая команда, другие люди, другой инцидент или другой турнир.
+Оценку 3 не ставь, если на кадре не происходит именно описанное действие.
+
+Для каждого материала укажи честную роль:
+EVENT — видно само событие истории;
 PERSON — виден участник вне события;
-CONTEXT — обстановка истории.
+CONTEXT — обстановка.
 
-Материал, где другие команды, другие люди, другой инцидент или другой турнир, к истории
-не относится — верни для него пустой compatibleBeatIds и role CONTEXT.
-Не присваивай EVENT, если на кадре не происходит именно описанное в истории действие.
-
-Ответь СТРОГО валидным JSON:
-{"items":[{"id":"...","role":"EVENT","beatIds":["b1_ab"],"factIds":["f1"]}]}`;
+Отвечай компактно и СТРОГО валидным JSON. Пары с оценкой 0 не перечисляй:
+{"items":[{"a":1,"role":"EVENT","factIds":["f1"],"scores":{"3":3,"7":2}}]}
+где ключ "a" — номер материала, ключи внутри scores — номера блоков.`;
 
 /** Сопоставляет материалы с блоками сценария одним вызовом. */
 async function matchToBeats(
@@ -308,35 +379,46 @@ async function matchToBeats(
   if (!mediaLlmAvailable()) {
     throw new Error("Сопоставление с блоками невозможно: нет доступного LLM-провайдера");
   }
-  const beatList = beats
-    .filter((b) => b.visualNeed !== "NONE")
-    .map((b) => `[${b.id}] (${b.visualNeed}) ${b.text}`)
+  // нумерация вместо длинных идентификаторов: короче запрос и меньше шансов на опечатку
+  const visualBeats = beats.filter((b) => b.visualNeed !== "NONE");
+  const beatList = visualBeats.map((b, i) => `${i + 1}. (${b.visualNeed}) ${b.text}`).join("\n");
+  const assetList = assets
+    .map((a, i) => `${i + 1}. [${a.kind === "VIDEO_SEGMENT" ? "видео" : "фото"}] ${a.description.slice(0, 130)}`)
     .join("\n");
-  const assetList = assets.map((a) => `id=${a.id} [${a.kind}] ${a.description.slice(0, 120)}`).join("\n");
 
   try {
     const raw = await mediaComplete({
       system: MATCH_SYSTEM,
-      maxTokens: 6000,
+      maxTokens: 8000,
+      stage: "Beat Matching",
       user:
         `История: ${research.canonicalEvent}\nУчастники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
         `Блоки сценария:\n${beatList}\n\nМатериалы:\n${assetList}`,
     });
     addCost({ researchLlmCalls: 1 });
     const json = parseJson<any>(raw, "Сопоставление с блоками");
-    const byId = new Map<string, any>((Array.isArray(json.items) ? json.items : []).map((i: any) => [String(i.id), i]));
-    const beatIds = new Set(beats.map((b) => b.id));
     const factIds = new Set(research.facts.map((f) => f.id));
+    const byIndex = new Map<number, any>(
+      (Array.isArray(json.items) ? json.items : []).map((i: any) => [Number(i.a), i]),
+    );
 
-    return assets.map((a) => {
-      const info = byId.get(a.id);
-      if (!info) return { ...a, compatibleBeatIds: [], role: "CONTEXT" as const };
+    return assets.map((a, i) => {
+      const info = byIndex.get(i + 1);
+      if (!info) return { ...a, compatibleBeatIds: [], beatScores: {}, role: "CONTEXT" as const };
+
+      // оценки превращаются в идентификаторы блоков ЗДЕСЬ, детерминированным кодом
+      const beatScores: Record<string, number> = {};
+      for (const [k, v] of Object.entries(info.scores ?? {})) {
+        const beat = visualBeats[Number(k) - 1];
+        const score = Number(v);
+        if (!beat || !Number.isFinite(score) || score <= 0) continue;
+        beatScores[beat.id] = Math.min(3, Math.max(1, Math.round(score)));
+      }
       return {
         ...a,
         role: (["EVENT", "PERSON", "CONTEXT"] as const).includes(info.role) ? info.role : "CONTEXT",
-        compatibleBeatIds: (Array.isArray(info.beatIds) ? info.beatIds.map(String) : []).filter((b: string) =>
-          beatIds.has(b),
-        ),
+        beatScores,
+        compatibleBeatIds: Object.keys(beatScores),
         relatedFactIds: (Array.isArray(info.factIds) ? info.factIds.map(String) : []).filter((f: string) =>
           factIds.has(f),
         ),
@@ -383,7 +465,10 @@ export async function buildAssetPack(
         { title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher },
         research,
       );
-      if (!src.ok) continue;
+      if (!src.ok) {
+        if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
+        continue;
+      }
       stages.sourceVerifyPass++;
       pool.set(vid, { v, score: scoreCandidate(v, research) });
     }
@@ -477,7 +562,10 @@ export async function buildAssetPack(
         const vid = sid(v.url);
         if (seenVideo.has(vid)) continue;
         const src = verifySource({ title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher }, research);
-        if (!src.ok) continue;
+        if (!src.ok) {
+          if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
+          continue;
+        }
         seenVideo.add(vid);
 
         stages.sourceVerifyPass++;
@@ -531,7 +619,10 @@ export async function buildAssetPack(
         const key = im.imageUrl.split("?")[0];
         if (seenImage.has(key)) continue;
         const src = verifySource({ title: im.title, description: im.description, sourceUrl: im.url }, research);
-        if (!src.ok) continue;
+        if (!src.ok) {
+          if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
+          continue;
+        }
         stages.imageVerifyPass++;
         seenImage.add(key);
 
@@ -544,7 +635,13 @@ export async function buildAssetPack(
           if (buf.length < 10_000) continue;
           const an = await analyzeAsset(`img:${id}`, "", buf);
           addCost({ visionCalls: 1 });
-          if (!an || an.isScreenshot || an.hasLargeText || an.hasLargeWatermark) continue;
+          if (!an) continue;
+          // блок излагает факт — постановке и объяснялке здесь не место
+          const bad = qcReject(an, { factualBeat: need.intent === "EXACT_EVENT" || need.intent === "ENTITY" });
+          if (bad) {
+            countQcReason(bad);
+            continue;
+          }
           fs.writeFileSync(file, buf);
           stages.imagesAccepted++;
           assets.push({

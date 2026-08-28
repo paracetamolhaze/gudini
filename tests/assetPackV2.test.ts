@@ -38,7 +38,7 @@ test("3: незакрытые блоки добираются точечно, п
   assert.ok(!/relax|смягч|lower.*threshold/i.test(packSrc), "нет логики ослабления требований");
   // проверки применяются к каждому кандидату одинаково
   assert.ok(packSrc.includes("verifySource("), "источниковая проверка обязательна");
-  assert.ok(packSrc.includes("an.isScreenshot || an.hasLargeText || an.hasLargeWatermark"), "скриншоты отсекаются");
+  assert.ok(packSrc.includes("qcReject(an"), "визуальный мусор отсекается единым гейтом");
 });
 
 test("4: одно исходное видео даёт НЕСКОЛЬКО разных сегментов", () => {
@@ -56,5 +56,5 @@ test("5: в пакет попадают только материалы, сов�
   );
   assert.ok(packSrc.includes("assets: usable"), "в пакет уходят только пригодные");
   // роли честные: EVENT не присваивается по усмотрению
-  assert.ok(packSrc.includes("Не присваивай EVENT, если на кадре не происходит именно описанное"), "роль EVENT ограничена");
+  assert.ok(packSrc.includes("не ставь, если на кадре не происходит именно описанное действие"), "высшая оценка ограничена");
 });

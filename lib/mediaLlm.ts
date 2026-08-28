@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
+import { recordTokens, CostStage } from "./costLedger";
 
 /**
  * Транспорт для текстовых LLM-вызовов медиа-конвейера.
@@ -37,14 +38,47 @@ export function mediaLlmAvailable(): boolean {
   return mediaProvider() === "openrouter" ? Boolean(s.openrouterKey) : Boolean(s.anthropicKey);
 }
 
+
+/** Списание фактической стоимости, которую назвал OpenRouter. */
+function recordOpenRouter(stage: CostStage, model: string, json: any, failed = false): void {
+  const u = json?.usage ?? {};
+  recordTokens({
+    stage,
+    provider: "openrouter",
+    model,
+    inputTokens: Number(u.prompt_tokens ?? 0),
+    outputTokens: Number(u.completion_tokens ?? 0),
+    cacheReadTokens: Number(u.prompt_tokens_details?.cached_tokens ?? 0),
+    providerReportedCost: typeof u.cost === "number" ? u.cost : undefined,
+    failed,
+  });
+}
+
+/** Списание по фактическому расходу токенов Anthropic. */
+function recordAnthropic(stage: CostStage, model: string, response: any, failed = false): void {
+  const u = response?.usage ?? {};
+  recordTokens({
+    stage,
+    provider: "anthropic",
+    model,
+    inputTokens: Number(u.input_tokens ?? 0),
+    outputTokens: Number(u.output_tokens ?? 0),
+    cacheCreationTokens: Number(u.cache_creation_input_tokens ?? 0),
+    cacheReadTokens: Number(u.cache_read_input_tokens ?? 0),
+    failed,
+  });
+}
+
 export type CompleteArgs = {
   system: string;
   user: string;
   maxTokens?: number;
+  /** для отчёта по стоимости: на какую стадию списывать этот вызов */
+  stage?: CostStage;
 };
 
 /** Один текстовый запрос. Возвращает текст ответа или бросает ошибку — молча не глотаем. */
-export async function mediaComplete({ system, user, maxTokens = 8000 }: CompleteArgs): Promise<string> {
+export async function mediaComplete({ system, user, maxTokens = 8000, stage = "Media Research" }: CompleteArgs): Promise<string> {
   const provider = mediaProvider();
   const model = mediaModel();
   const settings = getSettings();
@@ -58,6 +92,8 @@ export async function mediaComplete({ system, user, maxTokens = 8000 }: Complete
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
+        // просим вернуть фактическую стоимость: свою цифру придумывать не будем
+        usage: { include: true },
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -66,8 +102,11 @@ export async function mediaComplete({ system, user, maxTokens = 8000 }: Complete
     });
     const json: any = await res.json().catch(() => ({}));
     if (!res.ok || json.error) {
+      // неудачный запрос провайдер мог оттарифицировать — он тоже идёт в стоимость
+      recordOpenRouter(stage, model, json, true);
       throw new Error(`OpenRouter ${res.status}: ${JSON.stringify(json.error ?? {}).slice(0, 200)}`);
     }
+    recordOpenRouter(stage, model, json);
     const text = json.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) throw new Error("OpenRouter вернул пустой ответ");
     return text.trim();
@@ -82,6 +121,7 @@ export async function mediaComplete({ system, user, maxTokens = 8000 }: Complete
     system,
     messages: [{ role: "user", content: user }],
   });
+  recordAnthropic(stage, model, response);
   const text = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
@@ -91,11 +131,16 @@ export async function mediaComplete({ system, user, maxTokens = 8000 }: Complete
   return text;
 }
 
+export type VisionImage = { base64: string; mediaType: string } | { url: string };
+
 export type VisionArgs = {
   system: string;
   user: string;
-  image: { base64: string; mediaType: string } | { url: string };
+  /** один кадр или сразу пачка кадров одного исходника — пачка дешевле */
+  image?: VisionImage;
+  images?: VisionImage[];
   maxTokens?: number;
+  stage?: CostStage;
 };
 
 /**
@@ -103,7 +148,9 @@ export type VisionArgs = {
  * Описание кадров — обязательная часть сборки медиатеки: без него ни один
  * видео-сегмент не проходит дальше, поэтому оно не должно зависеть от отдельного счёта.
  */
-export async function mediaVision({ system, user, image, maxTokens = 2000 }: VisionArgs): Promise<string> {
+export async function mediaVision({ system, user, image, images, maxTokens = 2000, stage = "Vision Verification" }: VisionArgs): Promise<string> {
+  const frames = images ?? (image ? [image] : []);
+  if (!frames.length) throw new Error("зрению не передан ни один кадр");
   const provider = mediaProvider();
   const model = process.env.MEDIA_VISION_MODEL || mediaModel();
   const settings = getSettings();
@@ -111,29 +158,29 @@ export async function mediaVision({ system, user, image, maxTokens = 2000 }: Vis
   if (provider === "openrouter") {
     const key = settings.openrouterKey;
     if (!key) throw new Error("MEDIA_LLM_PROVIDER=openrouter, но ключ OPENROUTER не задан");
-    const url = "url" in image ? image.url : `data:${image.mediaType};base64,${image.base64}`;
+    const parts = frames.map((f) => ({
+      type: "image_url" as const,
+      image_url: { url: "url" in f ? f.url : `data:${f.mediaType};base64,${f.base64}` },
+    }));
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
+        usage: { include: true },
         messages: [
           { role: "system", content: system },
-          {
-            role: "user",
-            content: [
-              { type: "image_url", image_url: { url } },
-              { type: "text", text: user },
-            ],
-          },
+          { role: "user", content: [...parts, { type: "text", text: user }] },
         ],
       }),
     });
     const json: any = await res.json().catch(() => ({}));
     if (!res.ok || json.error) {
+      recordOpenRouter(stage, model, json, true);
       throw new Error(`OpenRouter vision ${res.status}: ${JSON.stringify(json.error ?? {}).slice(0, 200)}`);
     }
+    recordOpenRouter(stage, model, json);
     const text = json.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) throw new Error("OpenRouter vision вернул пустой ответ");
     return text.trim();
@@ -150,21 +197,24 @@ export async function mediaVision({ system, user, image, maxTokens = 2000 }: Vis
       {
         role: "user",
         content: [
-          "url" in image
-            ? { type: "image" as const, source: { type: "url" as const, url: image.url } }
-            : {
-                type: "image" as const,
-                source: {
-                  type: "base64" as const,
-                  media_type: image.mediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-                  data: image.base64,
+          ...frames.map((f) =>
+            "url" in f
+              ? { type: "image" as const, source: { type: "url" as const, url: f.url } }
+              : {
+                  type: "image" as const,
+                  source: {
+                    type: "base64" as const,
+                    media_type: f.mediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+                    data: f.base64,
+                  },
                 },
-              },
+          ),
           { type: "text" as const, text: user },
         ],
       },
     ],
   });
+  recordAnthropic(stage, model, response);
   const text = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)

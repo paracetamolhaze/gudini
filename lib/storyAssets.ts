@@ -114,6 +114,50 @@ function dedupeKey(c: Candidate): string {
  * Отвечает на вопрос «про эту ли историю материал»: та ли сущность, тот ли год.
  * Зрение на такие вопросы отвечать не умеет, оно видит «футбол, стадион».
  */
+
+/**
+ * Известные крупные турниры. Нужны для одной конкретной проверки: источник может
+ * упоминать героя истории и при этом рассказывать о ДРУГОМ соревновании.
+ * Так в медиатеку попало фото «Henderson ... during Ajax Europa League match» —
+ * имя совпало, года в тексте не было, и материал чужого события прошёл как свой.
+ */
+const COMPETITIONS: Record<string, RegExp> = {
+  "world cup": /\bworld cup|мундиал|чемпионат мира\b/i,
+  "europa league": /\beuropa league|лига европы\b/i,
+  "champions league": /\bchampions league|лига чемпионов\b/i,
+  "conference league": /\bconference league\b/i,
+  "premier league": /\bpremier league\b/i,
+  "la liga": /\bla liga\b/i,
+  "serie a": /\bserie a\b/i,
+  "bundesliga": /\bbundesliga\b/i,
+  "ligue 1": /\bligue 1\b/i,
+  "fa cup": /\bfa cup\b/i,
+  "efl cup": /\befl cup|carabao cup\b/i,
+  "euro": /\beuro 20\d\d|european championship\b/i,
+  "nations league": /\bnations league\b/i,
+  "copa america": /\bcopa america|copa américa\b/i,
+  "olympics": /\bolympics?|олимпиад\b/i,
+  "club friendly": /\bfriendly match|товарищеск\b/i,
+};
+
+/**
+ * Называет ли источник соревнование, отличное от того, о котором история.
+ * Проверка срабатывает только когда у истории турнир известен и в источнике
+ * назван другой: молчание источника поводом для отказа не является.
+ */
+export function conflictingCompetition(hay: string, research: StoryResearchPack): string | null {
+  const storyText = norm(
+    [research.canonicalEvent, ...research.entities.map((e) => [e.name, ...e.aliases].join(" "))].join(" "),
+  );
+  const storyComps = Object.keys(COMPETITIONS).filter((k) => COMPETITIONS[k].test(storyText));
+  if (!storyComps.length) return null;
+  const sourceComps = Object.keys(COMPETITIONS).filter((k) => COMPETITIONS[k].test(hay));
+  if (!sourceComps.length) return null;
+  const foreign = sourceComps.filter((c) => !storyComps.includes(c));
+  if (foreign.length && !sourceComps.some((c) => storyComps.includes(c))) return foreign[0];
+  return null;
+}
+
 export function verifySource(
   c: Pick<Candidate, "title" | "description" | "sourceUrl" | "publisher">,
   research: StoryResearchPack,
@@ -143,6 +187,13 @@ export function verifySource(
       }
     }
   }
+  // другое соревнование при том же герое — это другое событие, а не наша история
+  const foreign = conflictingCompetition(hay, research);
+  if (foreign) {
+    reasons.push(`источник о другом соревновании: ${foreign}`);
+    return { ok: false, entityIds: matched, reasons };
+  }
+
   return { ok: true, entityIds: matched, reasons };
 }
 

@@ -26,6 +26,18 @@ export type AssetAnalysis = {
   hasLargeText?: boolean;
   /** крупный водяной знак поверх кадра */
   hasLargeWatermark?: boolean;
+  /** призывы канала: SUBSCRIBE, LIKE, THANKS FOR WATCHING, ссылки на соцсети */
+  hasChannelPromo?: boolean;
+  /** лицо блогера/комментатора поверх чужого материала (picture-in-picture, вебкамера) */
+  hasFaceOverlay?: boolean;
+  /** заставка или финальная карточка: экран из текста и графики, а не съёмка */
+  isTitleOrOutroCard?: boolean;
+  /** интерфейс плеера или соцсети в кадре */
+  hasPlayerOrSocialUi?: boolean;
+  /** говорящая голова в студии/комнате, объясняющая событие, а не само событие */
+  isStudioExplainer?: boolean;
+  /** постановка, реконструкция, скетч, анимация — не документальная съёмка */
+  isReenactmentOrSkit?: boolean;
   updatedAt: string;
 };
 
@@ -64,9 +76,11 @@ function writeAnalysisCache(cache: Record<string, AssetAnalysis>) {
 
 const VISION_SYSTEM = `You inspect a candidate frame for use as b-roll in a short video.
 Reply with STRICT JSON only:
-{"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words","isScreenshot":<true if this is a screenshot of a web page, social post, article, chat, table, chart or app UI rather than a photograph or video frame>,"hasLargeText":<true if readable text occupies a noticeable part of the frame (headlines, captions burned in, subtitles, tweet text)>,"hasLargeWatermark":<true if a large watermark or logo covers a significant area>}
+{"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words","isScreenshot":<true if this is a screenshot of a web page, social post, article, chat, table, chart or app UI rather than a photograph or video frame>,"hasLargeText":<true if readable text occupies a noticeable part of the frame: burned-in headlines, big captions, subtitle bars, news chyrons, annotation labels drawn over the footage>,"hasLargeWatermark":<true if a large watermark or logo covers a significant area>,"hasChannelPromo":<true if the frame shows channel calls to action: SUBSCRIBE, LIKE, BELL, THANKS FOR WATCHING, follow handles>,"hasFaceOverlay":<true if a commentator/streamer/reactor face or webcam box is composited ON TOP of other footage, e.g. picture-in-picture reaction>,"isTitleOrOutroCard":<true if the frame is an intro/outro/title card built from text and graphics rather than filmed material>,"hasPlayerOrSocialUi":<true if video player controls, progress bars, or social app interface are visible>,"isStudioExplainer":<true if this is a person talking to camera in a studio, office or home explaining something, rather than footage of an event>,"isReenactmentOrSkit":<true if this is staged, acted, animated, a comedy sketch or a reconstruction rather than documentary footage>}
 Be generous with objects: include category words (e.g. for a tiger: tiger, big cat, predator, animal, wildlife).
-Judge isScreenshot strictly: a photo of a person holding a phone is NOT a screenshot; a captured tweet or article IS.`;
+Judge isScreenshot strictly: a photo of a person holding a phone is NOT a screenshot; a captured tweet or article IS.
+Sponsor boards, jerseys and stadium signage are NOT hasLargeText: they belong to the scene.
+A person filmed at a press conference or interview at the venue is NOT isStudioExplainer.`;
 
 /**
  * Vision-описание ассета по превью; кэшируется по ключу.
@@ -103,6 +117,12 @@ export async function analyzeAsset(
       environment: String(json.environment ?? "").toLowerCase(),
       action: String(json.action ?? "").toLowerCase(),
       isScreenshot: json.isScreenshot === true,
+      hasChannelPromo: json.hasChannelPromo === true,
+      hasFaceOverlay: json.hasFaceOverlay === true,
+      isTitleOrOutroCard: json.isTitleOrOutroCard === true,
+      hasPlayerOrSocialUi: json.hasPlayerOrSocialUi === true,
+      isStudioExplainer: json.isStudioExplainer === true,
+      isReenactmentOrSkit: json.isReenactmentOrSkit === true,
       hasLargeText: json.hasLargeText === true,
       hasLargeWatermark: json.hasLargeWatermark === true,
       updatedAt: new Date().toISOString(),
@@ -263,4 +283,109 @@ function stem(word: string): string {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * Единый отсев визуального мусора. Применяется ОДИНАКОВО к кадрам видео и к фото:
+ * раньше видео проверялось только на скриншот и водяной знак, поэтому в медиатеку
+ * попадали заставки «THANKS FOR WATCHING», реакционные ролики с лицом блогера
+ * поверх чужой съёмки и новостные плашки во весь кадр.
+ *
+ * Нам нужен исходный материал события, а не чужой рассказ о нём.
+ */
+export type QcOptions = {
+  /** предмет истории — сам текст/документ; тогда крупный текст в кадре допустим */
+  textIsTheSubject?: boolean;
+  /** блок излагает факт: постановка и объяснялка для него не годятся */
+  factualBeat?: boolean;
+};
+
+export function qcReject(an: AssetAnalysis, opts: QcOptions = {}): string | null {
+  if (an.isScreenshot) return "скриншот страницы, а не съёмка";
+  if (an.hasChannelPromo) return "призыв канала в кадре (SUBSCRIBE / THANKS FOR WATCHING)";
+  if (an.isTitleOrOutroCard) return "заставка или финальная карточка, а не съёмка";
+  if (an.hasPlayerOrSocialUi) return "интерфейс плеера или соцсети в кадре";
+  if (an.hasFaceOverlay) return "реакция: лицо комментатора поверх чужого материала";
+  if (an.hasLargeWatermark) return "крупный водяной знак";
+  if (an.hasLargeText && !opts.textIsTheSubject) return "крупный вшитый текст поверх кадра";
+  if (opts.factualBeat && an.isReenactmentOrSkit) return "постановка или скетч вместо реальной съёмки";
+  if (opts.factualBeat && an.isStudioExplainer) return "объяснялка в студии вместо съёмки события";
+  return null;
+}
+
+const BATCH_SYSTEM = `You inspect frames sampled from ONE source video for use as b-roll.
+The frames are given in order. Judge EACH frame independently.
+Reply with STRICT JSON only:
+{"frames":[{"i":1,"description":"one sentence what is happening","objects":["lowercase english nouns and categories, 5-12 items"],"environment":"few words","action":"few words","isScreenshot":false,"hasLargeText":false,"hasLargeWatermark":false,"hasChannelPromo":false,"hasFaceOverlay":false,"isTitleOrOutroCard":false,"hasPlayerOrSocialUi":false,"isStudioExplainer":false,"isReenactmentOrSkit":false}]}
+Flag meanings:
+- hasLargeText: burned-in headlines, big captions, subtitle bars, news chyrons, annotation labels drawn over footage. Sponsor boards, jerseys and stadium signage are NOT this: they belong to the scene.
+- hasChannelPromo: SUBSCRIBE, LIKE, BELL, THANKS FOR WATCHING, follow handles.
+- hasFaceOverlay: a commentator/streamer/reactor face or webcam box composited ON TOP of other footage.
+- isTitleOrOutroCard: intro/outro/title card built from text and graphics rather than filmed material.
+- hasPlayerOrSocialUi: video player controls, progress bars, social app interface.
+- isStudioExplainer: a person talking to camera in a studio, office or home explaining something. A person filmed at a press conference or interview at the venue is NOT this.
+- isReenactmentOrSkit: staged, acted, animated, comedy sketch or reconstruction.
+Return exactly one entry per frame, with "i" being the 1-based frame number.`;
+
+/**
+ * Описывает СРАЗУ ВСЕ кадры одного исходного видео одним запросом.
+ * По кадру на запрос — это десятки вызовов на ролик при том же результате;
+ * пачкой модель к тому же видит соседние кадры и лучше отличает заставку от съёмки.
+ */
+export async function analyzeFrames(
+  cachePrefix: string,
+  buffers: Buffer[],
+): Promise<(AssetAnalysis | null)[]> {
+  if (!buffers.length) return [];
+  const cache = readAnalysisCache();
+  const keys = buffers.map((_, i) => `${cachePrefix}:${i}`);
+  const out: (AssetAnalysis | null)[] = keys.map((k) => cache[k] ?? null);
+
+  const todo = out.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0);
+  if (!todo.length) return out;
+  if (!mediaLlmAvailable()) return out;
+
+  const raw = (
+    await mediaVision({
+      system: BATCH_SYSTEM,
+      user: `Describe these ${todo.length} frames.`,
+      images: todo.map((i) => ({
+        base64: buffers[i].toString("base64"),
+        mediaType: detectImageMediaType(buffers[i]),
+      })),
+      maxTokens: 400 + todo.length * 320,
+    })
+  )
+    .replace(/^```(json)?/m, "")
+    .replace(/```$/m, "")
+    .trim();
+
+  const json = JSON.parse(raw);
+  const frames = Array.isArray(json.frames) ? json.frames : [];
+  for (const f of frames) {
+    const pos = Number(f.i) - 1;
+    const target = todo[pos];
+    if (target === undefined) continue;
+    const analysis: AssetAnalysis = {
+      description: String(f.description ?? ""),
+      objects: Array.isArray(f.objects) ? f.objects.map((o: unknown) => String(o).toLowerCase()) : [],
+      environment: String(f.environment ?? "").toLowerCase(),
+      action: String(f.action ?? "").toLowerCase(),
+      isScreenshot: f.isScreenshot === true,
+      hasLargeText: f.hasLargeText === true,
+      hasLargeWatermark: f.hasLargeWatermark === true,
+      hasChannelPromo: f.hasChannelPromo === true,
+      hasFaceOverlay: f.hasFaceOverlay === true,
+      isTitleOrOutroCard: f.isTitleOrOutroCard === true,
+      hasPlayerOrSocialUi: f.hasPlayerOrSocialUi === true,
+      isStudioExplainer: f.isStudioExplainer === true,
+      isReenactmentOrSkit: f.isReenactmentOrSkit === true,
+      updatedAt: new Date().toISOString(),
+    };
+    if (!analysis.description) continue;
+    out[target] = analysis;
+    cache[keys[target]] = analysis;
+  }
+  writeAnalysisCache(cache);
+  return out;
 }

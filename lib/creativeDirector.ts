@@ -152,6 +152,7 @@ export async function directMontage(
   const raw = await mediaComplete({
     system: systemPrompt(),
     maxTokens: 8000,
+    stage: "Creative Director",
     user:
       `История: ${research.canonicalEvent}\n\n` +
       `Блоки сценария:\n${beatList}\n\n` +
@@ -181,11 +182,24 @@ export async function directMontage(
     .sort((a, b) => a.at.from - b.at.from);
 
   let prevEnd = -Infinity;
+  let prevScene: string | undefined;
   for (const { p, asset, at } of located) {
     const startRaw = words[at.from]?.start;
     if (!Number.isFinite(startRaw)) continue;
     const start = Math.max(startRaw, prevEnd + 0.12);
     if (start < 1.8) continue; // открывающая фраза остаётся лицом автора
+
+    // Два почти одинаковых плана подряд читаются как застрявшая картинка,
+    // даже если это формально разные фрагменты разного времени.
+    const scene = asset.sceneId;
+    if (scene && scene === prevScene) continue;
+
+    // Если под блок есть точный материал, слабая обстановка не ставится:
+    // выбор «1» при наличии «3» — это потеря смысла без всякой выгоды.
+    const beatId = String(p.beatId ?? asset.compatibleBeatIds[0] ?? "");
+    const myScore = asset.beatScores?.[beatId] ?? 2;
+    const bestForBeat = pack.coverage.find((c) => c.beatId === beatId)?.bestScore ?? myScore;
+    if (myScore <= 1 && bestForBeat >= 3) continue;
 
     const wanted = Number(p.seconds);
     const cap = asset.role === "EVENT" ? T.max_exact_event_duration : T.max_visual_duration;
@@ -198,7 +212,7 @@ export async function directMontage(
     events.push({
       type: asset.kind === "VIDEO_SEGMENT" ? "EXTERNAL_VIDEO" : "EXTERNAL_IMAGE",
       assetId: asset.id,
-      beatId: String(p.beatId ?? asset.compatibleBeatIds[0] ?? ""),
+      beatId,
       quote: String(p.quote ?? "").slice(0, 120),
       start: Number(start.toFixed(2)),
       end: Number(end.toFixed(2)),
@@ -207,6 +221,7 @@ export async function directMontage(
       role: asset.role,
     });
     prevEnd = end;
+    prevScene = scene;
   }
 
   return { version: 3, duration, events, stats: computeStats(events, duration, speechCuts) };

@@ -76,6 +76,7 @@ export async function buildScriptBeats(
   const raw = await mediaComplete({
     system: BEATS_SYSTEM,
     maxTokens: 8000,
+    stage: "Script Beats",
     user:
       `История: ${research.canonicalEvent}\n` +
       (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +

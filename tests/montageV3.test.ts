@@ -23,7 +23,7 @@ function asset(over: Partial<PackAsset> = {}): PackAsset {
   };
 }
 const pack = (assets: PackAsset[]): StoryAssetPackV2 => ({
-  storyId: "s", version: 2, assets, coverage: [], coverageRatio: 1, sourceVideos: [], createdAt: "2026",
+  storyId: "s", version: 2, assets, coverage: [], coverageRatio: 1, hardCoverageRatio: 1, uniqueScenes: assets.length, sourceVideos: [], createdAt: "2026",
 });
 const ev = (over: Partial<MontageEvent> = {}): MontageEvent => ({
   type: "EXTERNAL_IMAGE", assetId: "a1", beatId: "b1", quote: "его увозят с поля",

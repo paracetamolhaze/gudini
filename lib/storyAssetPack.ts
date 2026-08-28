@@ -11,6 +11,7 @@ import { verifySource } from "./storyAssets";
 import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
 import { taste } from "./montageTaste";
+import { frameHash, groupScenes } from "./sceneHash";
 
 const rank = (i: string) => (i === "HIGH" ? 0 : i === "MEDIUM" ? 1 : 2);
 /**
@@ -115,6 +116,8 @@ export type PackAsset = {
   sourceUrl: string;
   sourceDomain: string;
   sourceVideoId?: string;
+  /** номер визуальной сцены внутри исходника: почти одинаковые планы делят один номер */
+  sceneId?: string;
   segment?: { start: number; end: number };
   description: string;
   role: "EVENT" | "PERSON" | "CONTEXT";
@@ -132,6 +135,12 @@ export type BeatCoverage = {
   videos: number;
   images: number;
   covered: boolean;
+  /** лучшая оценка совместимости среди подошедших материалов: 3 точно, 2 хорошо, 1 обстановка */
+  bestScore: number;
+  /** идентификаторы лучших материалов — с ними и должен работать режиссёр */
+  bestAssetIds: string[];
+  /** сколько разных визуальных сцен доступно блоку: пять кадров одного плана — это одна */
+  scenes: number;
 };
 
 export type StoryAssetPackV2 = {
@@ -139,7 +148,12 @@ export type StoryAssetPackV2 = {
   version: number;
   assets: PackAsset[];
   coverage: BeatCoverage[];
+  /** доля блоков, у которых есть хоть какой-то материал (оценка >= 1) */
   coverageRatio: number;
+  /** доля блоков с честным материалом (оценка >= 2) — она и важна для монтажа */
+  hardCoverageRatio: number;
+  /** сколько разных визуальных сцен в медиатеке: двадцать сегментов могут быть четырьмя планами */
+  uniqueScenes: number;
   sourceVideos: { id: string; url: string; durationSec: number; segments: number; method?: string }[];
   stages?: StageCounts;
   createdAt: string;
@@ -243,7 +257,7 @@ async function cutSegments(
   const failures: string[] = [];
 
   // 1) снимаем ВСЕ кадры (ffmpeg бесплатен) — и только потом идём к модели один раз
-  const shots: { at: number; frame: string; buffer: Buffer }[] = [];
+  const shots: { at: number; frame: string; buffer: Buffer; hash: bigint | null }[] = [];
   for (let i = 0; i < samples; i++) {
     const at = ((i + 0.5) / samples) * Math.max(0, duration - 3);
     const frame = path.join(dir, `probe-${videoId}-${i}.jpg`);
@@ -253,7 +267,7 @@ async function cutSegments(
         { cwd: dir },
       );
       stages.framesSampled++;
-      shots.push({ at, frame, buffer: fs.readFileSync(frame) });
+      shots.push({ at, frame, buffer: fs.readFileSync(frame), hash: await frameHash(frame, dir) });
     } catch (e: any) {
       failures.push(String(e?.message ?? e).slice(0, 120));
     }
@@ -273,7 +287,10 @@ async function cutSegments(
     throw new Error(`Разбор кадров не выполнен: ${String(e?.message ?? e).slice(0, 120)}`);
   }
 
-  // 3) отсев мусора и нарезка выживших
+  // 3) почти одинаковые планы получают один номер сцены — это считается локально
+  const sceneOf = groupScenes(shots.map((x) => x.hash));
+
+  // 4) отсев мусора и нарезка выживших
   for (const [i, shot] of shots.entries()) {
     const an = analyses[i];
     try {
@@ -312,6 +329,7 @@ async function cutSegments(
         sourceUrl: "",
         sourceDomain: "",
         sourceVideoId: videoId,
+        sceneId: `${videoId}-s${sceneOf[i]}`,
         segment: { start: Number(shot.at.toFixed(2)), end: Number((shot.at + 3.2).toFixed(2)) },
         description: an.description,
         verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
@@ -677,6 +695,8 @@ export async function buildAssetPack(
   const visual = beats.filter((b) => b.visualNeed !== "NONE");
   const coverage: BeatCoverage[] = visual.map((b) => {
     const fit = usable.filter((a) => a.compatibleBeatIds.includes(b.id));
+    const scoreOf = (a: PackAsset) => a.beatScores?.[b.id] ?? 1;
+    const bestScore = fit.reduce((m, a) => Math.max(m, scoreOf(a)), 0);
     return {
       beatId: b.id,
       text: b.text.slice(0, 60),
@@ -684,9 +704,23 @@ export async function buildAssetPack(
       videos: fit.filter((a) => a.kind === "VIDEO_SEGMENT").length,
       images: fit.filter((a) => a.kind === "IMAGE").length,
       covered: fit.length > 0,
+      bestScore,
+      // лучшие материалы: видео впереди фото при равной оценке
+      bestAssetIds: fit
+        .filter((a) => scoreOf(a) === bestScore)
+        .sort((x, y) => (x.kind === y.kind ? 0 : x.kind === "VIDEO_SEGMENT" ? -1 : 1))
+        .slice(0, 4)
+        .map((a) => a.id),
+      scenes: new Set(fit.map((a) => a.sceneId ?? a.id)).size,
     };
   });
-  const coverageRatio = visual.length ? Number((coverage.filter((c) => c.covered).length / visual.length).toFixed(2)) : 0;
+  const denom = Math.max(1, visual.length);
+  // мягкое покрытие — «хоть что-то есть», жёсткое — «есть честный материал»
+  const coverageRatio = visual.length ? Number((coverage.filter((c) => c.bestScore >= 1).length / denom).toFixed(2)) : 0;
+  const hardCoverageRatio = visual.length
+    ? Number((coverage.filter((c) => c.bestScore >= 2).length / denom).toFixed(2))
+    : 0;
+  const uniqueScenes = new Set(usable.map((a) => a.sceneId ?? a.id)).size;
 
   const pack: StoryAssetPackV2 = {
     storyId: research.storyId,
@@ -694,6 +728,8 @@ export async function buildAssetPack(
     assets: usable,
     coverage,
     coverageRatio,
+    hardCoverageRatio,
+    uniqueScenes,
     sourceVideos,
     stages: { ...stages },
     createdAt: new Date().toISOString(),

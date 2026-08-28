@@ -409,7 +409,7 @@ async function buildCleanSource(
 }
 
 /** Детерминированный рендер EditPlan: базовый кадр → punch-in → б-роллы → субтитры → callouts. */
-async function renderPlan(
+export async function renderPlan(
   dir: string,
   source: string,
   plan: EditPlan,
@@ -424,6 +424,12 @@ async function renderPlan(
   // пересканированную копию кадра, и на этих секундах заметно менялись цвет и контраст.
   let chain = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30[vbase]`;
   let current = "vbase";
+
+  // Неподвижная картинка — это ОДИН кадр. Без зацикливания ffmpeg отдаёт его
+  // ровно раз, fps его не размножает, а overlay после конца входа пропускает
+  // A-roll — фото было видно 1/30 секунды вместо трёх секунд. Поэтому картинки
+  // подаются с -loop 1 и собственной длительностью.
+  const isStill = (f: string) => /\.(jpe?g|png|webp|bmp|gif)$/i.test(f);
 
   // б-роллы поверх (голос не прерывается)
   brolls.forEach((b, k) => {
@@ -449,7 +455,11 @@ async function renderPlan(
     [
       "-i", source,
       ...(music ? ["-stream_loop", "-1", "-i", MUSIC_FILE] : []),
-      ...brolls.flatMap((b) => ["-i", b.file!]),
+      ...brolls.flatMap((b) =>
+        isStill(b.file!)
+          ? ["-loop", "1", "-framerate", "30", "-t", (b.end - b.start).toFixed(3), "-i", b.file!]
+          : ["-i", b.file!],
+      ),
       "-filter_complex", `${chain};${audioChain}`,
       "-map", "[v]", "-map", "[a]",
       "-threads", "4",

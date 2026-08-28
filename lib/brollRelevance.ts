@@ -38,6 +38,12 @@ export type AssetAnalysis = {
   isStudioExplainer?: boolean;
   /** постановка, реконструкция, скетч, анимация — не документальная съёмка */
   isReenactmentOrSkit?: boolean;
+  /**
+   * Смысловая сцена: что именно происходит. Перцептивный хэш различает ракурсы,
+   * но не понимает, что пять разных планов у рекламного щита — это одно и то же
+   * место действия. Поле берётся из того же пакетного разбора, без лишних вызовов.
+   */
+  sceneFamily?: string;
   updatedAt: string;
 };
 
@@ -76,7 +82,7 @@ function writeAnalysisCache(cache: Record<string, AssetAnalysis>) {
 
 const VISION_SYSTEM = `You inspect a candidate frame for use as b-roll in a short video.
 Reply with STRICT JSON only:
-{"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words","isScreenshot":<true if this is a screenshot of a web page, social post, article, chat, table, chart or app UI rather than a photograph or video frame>,"hasLargeText":<true if readable text occupies a noticeable part of the frame: burned-in headlines, big captions, subtitle bars, news chyrons, annotation labels drawn over the footage>,"hasLargeWatermark":<true if a large watermark or logo covers a significant area>,"hasChannelPromo":<true if the frame shows channel calls to action: SUBSCRIBE, LIKE, BELL, THANKS FOR WATCHING, follow handles>,"hasFaceOverlay":<true if a commentator/streamer/reactor face or webcam box is composited ON TOP of other footage, e.g. picture-in-picture reaction>,"isTitleOrOutroCard":<true if the frame is an intro/outro/title card built from text and graphics rather than filmed material>,"hasPlayerOrSocialUi":<true if video player controls, progress bars, or social app interface are visible>,"isStudioExplainer":<true if this is a person talking to camera in a studio, office or home explaining something, rather than footage of an event>,"isReenactmentOrSkit":<true if this is staged, acted, animated, a comedy sketch or a reconstruction rather than documentary footage>}
+{"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words","isScreenshot":<true if this is a screenshot of a web page, social post, article, chat, table, chart or app UI rather than a photograph or video frame>,"hasLargeText":<true if readable text occupies a noticeable part of the frame: burned-in headlines, big captions, subtitle bars, news chyrons, annotation labels drawn over the footage>,"hasLargeWatermark":<true if a large watermark or logo covers a significant area>,"hasChannelPromo":<true if the frame shows channel calls to action: SUBSCRIBE, LIKE, BELL, THANKS FOR WATCHING, follow handles>,"hasFaceOverlay":<true if a commentator/streamer/reactor face or webcam box is composited ON TOP of other footage, e.g. picture-in-picture reaction>,"isTitleOrOutroCard":<true if the frame is an intro/outro/title card built from text and graphics rather than filmed material>,"hasPlayerOrSocialUi":<true if video player controls, progress bars, or social app interface are visible>,"isStudioExplainer":<true if this is a person talking to camera in a studio, office or home explaining something, rather than footage of an event>,"isReenactmentOrSkit":<true if this is staged, acted, animated, a comedy sketch or a reconstruction rather than documentary footage>,"sceneFamily":"UPPER_SNAKE_CASE label of WHAT IS HAPPENING, 1-3 words, e.g. SIDELINE_INJURY, CELEBRATION, STRETCHER, PRESS_CONFERENCE, HOSPITAL, CROWD, MATCH_PLAY. Frames of the same moment of the same action share one label."}
 Be generous with objects: include category words (e.g. for a tiger: tiger, big cat, predator, animal, wildlife).
 Judge isScreenshot strictly: a photo of a person holding a phone is NOT a screenshot; a captured tweet or article IS.
 Sponsor boards, jerseys and stadium signage are NOT hasLargeText: they belong to the scene.
@@ -123,6 +129,7 @@ export async function analyzeAsset(
       hasPlayerOrSocialUi: json.hasPlayerOrSocialUi === true,
       isStudioExplainer: json.isStudioExplainer === true,
       isReenactmentOrSkit: json.isReenactmentOrSkit === true,
+      sceneFamily: json.sceneFamily ? String(json.sceneFamily).toUpperCase().replace(/[^A-Z_]/g, "_").slice(0, 28) : undefined,
       hasLargeText: json.hasLargeText === true,
       hasLargeWatermark: json.hasLargeWatermark === true,
       updatedAt: new Date().toISOString(),
@@ -380,6 +387,7 @@ export async function analyzeFrames(
       hasPlayerOrSocialUi: f.hasPlayerOrSocialUi === true,
       isStudioExplainer: f.isStudioExplainer === true,
       isReenactmentOrSkit: f.isReenactmentOrSkit === true,
+      sceneFamily: f.sceneFamily ? String(f.sceneFamily).toUpperCase().replace(/[^A-Z_]/g, "_").slice(0, 28) : undefined,
       updatedAt: new Date().toISOString(),
     };
     if (!analysis.description) continue;

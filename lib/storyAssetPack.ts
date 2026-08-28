@@ -82,6 +82,8 @@ export type StageCounts = {
   qcRejectedReaction: number;
   qcRejectedExplainerSkit: number;
   qcRejectedOther: number;
+  /** сегментов подрезано до чистой границы окна */
+  segmentsTrimmed: number;
   /** источник о другом событии/турнире — отсев ещё до скачивания */
   wrongEventRejected: number;
 };
@@ -93,7 +95,7 @@ export const stages: StageCounts = {
   ytUrlsDiscovered: 0, ytDownloadAttempted: 0, ytDownloadOk: 0,
   ytSourceVideosAccepted: 0, ytSegments: 0,
   qcRejected: 0, qcRejectedLargeText: 0, qcRejectedReaction: 0,
-  qcRejectedExplainerSkit: 0, qcRejectedOther: 0, wrongEventRejected: 0,
+  qcRejectedExplainerSkit: 0, qcRejectedOther: 0, segmentsTrimmed: 0, wrongEventRejected: 0,
 };
 
 /** Причины отсева копятся, чтобы в отчёте было видно не только «сколько», но и «почему». */
@@ -128,6 +130,8 @@ export type PackAsset = {
   sourceVideoId?: string;
   /** номер визуальной сцены внутри исходника: почти одинаковые планы делят один номер */
   sceneId?: string;
+  /** смысловая сцена: празднование, носилки, пресс-конференция — из разбора кадра */
+  sceneFamily?: string;
   segment?: { start: number; end: number };
   description: string;
   role: "EVENT" | "PERSON" | "CONTEXT";
@@ -317,21 +321,29 @@ async function cutSegments(
   const out: Omit<PackAsset, "compatibleBeatIds" | "relatedFactIds" | "role">[] = [];
   const seenDesc: string[] = [];
   const failures: string[] = [];
+  let trimmedSegments = 0;
 
-  // 1) снимаем ВСЕ кадры (ffmpeg бесплатен) — и только потом идём к модели один раз
-  const shots: { at: number; frame: string; buffer: Buffer; hash: bigint | null }[] = [];
+  // 1) Снимаем кадры ПО ВСЕМУ окну будущего сегмента, а не одну «представительную»
+  // точку. Проверка одного кадра признавала чистыми три секунды, внутри которых
+  // могла быть чужая финальная карточка с «SUBSCRIBE» — так она и попала в ролик.
+  const WINDOW = 3.2;
+  const OFFSETS = [0.05, 0.25, 0.5, 0.75, 0.95]; // начало, четверти, конец окна
+  const shots: { at: number; frame: string; buffer: Buffer; hash: bigint | null; sample: number; part: number }[] = [];
   for (let i = 0; i < samples; i++) {
-    const at = ((i + 0.5) / samples) * Math.max(0, duration - 3);
-    const frame = path.join(dir, `probe-${videoId}-${i}.jpg`);
-    try {
-      await runFfmpeg(
-        ["-ss", at.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-q:v", "4", path.basename(frame)],
-        { cwd: dir },
-      );
-      stages.framesSampled++;
-      shots.push({ at, frame, buffer: fs.readFileSync(frame), hash: await frameHash(frame, dir) });
-    } catch (e: any) {
-      failures.push(String(e?.message ?? e).slice(0, 120));
+    const at = ((i + 0.5) / samples) * Math.max(0, duration - WINDOW);
+    for (const [p, frac] of OFFSETS.entries()) {
+      const t = Math.min(at + WINDOW * frac, Math.max(0, duration - 0.05));
+      const frame = path.join(dir, `probe-${videoId}-${i}-${p}.jpg`);
+      try {
+        await runFfmpeg(
+          ["-ss", t.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-q:v", "4", path.basename(frame)],
+          { cwd: dir },
+        );
+        stages.framesSampled++;
+        shots.push({ at, frame, buffer: fs.readFileSync(frame), hash: await frameHash(frame, dir), sample: i, part: p });
+      } catch (e: any) {
+        failures.push(String(e?.message ?? e).slice(0, 120));
+      }
     }
   }
 
@@ -352,31 +364,60 @@ async function cutSegments(
   // 3) почти одинаковые планы получают один номер сцены — это считается локально
   const sceneOf = groupScenes(shots.map((x) => x.hash));
 
-  // 4) отсев мусора и нарезка выживших
-  for (const [i, shot] of shots.entries()) {
-    const an = analyses[i];
-    try {
-      if (!an) {
-        failures.push("зрение не описало кадр");
-        continue;
-      }
-      // Ролик документальный, поэтому объяснялка в студии и постановка не годятся
-      // и для кадров видео: рассказ о событии — не съёмка события.
-      const bad = qcReject(an, { factualBeat: true });
-      if (bad) {
-        countQcReason(bad);
-        continue;
-      }
-      // почти одинаковые кадры не плодим: сегменты должны отличаться
-      if (seenDesc.some((d) => similar(d, an.description))) continue;
-      seenDesc.push(an.description);
+  // 4) РЕШЕНИЕ ПО ОКНУ ЦЕЛИКОМ, а не по одному кадру.
+  // Для каждого окна известно, какие его части чистые. Если грязная только
+  // хвостовая часть — окно подрезается до чистой границы; если грязь в начале
+  // или в середине — сегмент не берём вовсе.
+  const MIN_CLEAN = 1.5;
+  for (let i = 0; i < samples; i++) {
+    const parts = shots
+      .map((sh, idx) => ({ sh, an: analyses[idx] }))
+      .filter((x) => x.sh.sample === i)
+      .sort((a, b) => a.sh.part - b.sh.part);
+    if (!parts.length) continue;
 
-      const clip = path.join(dir, `seg-${videoId}-${i}.mp4`);
+    const at = parts[0].sh.at;
+    const verdicts = parts.map((x) => {
+      if (!x.an) return "нет описания кадра";
+      // Ролик документальный: объяснялка в студии и постановка не годятся.
+      return qcReject(x.an, { factualBeat: true });
+    });
+
+    // сколько частей подряд с начала окна чистые
+    let cleanParts = 0;
+    while (cleanParts < verdicts.length && verdicts[cleanParts] === null) cleanParts++;
+    const firstBad = verdicts.findIndex((v) => v !== null);
+
+    if (cleanParts === 0) {
+      countQcReason(String(verdicts[0] ?? "кадр не описан"));
+      continue;
+    }
+
+    // граница чистой части: доля последнего чистого замера от длины окна
+    const cleanFrac = OFFSETS[cleanParts - 1];
+    const usable = Number((WINDOW * cleanFrac).toFixed(2));
+    if (firstBad >= 0 && usable < MIN_CLEAN) {
+      countQcReason(`${verdicts[firstBad]} (чистого материала ${usable.toFixed(1)}с — мало)`);
+      continue;
+    }
+    const segLen = firstBad >= 0 ? usable : WINDOW;
+    if (firstBad >= 0) {
+      trimmedSegments++;
+      stages.segmentsTrimmed++;
+    }
+
+    const an = parts[0].an!;
+    // почти одинаковые кадры не плодим: сегменты должны отличаться
+    if (seenDesc.some((d) => similar(d, an.description))) continue;
+    seenDesc.push(an.description);
+
+    const clip = path.join(dir, `seg-${videoId}-${i}.mp4`);
+    try {
       await runFfmpeg(
         [
-          "-ss", shot.at.toFixed(2),
+          "-ss", at.toFixed(2),
           "-i", path.basename(file),
-          "-t", "3.2",
+          "-t", segLen.toFixed(2),
           "-an",
           "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
           "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast",
@@ -391,22 +432,24 @@ async function cutSegments(
         sourceUrl: "",
         sourceDomain: "",
         sourceVideoId: videoId,
-        sceneId: `${videoId}-s${sceneOf[i]}`,
-        segment: { start: Number(shot.at.toFixed(2)), end: Number((shot.at + 3.2).toFixed(2)) },
+        sceneId: `${videoId}-s${sceneOf[shots.indexOf(parts[0].sh)]}`,
+        sceneFamily: an.sceneFamily,
+        segment: { start: Number(at.toFixed(2)), end: Number((at + segLen).toFixed(2)) },
         description: an.description,
         verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
       });
       stages.segmentsExtracted++;
     } catch (e: any) {
       failures.push(String(e?.message ?? e).slice(0, 120));
-    } finally {
-      try {
-        fs.rmSync(shot.frame, { force: true });
-      } catch {}
     }
   }
+  for (const sh of shots) {
+    try {
+      fs.rmSync(sh.frame, { force: true });
+    } catch {}
+  }
 
-  if (!out.length && failures.length === samples) {
+  if (!out.length && failures.length >= samples) {
     throw new Error(`Разбор исходного видео не выполнен ни на одном кадре: ${failures[0]}`);
   }
   return { assets: out, duration };

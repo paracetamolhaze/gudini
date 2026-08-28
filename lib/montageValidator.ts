@@ -23,6 +23,18 @@ export type ValidationResult = {
   };
 };
 
+/** Ориентиры темпа для вертикального короткого ролика. */
+export const PACING = {
+  /** первая вставка должна появиться не позже этой секунды */
+  firstVisualBy: 5,
+  /** и не раньше: начало ролика — лицо автора */
+  firstVisualAfter: 1.8,
+  /** максимальный непрерывный участок без вставок */
+  maxARollGap: 8,
+  /** нижняя граница доли экранного времени под внешним визуалом */
+  minExternalCoverage: 0.5,
+};
+
 export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): ValidationResult {
   const T = taste();
   const errors: string[] = [];
@@ -71,14 +83,38 @@ export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): Vali
   const videos = plan.events.filter((e) => e.type === "EXTERNAL_VIDEO").length;
   const images = plan.events.filter((e) => e.type === "EXTERNAL_IMAGE").length;
   const s = plan.stats;
-  if (s.externalCoverage < T.target_external_coverage - 0.1) {
+  // ТЕМП — ЭТО ОШИБКА, А НЕ ЗАМЕЧАНИЕ.
+  // Валидатор знал и про покрытие 36%, и про 23.8с подряд без визуала, и всё
+  // равно пропускал ролик в рендер. Так вышел статичный ролик, который никто
+  // не остановил.
+  if (s.externalCoverage < PACING.minExternalCoverage) {
+    errors.push(
+      `покрытие визуалом ${(s.externalCoverage * 100).toFixed(0)}% ниже минимума ${(PACING.minExternalCoverage * 100).toFixed(0)}%`,
+    );
+  } else if (s.externalCoverage < T.target_external_coverage - 0.1) {
     warnings.push(`покрытие ${(s.externalCoverage * 100).toFixed(0)}% ниже цели ${(T.target_external_coverage * 100).toFixed(0)}%`);
+  }
+  if (s.maxARollGap > PACING.maxARollGap) {
+    errors.push(`подряд ${s.maxARollGap.toFixed(1)}с без визуала — предел ${PACING.maxARollGap}с`);
+  }
+  const first = [...plan.events].sort((a, b) => a.start - b.start)[0];
+  if (!first) {
+    errors.push("в плане нет ни одной вставки");
+  } else if (first.start > PACING.firstVisualBy) {
+    errors.push(`первая вставка на ${first.start.toFixed(1)}с — позже ${PACING.firstVisualBy}с, начало ролика статично`);
+  }
+  // вставки не должны стоять одним комом: считаем разброс по таймлайну
+  if (plan.events.length >= 3) {
+    const mid = plan.events.map((e) => (e.start + e.end) / 2);
+    const span = Math.max(...mid) - Math.min(...mid);
+    if (span < plan.duration * 0.5) {
+      errors.push(
+        `все вставки собраны в отрезке ${span.toFixed(1)}с из ${plan.duration.toFixed(0)}с — остальной ролик без визуала`,
+      );
+    }
   }
   if (s.videoShare < T.preferred_video_share - 0.15 && videos + images > 0) {
     warnings.push(`доля видео ${(s.videoShare * 100).toFixed(0)}% ниже цели ${(T.preferred_video_share * 100).toFixed(0)}%`);
-  }
-  if (s.maxARollGap > T.max_aroll_gap + 1) {
-    warnings.push(`подряд ${s.maxARollGap.toFixed(1)}с без визуала`);
   }
 
   return {
@@ -98,13 +134,33 @@ export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): Vali
 }
 
 /** Готова ли медиатека к монтажу вообще. */
-export function packReady(pack: StoryAssetPackV2): { ok: boolean; reasons: string[] } {
+/**
+ * Готова ли медиатека к динамичному монтажу.
+ *
+ * Считается ЖЁСТКОЕ покрытие — доля блоков, у которых есть честный материал
+ * (оценка 2 и выше). Мягкое покрытие включает «сойдёт как обстановка», и пакет
+ * с жёстким покрытием 31% выглядел готовым, а на деле дал двадцать четыре
+ * секунды подряд одного лица.
+ *
+ * Не готова — это не предупреждение: рендерить нечего, нужно доискать материал.
+ */
+export function packReady(pack: StoryAssetPackV2): { ok: boolean; reasons: string[]; status: "READY" | "NEEDS_MORE_MEDIA" } {
   const T = taste();
   const videos = pack.assets.filter((a) => a.kind === "VIDEO_SEGMENT").length;
   const reasons: string[] = [];
   if (videos < T.min_usable_video_segments) reasons.push(`видео-сегментов ${videos} < ${T.min_usable_video_segments}`);
   if (pack.assets.length < T.min_total_assets) reasons.push(`материалов ${pack.assets.length} < ${T.min_total_assets}`);
-  if (pack.coverageRatio < T.min_beat_coverage)
-    reasons.push(`покрытие блоков ${(pack.coverageRatio * 100).toFixed(0)}% < ${(T.min_beat_coverage * 100).toFixed(0)}%`);
-  return { ok: reasons.length === 0, reasons };
+
+  const hard = pack.hardCoverageRatio ?? 0;
+  if (hard < T.min_beat_coverage) {
+    reasons.push(
+      `жёсткое покрытие ${(hard * 100).toFixed(0)}% < ${(T.min_beat_coverage * 100).toFixed(0)}% ` +
+        `(мягкое ${(pack.coverageRatio * 100).toFixed(0)}% в счёт не идёт)`,
+    );
+  }
+  // блоки, где есть только слабый контекст, считаем незакрытыми: они и рождают провалы
+  const weakOnly = pack.coverage.filter((c) => c.bestScore === 1).map((c) => c.beatId);
+  if (weakOnly.length) reasons.push(`только слабый контекст у блоков: ${weakOnly.join(", ")}`);
+
+  return { ok: reasons.length === 0, reasons, status: reasons.length === 0 ? "READY" : "NEEDS_MORE_MEDIA" };
 }

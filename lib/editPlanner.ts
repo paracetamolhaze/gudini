@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { mediaComplete } from "./mediaLlm";
 import { getSettings } from "./store";
 import { Word } from "./transcribe";
 import { EditPlan, RawPlanEvent, validatePlan, DEFAULT_CAPTION_STYLE } from "./editPlan";
@@ -91,11 +91,11 @@ export async function planGapFillers(
 ): Promise<RawPlanEvent[]> {
   const key = getSettings().anthropicKey;
   if (!key || !gaps.length) return [];
-  const client = new Anthropic({ apiKey: key });
   const list = words.map((w, i) => `${i}:${w.word}[${w.start.toFixed(1)}]`).join(" ");
-  const response = await client.messages.create({
+  const response = await mediaComplete({
     model: MODEL,
-    max_tokens: 8000,
+    maxTokens: 8000,
+    stage: "Creative Director",
     system:
       PLANNER_SYSTEM +
       `\n\nСЕЙЧАС ВТОРОЙ ПРОХОД. В ролике слишком долго видно только лицо автора. Тебе дают участки, ` +
@@ -104,21 +104,13 @@ export async function planGapFillers(
       `(рекламные щиты у поля, скамейка запасных, врачи на поле) или релевантный сток. ` +
       `Подмена события чужим сюжетом по-прежнему запрещена. Один участок можно закрыть ДВУМЯ ` +
       `короткими вставками по 1.5–3 сек. Верни ТОЛЬКО новые события внутри указанных участков.`,
-    messages: [
-      {
-        role: "user",
-        content:
+    user:
           `Тема: ${topic}\n\n` +
           (script ? `Сценарий:\n${script}\n\n` : "") +
           `Транскрипция (индекс:слово[секунда]):\n${list}\n\n` +
-          `Закрыть визуалом участки (сек): ${gaps.map((g) => `${g.start.toFixed(1)}–${g.end.toFixed(1)}`).join(", ")}`,
-      },
-    ],
+      `Закрыть визуалом участки (сек): ${gaps.map((g) => `${g.start.toFixed(1)}–${g.end.toFixed(1)}`).join(", ")}`,
   });
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
+  const raw = response
     .replace(/^```(json)?/m, "")
     .replace(/```$/m, "")
     .trim();
@@ -142,16 +134,13 @@ export async function planEdit(
   const key = getSettings().anthropicKey;
   if (!key || words.length < 10) return null;
 
-  const client = new Anthropic({ apiKey: key });
   const list = words.map((w, i) => `${i}:${w.word}`).join(" ");
-  const response = await client.messages.create({
+  const response = await mediaComplete({
     model: MODEL,
-    max_tokens: 16000,
+    maxTokens: 16000,
+    stage: "Creative Director",
     system: PLANNER_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content:
+    user:
           `Тема: ${topic}\n\n` +
           (script ? `Оригинальный сценарий:\n${script}\n\n` : "") +
           `Транскрипция (индекс:слово), длительность ${duration.toFixed(1)} сек:\n${list}` +
@@ -160,15 +149,10 @@ export async function planEdit(
               `В этих местах вырезаны запинки, и лицо автора заметно «прыгает». ` +
               `Постарайся поставить перебивку так, чтобы она НАЧИНАЛАСЬ примерно за 0.3 сек до склейки ` +
               `и заканчивалась после неё — тогда монтаж речи не будет виден.`
-            : ""),
-      },
-    ],
+        : ""),
   });
 
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
+  const raw = response
     .replace(/^```(json)?/m, "")
     .replace(/```$/m, "")
     .trim();

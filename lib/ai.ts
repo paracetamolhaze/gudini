@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { mediaComplete } from "./mediaLlm";
 import { getSettings, ProjectMeta } from "./store";
 import type { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
@@ -10,17 +10,13 @@ export type ScriptBeat = { text: string; factIds: string[] };
 const MODEL_SCRIPT = "claude-opus-5";
 const MODEL_UTIL = "claude-sonnet-5";
 
-function client(): Anthropic | null {
-  const key = getSettings().anthropicKey;
-  return key ? new Anthropic({ apiKey: key }) : null;
-}
-
-function textOf(response: Anthropic.Message): string {
-  return response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
+/**
+ * Есть ли доступ к моделям. Сами запросы идут через общий транспорт
+ * (lib/mediaLlm), поэтому попадают и в политику провайдеров, и в учёт денег —
+ * своего клиента Anthropic здесь больше нет.
+ */
+function haveKey(): boolean {
+  return Boolean(getSettings().anthropicKey);
 }
 
 // ===== Сценарий =====
@@ -49,28 +45,23 @@ beats — разбивка сценария на смысловые блоки �
 export async function generateScriptFromResearch(
   research: StoryResearchPack,
 ): Promise<{ script: string; beats: ScriptBeat[]; demo: boolean } | null> {
-  const c = client();
-  if (!c) return null;
+  if (!haveKey()) return null;
   const facts = research.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");
   const entities = research.entities.map((e) => `${e.name} (${e.type})`).join(", ");
-  const response = await c.messages.create({
+  const response = await mediaComplete({
     model: MODEL_SCRIPT,
-    max_tokens: 16000,
+    maxTokens: 16000,
+    stage: "Script Generation",
     system: RESEARCH_SCRIPT_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content:
-          `Событие: ${research.canonicalEvent}\n` +
-          (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
-          (research.location ? `Место: ${research.location}\n` : "") +
-          `Участники: ${entities}\n\nПроверенные факты:\n${facts}\n\n` +
-          `Краткое изложение: ${research.summary}`,
-      },
-    ],
+    user:
+      `Событие: ${research.canonicalEvent}\n` +
+      (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
+      (research.location ? `Место: ${research.location}\n` : "") +
+      `Участники: ${entities}\n\nПроверенные факты:\n${facts}\n\n` +
+      `Краткое изложение: ${research.summary}`,
   });
   addCost({ scriptLlmCalls: 1 });
-  const raw = textOf(response).replace(/^```(json)?/m, "").replace(/```$/m, "").trim();
+  const raw = response.replace(/^```(json)?/m, "").replace(/```$/m, "").trim();
   try {
     const json = JSON.parse(raw);
     const script = String(json.script ?? "").trim();
@@ -89,15 +80,15 @@ export async function generateScriptFromResearch(
 }
 
 export async function generateScript(topic: string): Promise<{ script: string; demo: boolean }> {
-  const c = client();
-  if (!c) return { script: demoScript(topic), demo: true };
-  const response = await c.messages.create({
+  if (!haveKey()) return { script: demoScript(topic), demo: true };
+  const script = await mediaComplete({
     model: MODEL_SCRIPT,
-    max_tokens: 16000,
+    maxTokens: 16000,
+    stage: "Script Generation",
     system: SCRIPT_SYSTEM,
-    messages: [{ role: "user", content: `Напиши сценарий видео на тему: «${topic}»` }],
+    user: `Напиши сценарий видео на тему: «${topic}»`,
   });
-  return { script: textOf(response), demo: false };
+  return { script, demo: false };
 }
 
 // ===== Описание и хэштеги =====
@@ -108,15 +99,14 @@ const META_SYSTEM = `Ты — SMM-редактор коротких вертик
 Хэштегов 8–12: смесь широких (#рек, #shorts) и тематических на русском и английском.`;
 
 export async function generateMeta(topic: string, script: string): Promise<{ meta: ProjectMeta; demo: boolean }> {
-  const c = client();
-  if (!c) return { meta: demoMeta(topic), demo: true };
-  const response = await c.messages.create({
+  if (!haveKey()) return { meta: demoMeta(topic), demo: true };
+  const raw = await mediaComplete({
     model: MODEL_UTIL,
-    max_tokens: 16000,
+    maxTokens: 16000,
+    stage: "Metadata",
     system: META_SYSTEM,
-    messages: [{ role: "user", content: `Тема: ${topic}\n\nСценарий:\n${script}` }],
+    user: `Тема: ${topic}\n\nСценарий:\n${script}`,
   });
-  const raw = textOf(response);
   try {
     const json = JSON.parse(raw.replace(/^```(json)?/m, "").replace(/```$/m, "").trim());
     return {
@@ -147,17 +137,17 @@ export async function planBrollSegments(
   words: { word: string }[],
   topic: string,
 ): Promise<BrollPlan[] | null> {
-  const c = client();
-  if (!c) return null;
+  if (!haveKey()) return null;
   const list = words.map((w, i) => `${i}:${w.word}`).join(" ");
-  const response = await c.messages.create({
+  const response = await mediaComplete({
     model: MODEL_UTIL,
-    max_tokens: 16000,
+    maxTokens: 16000,
+    stage: "Media Research",
     system: BROLL_SYSTEM,
-    messages: [{ role: "user", content: `Тема видео: ${topic}\n\nСлова:\n${list}` }],
+    user: `Тема видео: ${topic}\n\nСлова:\n${list}`,
   });
   try {
-    const raw = textOf(response).replace(/^```(json)?/m, "").replace(/```$/m, "").trim();
+    const raw = response.replace(/^```(json)?/m, "").replace(/```$/m, "").trim();
     const json = JSON.parse(raw);
     if (!Array.isArray(json)) return null;
     return json

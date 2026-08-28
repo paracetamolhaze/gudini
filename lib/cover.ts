@@ -1,6 +1,5 @@
 import fs from "fs";
 import path from "path";
-import Anthropic from "@anthropic-ai/sdk";
 import { getSettings, FACE_FILE, hasFace } from "./store";
 import { runFfmpeg, probe } from "./ffmpeg";
 import {
@@ -12,6 +11,7 @@ import {
   CoverLayout,
 } from "./coverLayout";
 import { buildCoverImagePrompt } from "./coverPrompt";
+import { mediaComplete } from "./mediaLlm";
 
 /**
  * Gudini Cover Design System — ИИ-обложки с нуля в едином фирменном стиле.
@@ -136,27 +136,20 @@ export async function generateCoverConcept(
 ): Promise<CoverConcept | null> {
   const key = getSettings().anthropicKey;
   if (!key) return null;
-  const client = new Anthropic({ apiKey: key });
-  const response = await client.messages.create({
-    model: "claude-sonnet-5",
-    max_tokens: 16000,
-    system: CONCEPT_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content:
-          `Тема: ${topic}\n` +
-          (title ? `Рабочий заголовок ролика: ${title}\n` : "") +
-          (styleHint ? `Пожелание по стилю: ${styleHint}\n` : "") +
-          (script ? `\nСценарий:\n${script}` : "") +
-          (strictNote ? `\n\n${strictNote}` : ""),
-      },
-    ],
-  });
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
+  const raw = (
+    await mediaComplete({
+      model: "claude-sonnet-5",
+      maxTokens: 16000,
+      stage: "Cover Concept",
+      system: CONCEPT_SYSTEM,
+      user:
+        `Тема: ${topic}\n` +
+        (title ? `Рабочий заголовок ролика: ${title}\n` : "") +
+        (styleHint ? `Пожелание по стилю: ${styleHint}\n` : "") +
+        (script ? `\nСценарий:\n${script}` : "") +
+        (strictNote ? `\n\n${strictNote}` : ""),
+    })
+  )
     .replace(/^```(json)?/m, "")
     .replace(/```$/m, "")
     .trim();

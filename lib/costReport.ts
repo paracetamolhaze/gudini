@@ -214,27 +214,41 @@ export function formatCostReport(opts: ReportOptions | string = {}): string {
     L.push(`  неудачных/повторов   ${s.totals.failedOrRetryCalls} на ${usd(s.totals.failedOrRetryCost)} — включены в сумму`);
   }
 
-  // суммы по провайдерам: сразу видно, кто чем занимался
+  // PROVIDER USAGE: вызовы и деньги по каждому провайдеру отдельно
   L.push("");
-  L.push("PROVIDER TOTALS");
-  const byProvider = new Map<CostProvider, number>();
-  for (const e of entries) byProvider.set(e.provider, (byProvider.get(e.provider) ?? 0) + e.estimatedCost);
-  const label: Record<string, string> = {
-    anthropic: "Anthropic",
-    openrouter: "OpenRouter",
-    brave: "Brave",
-    elevenlabs: "ElevenLabs (ASR)",
-    openai: "OpenAI (ASR)",
-    local: "Local",
+  L.push("PROVIDER USAGE");
+  const stat = new Map<CostProvider, { calls: number; cost: number }>();
+  for (const e of entries) {
+    const cur = stat.get(e.provider) ?? { calls: 0, cost: 0 };
+    cur.calls += e.requests;
+    cur.cost += e.estimatedCost;
+    stat.set(e.provider, cur);
+  }
+  const show = (name: string, key: CostProvider) => {
+    const v = stat.get(key) ?? { calls: 0, cost: 0 };
+    L.push(`  ${name}`);
+    L.push(`    calls: ${v.calls}`);
+    L.push(`    cost:  ${usd(v.cost)}`);
   };
-  for (const key of ["anthropic", "openrouter", "brave", "elevenlabs", "openai"] as CostProvider[]) {
-    L.push(`  ${label[key].padEnd(20)} ${usd(byProvider.get(key) ?? 0).padStart(11)}`);
-  }
-  if (cover) {
-    L.push(`  ${"OpenRouter (обложка)".padEnd(20)} ${usd(historicalTotal).padStart(11)}   историческая, не в этом прогоне`);
-  }
-  L.push(`  ${"yt-dlp".padEnd(20)} ${"$0".padStart(11)}`);
-  L.push(`  ${"FFmpeg".padEnd(20)} ${"$0".padStart(11)}`);
+  show("Anthropic", "anthropic");
+  show("Brave", "brave");
+
+  const orCalls = stat.get("openrouter")?.calls ?? 0;
+  const orCost = stat.get("openrouter")?.cost ?? 0;
+  L.push("  OpenRouter");
+  L.push(`    current run calls: ${orCalls}`);
+  L.push(`    current run cost:  ${usd(orCost)}`);
+  L.push(`    historical cover cost: ${cover ? usd(historicalTotal) : "нет данных"}`);
+
+  const asr = (stat.get("elevenlabs")?.cost ?? 0) + (stat.get("openai")?.cost ?? 0);
+  const asrCalls = (stat.get("elevenlabs")?.calls ?? 0) + (stat.get("openai")?.calls ?? 0);
+  L.push("  ASR");
+  L.push(`    calls: ${asrCalls}`);
+  L.push(`    cost:  ${usd(asr)}`);
+  L.push("  yt-dlp");
+  L.push("    cost:  $0");
+  L.push("  FFmpeg");
+  L.push("    cost:  $0");
 
   // изоляция провайдеров — три обязательных ответа
   const outsideCover = entries.filter((e) => e.provider === "openrouter" && !COVER_STAGES.includes(e.stage));

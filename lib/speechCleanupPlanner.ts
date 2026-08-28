@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { mediaComplete } from "./mediaLlm";
 import { getSettings } from "./store";
 import { Word } from "./transcribe";
 import { SilenceEvent } from "./ffmpeg";
@@ -58,29 +58,19 @@ export async function planSpeechCleanup(
     .map((s, i) => `S${i}: ${s.start.toFixed(2)}-${s.end.toFixed(2)} (${(s.end - s.start).toFixed(1)}с)`)
     .join("\n");
 
-  const client = new Anthropic({ apiKey: key });
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    system: CLEANUP_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content:
-          (script ? `Оригинальный сценарий:\n${script}\n\n` : "Оригинального сценария нет.\n\n") +
-          `Транскрипция:\n${wordList}\n\nПаузы:\n${silenceList || "(нет)"}`,
-      },
-    ],
-  });
-
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
+  const raw = (
+    await mediaComplete({
+      system: CLEANUP_SYSTEM,
+      maxTokens: 16000,
+      stage: "Speech Cleanup",
+      user:
+        (script ? `Оригинальный сценарий:\n${script}\n\n` : "Оригинального сценария нет.\n\n") +
+        `Транскрипция:\n${wordList}\n\nПаузы:\n${silenceList || "(нет)"}`,
+    })
+  )
     .replace(/^```(json)?/m, "")
     .replace(/```$/m, "")
     .trim();
-
   try {
     const json = JSON.parse(raw);
     return Array.isArray(json.actions) ? json.actions : null;

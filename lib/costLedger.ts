@@ -100,6 +100,11 @@ export function record(e: CostEntry): void {
   entries.push(e);
 }
 
+/** Стоимость последнего записанного вызова: считать её второй раз незачем. */
+export function lastRecordedCost(): number {
+  return entries.length ? entries[entries.length - 1].estimatedCost : 0;
+}
+
 export function ledger(): CostEntry[] {
   return entries.map((e) => ({ ...e }));
 }

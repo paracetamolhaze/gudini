@@ -7,7 +7,7 @@ import { mediaFromPage, isDirectMedia } from "./brollVideo";
 import { analyzeAsset } from "./brollRelevance";
 import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
-import Anthropic from "@anthropic-ai/sdk";
+import { mediaComplete } from "./mediaLlm";
 import { getSettings } from "./store";
 
 /**
@@ -493,27 +493,18 @@ export async function annotateAssets(
     .join("\n");
 
   try {
-    const client = new Anthropic({ apiKey: key });
-    const response = await client.messages.create({
-      model: "claude-sonnet-5",
-      max_tokens: 4000,
+    const response = await mediaComplete({
       system: ANNOTATE_SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content:
-            `История: ${research.canonicalEvent}\n` +
-            (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
-            `Участники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
-            `Факты:\n${facts}\n\nМатериалы:\n${list}`,
-        },
-      ],
+      maxTokens: 4000,
+      stage: "Source Verification",
+      user:
+        `История: ${research.canonicalEvent}\n` +
+        (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
+        `Участники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
+        `Факты:\n${facts}\n\nМатериалы:\n${list}`,
     });
     addCost({ researchLlmCalls: 1 });
-    const raw = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
+    const raw = response
       .replace(/^```(json)?/m, "")
       .replace(/```$/m, "")
       .trim();

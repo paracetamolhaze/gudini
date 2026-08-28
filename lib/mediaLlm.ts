@@ -76,6 +76,8 @@ export type CompleteArgs = {
   maxTokens?: number;
   /** для отчёта по стоимости: на какую стадию списывать этот вызов */
   stage?: CostStage;
+  /** модель стадии: сценарий пишет Opus, утилитарные задачи — Sonnet */
+  model?: string;
 };
 
 /**
@@ -101,11 +103,14 @@ export async function mediaComplete(args: CompleteArgs): Promise<string> {
 }
 
 async function completeOnce(
-  { system, user, maxTokens = 8000, stage = "Media Research" }: CompleteArgs,
+  { system, user, maxTokens = 8000, stage = "Media Research", model: modelOverride }: CompleteArgs,
   isRetry = false,
 ): Promise<string> {
-  const model = mediaModel();
-  mediaProvider(); // проверка настройки: чужой провайдер здесь запрещён
+  const model = modelOverride || mediaModel();
+  mediaProvider(); // чужой провайдер в настройке — ошибка конфигурации
+  // Политика проверяется ДО обращения к API: запрещённая пара не должна
+  // успеть потратить деньги, а потом быть замеченной при учёте.
+  assertProvider(stage, "anthropic");
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({
@@ -134,6 +139,8 @@ export type VisionArgs = {
   images?: VisionImage[];
   maxTokens?: number;
   stage?: CostStage;
+  /** модель стадии: QC обложки дешевле делать на младшей модели */
+  model?: string;
 };
 
 /**
@@ -146,13 +153,14 @@ export async function mediaVision(args: VisionArgs): Promise<string> {
 }
 
 async function visionOnce(
-  { system, user, image, images, maxTokens = 2000, stage = "Vision Verification" }: VisionArgs,
+  { system, user, image, images, maxTokens = 2000, stage = "Vision Verification", model: modelOverride }: VisionArgs,
   isRetry = false,
 ): Promise<string> {
   const frames = images ?? (image ? [image] : []);
   if (!frames.length) throw new Error("зрению не передан ни один кадр");
-  const model = process.env.MEDIA_VISION_MODEL || mediaModel();
+  const model = modelOverride || process.env.MEDIA_VISION_MODEL || mediaModel();
   mediaProvider();
+  assertProvider(stage, "anthropic");
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({

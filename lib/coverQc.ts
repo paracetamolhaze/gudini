@@ -1,6 +1,7 @@
 import fs from "fs";
-import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
+import { mediaVision } from "./mediaLlm";
+import { lastRecordedCost } from "./costLedger";
 
 /**
  * QC Gate — обязательная часть Full-AI пайплайна (не фолбэк).
@@ -191,34 +192,22 @@ export async function runCoverQc(
     return { status: "QC_UNAVAILABLE", pass: false, reasons: ["нет ANTHROPIC_API_KEY"], confidence: 0, cost: 0 };
   }
   try {
-    const client = new Anthropic({ apiKey: key });
     const buffer = fs.readFileSync(imageFile);
     const media = detectImageMediaType(buffer);
-    const response = await client.messages.create({
-      model: QC_MODEL,
-      max_tokens: 1000,
-      system: QC_SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: media, data: buffer.toString("base64") },
-            },
-            { type: "text", text: qcPrompt(expectedHeadline, expectedKicker) },
-          ],
-        },
-      ],
-    });
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
+    const text = (
+      await mediaVision({
+        model: QC_MODEL,
+        maxTokens: 1000,
+        stage: "Cover QC",
+        system: QC_SYSTEM,
+        image: { base64: buffer.toString("base64"), mediaType: media },
+        user: qcPrompt(expectedHeadline, expectedKicker),
+      })
+    );
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) throw new Error("модель вернула не JSON");
-    const cost =
-      (response.usage?.input_tokens ?? 0) * QC_PRICE_IN + (response.usage?.output_tokens ?? 0) * QC_PRICE_OUT;
+    // цену уже посчитал учёт по фактическому расходу токенов
+    const cost = lastRecordedCost();
     return { ...evaluateQc(JSON.parse(match[0]) as CoverQcRaw, expectedHeadline, expectedKicker), cost };
   } catch (e: any) {
     return {

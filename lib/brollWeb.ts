@@ -1,4 +1,6 @@
 import { mediaFromPage, searchArchiveOrg, searchReddit } from "./brollVideo";
+import { assertProvider } from "./providerPolicy";
+import { recordRequest } from "./costLedger";
 /**
  * Публичные источники визуала для фактических перебивок.
  *
@@ -10,7 +12,7 @@ import { mediaFromPage, searchArchiveOrg, searchReddit } from "./brollVideo";
  *   - Wikimedia Commons (изображения и видео со свободной лицензией);
  *   - Wikipedia (заглавное изображение статьи — лучший способ найти именно этого человека);
  *   - Openverse (агрегатор CC-лицензированных изображений: Flickr, музеи, архивы).
- * Дополнительно подключается веб-поиск, если задан ключ (BRAVE_API_KEY или SERPER_API_KEY).
+ * Дополнительно подключается веб-поиск, если задан ключ BRAVE_API_KEY.
  *
  * Скачиваем только то, что отдаётся публично штатным HTTP-запросом. Обход DRM, авторизации,
  * paywall и защищённых потоков не реализуется — см. docs/PROJECT-OVERVIEW.md.
@@ -197,7 +199,7 @@ const braveKey = () => process.env.BRAVE_API_KEY || process.env.BRAVE || "";
 
 /** Есть ли ключ поисковика: без него общий веб-поиск не выполняется. */
 export function webSearchAvailable(): boolean {
-  return Boolean(braveKey() || process.env.SERPER_API_KEY);
+  return Boolean(braveKey());
 }
 
 /**
@@ -210,10 +212,12 @@ export async function searchWebVideos(query: string): Promise<WebAsset[]> {
   const key = braveKey();
   if (!key) return [];
   try {
+    assertProvider("Media Research", "brave");
     const url = new URL("https://api.search.brave.com/res/v1/videos/search");
     url.searchParams.set("q", query);
     url.searchParams.set("count", "20");
     const res = await fetch(url, { headers: { ...UA, Accept: "application/json", "X-Subscription-Token": key } });
+    recordRequest({ stage: "Media Research", provider: "brave", endpoint: "brave/videos/search" });
     if (!res.ok) return [];
     const json: any = await res.json();
     const out: WebAsset[] = [];
@@ -240,19 +244,24 @@ export async function searchWebVideos(query: string): Promise<WebAsset[]> {
 
 /**
  * Поиск изображений по всему открытому вебу (новостные и спортивные сайты,
- * официальные аккаунты). Включается ключом BRAVE_API_KEY или SERPER_API_KEY.
+ * официальные аккаунты).
+ *
+ * Резервного перехода на другой платный поисковик здесь нет: подмена провайдера
+ * при сбое меняет и выдачу, и стоимость молча, а разобраться потом, чем именно
+ * собран ролик, уже нельзя. Не отвечает Brave — поиск возвращает пусто.
  */
 export async function searchWebImages(query: string): Promise<WebAsset[]> {
   const brave = braveKey();
-  const serper = process.env.SERPER_API_KEY;
   try {
     if (brave) {
+      assertProvider("Media Research", "brave");
       const url = new URL("https://api.search.brave.com/res/v1/images/search");
       url.searchParams.set("q", query);
       url.searchParams.set("count", "10");
       const res = await fetch(url, {
         headers: { ...UA, Accept: "application/json", "X-Subscription-Token": brave },
       });
+      recordRequest({ stage: "Media Research", provider: "brave", endpoint: "brave/images/search" });
       if (!res.ok) return [];
       const json: any = await res.json();
       return (json.results ?? [])
@@ -261,26 +270,6 @@ export async function searchWebImages(query: string): Promise<WebAsset[]> {
           sourceUrl: String(r.url ?? r.properties.url),
           sourceDomain: domainOf(String(r.url ?? r.properties.url)),
           directUrl: String(r.properties.url),
-          title: String(r.title ?? ""),
-          mediaType: "image" as const,
-          retrievalQuery: query,
-          retrievedAt: new Date().toISOString(),
-        }));
-    }
-    if (serper) {
-      const res = await fetch("https://google.serper.dev/images", {
-        method: "POST",
-        headers: { ...UA, "X-API-KEY": serper, "Content-Type": "application/json" },
-        body: JSON.stringify({ q: query, num: 10 }),
-      });
-      if (!res.ok) return [];
-      const json: any = await res.json();
-      return (json.images ?? [])
-        .filter((r: any) => r.imageUrl)
-        .map((r: any) => ({
-          sourceUrl: String(r.link ?? r.imageUrl),
-          sourceDomain: domainOf(String(r.link ?? r.imageUrl)),
-          directUrl: String(r.imageUrl),
           title: String(r.title ?? ""),
           mediaType: "image" as const,
           retrievalQuery: query,

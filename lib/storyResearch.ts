@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import Anthropic from "@anthropic-ai/sdk";
+import { mediaComplete } from "./mediaLlm";
 import { getSettings } from "./store";
 import { braveNews, braveWeb, BraveResult } from "./braveSearch";
 import { addCost } from "./pipelineCost";
@@ -142,28 +142,21 @@ export async function buildStoryResearchPack(
     .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${(r.description ?? "").slice(0, 240)}${r.age ? `\n   дата: ${r.age}` : ""}`)
     .join("\n");
 
-  const client = new Anthropic({ apiKey: key });
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
-    system: RESEARCH_SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content: `Тема: ${topic}\n\n${originContext}\nРезультаты поиска:\n${list}`,
-      },
-    ],
-  });
-  addCost({ researchLlmCalls: 1 });
+  const raw = (
+    await mediaComplete({
+      system: RESEARCH_SYSTEM,
+      maxTokens: 8000,
+      stage: "Story Research",
+      user: `Тема: ${topic}
 
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
+${originContext}
+Результаты поиска:
+${list}`,
+    })
+  )
     .replace(/^```(json)?/m, "")
     .replace(/```$/m, "")
     .trim();
-
   try {
     const json = JSON.parse(raw);
     const storyId = shortId(`${topic}|${originUrl ?? ""}|${Date.now()}`);

@@ -1,5 +1,6 @@
 import { addCost } from "./pipelineCost";
 import { recordRequest } from "./costLedger";
+import { assertProvider } from "./providerPolicy";
 
 /**
  * Единая точка доступа к Brave Search. Раньше веб-поиск использовался как
@@ -34,6 +35,9 @@ export type BraveImage = BraveResult & {
 };
 
 async function call(endpoint: string, params: Record<string, string>): Promise<any | null> {
+  // Brave обслуживает только поиск. Проверяем ДО обращения к сети: запрещённая
+  // пара не должна успеть потратить запрос, а потом обнаружиться в учёте.
+  assertProvider("Media Research", "brave");
   const token = key();
   if (!token) return null;
   try {

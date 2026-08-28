@@ -45,7 +45,8 @@ test("3: отчёт отвечает на три вопроса об изоля�
   assert.match(report, /Brave calls outside SEARCH:\s+0/);
   assert.match(report, /Anthropic calls for COVER:\s+0/);
   assert.ok(!report.includes("PROVIDER POLICY VIOLATION"), "нарушений нет — раздела нет");
-  assert.match(report, /PROVIDER TOTALS/);
-  assert.match(report, /yt-dlp\s+\$0/);
-  assert.match(report, /FFmpeg\s+\$0/);
+  assert.match(report, /PROVIDER USAGE/);
+  assert.match(report, /current run calls: 1/, "вызовы OpenRouter в этом прогоне видны отдельно");
+  assert.match(report, /yt-dlp[\s\S]{0,30}cost:\s+\$0/, "yt-dlp бесплатен");
+  assert.match(report, /FFmpeg[\s\S]{0,30}cost:\s+\$0/, "FFmpeg бесплатен");
 });

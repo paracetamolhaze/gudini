@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import Anthropic from "@anthropic-ai/sdk";
+import { mediaComplete } from "./mediaLlm";
 import { getSettings } from "./store";
 import { Word } from "./transcribe";
 import { EditEvent, EditPlan, DEFAULT_CAPTION_STYLE } from "./editPlan";
@@ -126,28 +126,20 @@ export async function planFromAssetPack(
     .join("\n");
 
   const list = words.map((w, i) => `${i}:${w.word}`).join(" ");
-  const client = new Anthropic({ apiKey: key });
-  const response = await client.messages.create({
+  const response = await mediaComplete({
     model: MODEL,
-    max_tokens: 8000,
+    maxTokens: 8000,
+    stage: "Creative Director",
     system: SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content:
-          `История: ${research.canonicalEvent}\n` +
-          (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
-          `\nМедиатека:\n${catalogue}\n\n` +
-          `Транскрипция (индекс:слово), длительность ${duration.toFixed(1)} сек:\n${list}`,
-      },
-    ],
+    user:
+      `История: ${research.canonicalEvent}\n` +
+      (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
+      `\nМедиатека:\n${catalogue}\n\n` +
+      `Транскрипция (индекс:слово), длительность ${duration.toFixed(1)} сек:\n${list}`,
   });
   addCost({ editPlannerCalls: 1 });
 
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
+  const raw = response
     .replace(/^```(json)?/m, "")
     .replace(/```$/m, "")
     .trim();

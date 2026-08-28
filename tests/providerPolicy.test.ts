@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assertProvider, ProviderPolicyError, resetPolicyViolations, policyViolations, isAllowed } from "../lib/providerPolicy";
-import { resetLedger, recordTokens, recordFlat } from "../lib/costLedger";
+import { resetLedger, recordTokens, recordFlat, assertBudget, CostLimitError } from "../lib/costLedger";
 import { formatCostReport } from "../lib/costReport";
 
 test("1: чужой провайдер на чужой стадии запрещён и запоминается", () => {
@@ -55,4 +55,27 @@ test("3: отчёт отвечает на три вопроса об изоля�
   assert.match(report, /current run calls: 1/, "вызовы OpenRouter в этом прогоне видны отдельно");
   assert.match(report, /yt-dlp[\s\S]{0,30}cost:\s+\$0/, "yt-dlp бесплатен");
   assert.match(report, /FFmpeg[\s\S]{0,30}cost:\s+\$0/, "FFmpeg бесплатен");
+});
+
+test("4: жёсткий лимит останавливает трату ДО запроса", () => {
+  resetLedger();
+  process.env.MEDIA_JOB_HARD_LIMIT = "1";
+  process.env.MEDIA_JOB_MAX_COST_USD = "1.00";
+  try {
+    // пока лимит не выбран, запросы разрешены
+    assert.doesNotThrow(() => assertBudget("Script Beats"));
+    recordTokens({ stage: "Script Beats", provider: "anthropic", model: "claude-sonnet-5", inputTokens: 10, providerReportedCost: 0.6 });
+    assert.doesNotThrow(() => assertBudget("Beat Matching"), "0.60$ из 1.00$ — работаем дальше");
+
+    // как только предел достигнут, следующий платный запрос не отправляется
+    recordTokens({ stage: "Vision Verification", provider: "anthropic", model: "claude-sonnet-5", inputTokens: 10, providerReportedCost: 0.45 });
+    assert.throws(() => assertBudget("Beat Matching"), CostLimitError, "1.05$ > 1.00$ — стоп до отправки");
+
+    // историческая обложка в лимит не входит: она оплачена в прошлом запуске
+    const report = formatCostReport({ title: "T" });
+    assert.ok(!report.includes("PROVIDER POLICY VIOLATION"), "лимит — это не нарушение политики");
+  } finally {
+    delete process.env.MEDIA_JOB_HARD_LIMIT;
+    delete process.env.MEDIA_JOB_MAX_COST_USD;
+  }
 });

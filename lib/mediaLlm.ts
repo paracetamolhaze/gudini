@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
-import { recordTokens, CostStage, CostProvider } from "./costLedger";
+import { recordTokens, assertBudget, CostStage, CostProvider } from "./costLedger";
 import { assertProvider, ProviderPolicyError } from "./providerPolicy";
 
 /**
@@ -56,6 +56,7 @@ function anthropicKeyOrFail(stage: CostStage): string {
 /** Списание по фактическому расходу токенов Anthropic. */
 function recordAnthropic(stage: CostStage, model: string, response: any, failed = false, retry = false): void {
   assertProvider(stage, "anthropic");
+  assertBudget(stage);
   const u = response?.usage ?? {};
   recordTokens({
     stage,
@@ -111,6 +112,7 @@ async function completeOnce(
   // Политика проверяется ДО обращения к API: запрещённая пара не должна
   // успеть потратить деньги, а потом быть замеченной при учёте.
   assertProvider(stage, "anthropic");
+  assertBudget(stage);
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({
@@ -161,6 +163,7 @@ async function visionOnce(
   const model = modelOverride || process.env.MEDIA_VISION_MODEL || mediaModel();
   mediaProvider();
   assertProvider(stage, "anthropic");
+  assertBudget(stage);
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({

@@ -1,5 +1,5 @@
 import { addCost } from "./pipelineCost";
-import { recordRequest } from "./costLedger";
+import { recordRequest, assertBudget } from "./costLedger";
 import { assertProvider } from "./providerPolicy";
 
 /**
@@ -38,6 +38,7 @@ async function call(endpoint: string, params: Record<string, string>): Promise<a
   // Brave обслуживает только поиск. Проверяем ДО обращения к сети: запрещённая
   // пара не должна успеть потратить запрос, а потом обнаружиться в учёте.
   assertProvider("Media Research", "brave");
+  assertBudget("Media Research");
   const token = key();
   if (!token) return null;
   try {

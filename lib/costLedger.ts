@@ -292,8 +292,11 @@ export function summarize(): CostSummary {
 }
 
 /**
- * Порог предупреждения. Ломать production он не должен, пока жёсткий лимит
- * не включён явно: иначе один дорогой ролик остановит работу без спроса.
+ * Порог предупреждения и предел расходов задачи.
+ *
+ * Предупреждение само по себе production не ломает. Жёсткий предел включается
+ * явно (MEDIA_JOB_HARD_LIMIT=1) и останавливает НОВЫЕ платные запросы до того,
+ * как они отправлены: узнать о перерасходе постфактум — значит уже заплатить.
  */
 export function costGuard(): { warn: number; max: number; hardLimit: boolean } {
   return {
@@ -301,6 +304,32 @@ export function costGuard(): { warn: number; max: number; hardLimit: boolean } {
     max: Number(process.env.MEDIA_JOB_MAX_COST_USD ?? 2.0),
     hardLimit: process.env.MEDIA_JOB_HARD_LIMIT === "1",
   };
+}
+
+/** Задача остановлена лимитом расходов. */
+export class CostLimitError extends Error {
+  constructor(readonly spent: number, readonly limit: number, readonly stage: CostStage) {
+    super(
+      `Лимит расходов задачи исчерпан: потрачено ${spent.toFixed(4)}$ при пределе ${limit}$. ` +
+        `Стадия «${stage}» остановлена ДО отправки платного запроса. ` +
+        "Поднимите MEDIA_JOB_MAX_COST_USD или снимите MEDIA_JOB_HARD_LIMIT.",
+    );
+    this.name = "CostLimitError";
+  }
+}
+
+/**
+ * Разрешение на новый платный запрос. Вызывается ПЕРЕД обращением к провайдеру:
+ * лимит имеет смысл, только если он останавливает трату, а не фиксирует её.
+ *
+ * Историческая стоимость (например, уже сделанная обложка) в лимит не входит:
+ * она относится к прошлым запускам и повторно не тратится.
+ */
+export function assertBudget(stage: CostStage): void {
+  const { max, hardLimit } = costGuard();
+  if (!hardLimit || !Number.isFinite(max) || max <= 0) return;
+  const spent = summarize().totals.variableApiCost;
+  if (spent >= max) throw new CostLimitError(spent, max, stage);
 }
 
 /** Проверяет накопленную сумму и называет стадию-виновника. Решение принимает вызывающий. */

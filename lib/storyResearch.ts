@@ -37,9 +37,21 @@ export type StorySource = {
   type: SourceType;
 };
 
+/**
+ * Тип истории. Конвейер был написан под новости (событие, участники, год,
+ * источники), и на теме про кино он отсекал постеры как «заставку», кадры из
+ * фильма как «постановку», а фан-сайты — за «сущность не упомянута». Тип задаёт
+ * правила проверки источников и кадров, формулировку потребностей и запросов.
+ */
+export type StoryKind = "NEWS_EVENT" | "ENTERTAINMENT" | "EXPLAINER" | "PERSON" | "PRODUCT" | "HISTORY" | "OTHER";
+
 export type StoryResearchPack = {
   storyId: string;
   topic: string;
+  /** тип истории; отсутствует у старых пакетов — тогда считается NEWS_EVENT */
+  kind?: StoryKind;
+  /** памятка для поиска и отбора визуала на английском: какие кадры и источники уместны */
+  visualGuide?: string;
   /** ссылка, которую дал пользователь, — главный источник истины */
   originUrl?: string;
   canonicalEvent: string;
@@ -57,11 +69,20 @@ export type StoryResearchPack = {
 
 const MODEL = "claude-sonnet-5";
 
-const RESEARCH_SYSTEM = `Ты — ресёрчер новостей для короткого документального видео.
+const RESEARCH_SYSTEM = `Ты — ресёрчер для короткого видео. Тема может быть любой: новостное событие,
+фильм или сериал, продукт, человек, историческая история, объяснение явления.
 Тебе дают тему (иногда ссылку) и результаты поиска: заголовки, описания и адреса публикаций.
 
 Задача — установить ОДНУ конкретную историю и её факты, опираясь ТОЛЬКО на переданные результаты.
 Не добавляй факты из своих знаний: если чего-то нет в источниках, этого нет в пакете.
+
+kind — тип истории: NEWS_EVENT (реальное событие с датой), ENTERTAINMENT (кино, сериал, игра,
+музыка, франшиза), EXPLAINER (объяснение: как устроено, в чём разница), PERSON (биография),
+PRODUCT (продукт, компания), HISTORY (историческая история), OTHER.
+visualGuide — 1–2 предложения на английском для поиска картинок и видео: какие кадры уместны
+и откуда их брать. Для кино это официальные постеры, кадры и стопы из трейлеров, промо-фото
+актёров, фан-сайты и IMDb; для новостей — репортажи и фото с места; для объяснения —
+схемы, скриншоты интерфейса, продукт крупным планом.
 
 canonicalEvent — одно предложение на английском, максимально конкретно: кто, что, где, когда.
 Это описание потом станет поисковым запросом для видео, поэтому в нём должны быть имена,
@@ -74,7 +95,7 @@ facts — 5–12 проверяемых утверждений, у каждог�
 Факт без источника не включай.
 
 Ответь СТРОГО валидным JSON:
-{"canonicalEvent":"...","summary":"...","eventDate":"2022-12-04","eventYear":2022,"location":"...",
+{"kind":"NEWS_EVENT","visualGuide":"...","canonicalEvent":"...","summary":"...","eventDate":"2022-12-04","eventYear":2022,"location":"...",
 "language":"en","entities":[{"name":"...","type":"PERSON","aliases":["..."]}],
 "facts":[{"text":"...","sourceUrls":["https://..."]}]}`;
 
@@ -160,6 +181,9 @@ ${list}`,
   try {
     const json = JSON.parse(raw);
     const storyId = shortId(`${topic}|${originUrl ?? ""}|${Date.now()}`);
+    const KINDS: StoryKind[] = ["NEWS_EVENT", "ENTERTAINMENT", "EXPLAINER", "PERSON", "PRODUCT", "HISTORY", "OTHER"];
+    const kind: StoryKind = KINDS.includes(json.kind) ? json.kind : "OTHER";
+    const visualGuide = typeof json.visualGuide === "string" ? json.visualGuide.trim().slice(0, 400) : undefined;
 
     const entities: StoryEntity[] = (Array.isArray(json.entities) ? json.entities : [])
       .map((e: any) => ({
@@ -205,6 +229,8 @@ ${list}`,
     return {
       storyId,
       topic,
+      kind,
+      visualGuide,
       originUrl,
       canonicalEvent,
       summary: String(json.summary ?? "").trim(),

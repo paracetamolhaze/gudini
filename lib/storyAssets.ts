@@ -170,6 +170,20 @@ export function verifySource(
     const names = [e.name, ...e.aliases].map(norm).filter((n) => n.length > 2);
     if (names.some((n) => hay.includes(n))) matched.push(e.id);
   }
+  // Требование «сущность упомянута» и проверки года/турнира — про новостное событие,
+  // где чужой репортаж с тем же героем — это другая история. Для кино, объяснений,
+  // продуктов и биографий источник достаточно относится к теме: совпадает любая
+  // сущность или значимое слово темы; год и турнир не проверяются.
+  const news = (research.kind ?? "NEWS_EVENT") === "NEWS_EVENT";
+  if (!news) {
+    const topicWords = norm(research.topic).split(/\s+/).filter((w) => w.length >= 4);
+    const topical = matched.length > 0 || topicWords.some((w) => hay.includes(w));
+    if (!topical) {
+      reasons.push("источник не относится к теме");
+      return { ok: false, entityIds: [], reasons };
+    }
+    return { ok: true, entityIds: matched, reasons };
+  }
   if (!matched.length) {
     reasons.push("ни одна сущность истории не упомянута в источнике");
     return { ok: false, entityIds: [], reasons };

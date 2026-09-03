@@ -315,18 +315,23 @@ export type QcOptions = {
   textIsTheSubject?: boolean;
   /** блок излагает факт: постановка и объяснялка для него не годятся */
   factualBeat?: boolean;
+  /**
+   * История не новостная (кино, объяснение, продукт): постеры, титульные карточки
+   * и снятые сцены — это и есть материал, а не подделка съёмки события.
+   */
+  staged?: boolean;
 };
 
 export function qcReject(an: AssetAnalysis, opts: QcOptions = {}): string | null {
   if (an.isScreenshot) return "скриншот страницы, а не съёмка";
   if (an.hasChannelPromo) return "призыв канала в кадре (SUBSCRIBE / THANKS FOR WATCHING)";
-  if (an.isTitleOrOutroCard) return "заставка или финальная карточка, а не съёмка";
+  if (an.isTitleOrOutroCard && !opts.staged) return "заставка или финальная карточка, а не съёмка";
   if (an.hasPlayerOrSocialUi) return "интерфейс плеера или соцсети в кадре";
   if (an.hasFaceOverlay) return "реакция: лицо комментатора поверх чужого материала";
   if (an.hasLargeWatermark) return "крупный водяной знак";
   if (an.hasLargeText && !opts.textIsTheSubject) return "крупный вшитый текст поверх кадра";
-  if (opts.factualBeat && an.isReenactmentOrSkit) return "постановка или скетч вместо реальной съёмки";
-  if (opts.factualBeat && an.isStudioExplainer) return "объяснялка в студии вместо съёмки события";
+  if (opts.factualBeat && !opts.staged && an.isReenactmentOrSkit) return "постановка или скетч вместо реальной съёмки";
+  if (opts.factualBeat && !opts.staged && an.isStudioExplainer) return "объяснялка в студии вместо съёмки события";
   // Оформление поверх кадра модель описывает словами, а не флагом: в готовый ролик
   // попал стоп-кадр «medical staff … with decorative frame overlay» — рамка-виньетка
   // из чужой нарезки. Такое описание — отказ.

@@ -52,8 +52,11 @@ const BEATS_SYSTEM = `Ты — режиссёр монтажа. Тебе даю�
   CONTEXT — обстановка истории (стадион, команда, трибуны),
   GENERAL — общее понятие, годится обычный сток,
   NONE — визуал не нужен (хук, личная реакция, призыв);
-- visualDescription: одно предложение на английском — что должно быть в кадре;
+- visualDescription: одно предложение на английском — что должно быть в кадре. Формулируй под
+  тип истории и памятку visualGuide: для кино — «official still of Doctor Doom from the
+  Avengers: Doomsday trailer», «Avengers: Endgame poster», а не описание съёмки события;
 - preferredMedia: VIDEO для действий и движения, IMAGE для человека или статичного факта;
+  для кино, объяснений и продуктов почти всегда IMAGE — готовых картинок много, видео дороже;
 - importance: HIGH для центральных моментов истории, MEDIUM для поддерживающих, LOW для проходных.
 
 Ответь СТРОГО валидным JSON:
@@ -142,6 +145,8 @@ export async function buildScriptBeats(
     stage: "Script Beats",
     user:
       `История: ${research.canonicalEvent}\n` +
+      `Тип истории: ${research.kind ?? "NEWS_EVENT"}\n` +
+      (research.visualGuide ? `Памятка по визуалу: ${research.visualGuide}\n` : "") +
       (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
       `Участники: ${research.entities.map((e) => e.name).join(", ")}\n\n` +
       `Факты:\n${facts}\n\nТекст озвучки:\n${script}`,

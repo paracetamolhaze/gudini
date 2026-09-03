@@ -96,3 +96,30 @@ test("5: неудачные и повторные вызовы попадают 
   assert.equal(Number(s.totals.failedOrRetryCost.toFixed(4)), 0.02);
   assert.equal(Number(s.totals.variableApiCost.toFixed(4)), 0.02, "их стоимость входит в итог, иначе цифра занижена");
 });
+
+test("Тип истории: для кино постер и снятая сцена — материал, источник проверяется по теме", () => {
+  // постер и постановка отсекаются только для новостей
+  assert.match(String(qcReject(frame({ isTitleOrOutroCard: true }), { factualBeat: true })), /заставка/);
+  assert.equal(qcReject(frame({ isTitleOrOutroCard: true }), { factualBeat: true, staged: true }), null);
+  assert.match(String(qcReject(frame({ isReenactmentOrSkit: true }), { factualBeat: true })), /постановка/);
+  assert.equal(qcReject(frame({ isReenactmentOrSkit: true }), { factualBeat: true, staged: true }), null);
+  // призыв канала — мусор при любом типе
+  assert.match(String(qcReject(frame({ hasChannelPromo: true }), { factualBeat: true, staged: true })), /призыв канала/);
+
+  const movie: any = {
+    ...research,
+    topic: "мстители судный день",
+    kind: "ENTERTAINMENT",
+    eventYear: 2026,
+    entities: [{ id: "m1", name: "Avengers: Doomsday", type: "EVENT", aliases: ["Мстители: Судный день"] }],
+  };
+  // фан-сайт с кадром по теме, сущность не названа, год другой — для кино это нормально
+  const fan = verifySource({ title: "Doctor Doom first look 2019 concept", description: "мстители судный день кадр", sourceUrl: "https://fan.site/doom" }, movie);
+  assert.equal(fan.ok, true, fan.reasons.join("; "));
+  // страница вообще не о теме — отказ
+  const off = verifySource({ title: "Best pasta recipes", description: "dinner ideas", sourceUrl: "https://food.site/pasta" }, movie);
+  assert.equal(off.ok, false);
+  // для новостей правило прежнее: сущность обязана быть названа
+  const news: any = { ...movie, kind: "NEWS_EVENT" };
+  assert.equal(verifySource({ title: "Some article", description: "about a film premiere", sourceUrl: "https://x/y" }, news).ok, false);
+});

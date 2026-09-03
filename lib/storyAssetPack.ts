@@ -217,6 +217,8 @@ export function packFingerprint(
     entities: research.entities.map((e) => e.name).sort(),
     // блоки сценария и план медиа-исследования
     beats: beats.map((b) => `${b.id}:${b.visualNeed}`),
+    // тип истории меняет правила отбора: пакет, собранный «как для новостей», пересобирается
+    kind: research.kind ?? "NEWS_EVENT",
     needs: needs.map((n) => `${n.beatId}:${n.intent}:${n.preferredMedia}`).sort(),
     // версии проверок: их ужесточение делает уже собранный пакет невалидным
     verificationVersion: PACK_VERSION,
@@ -311,6 +313,15 @@ function beatQueries(r: StoryResearchPack, need: MediaResearchNeed): string[] {
   const year = r.eventYear ? String(r.eventYear) : "";
   const ents = need.entities.length ? need.entities.join(" ") : r.entities[0]?.name ?? "";
   const event = r.entities.find((e) => e.type === "EVENT")?.name ?? "";
+  if ((r.kind ?? "NEWS_EVENT") !== "NEWS_EVENT") {
+    // не новости: год и «событие» не помогают, помогает название темы и то, что в кадре
+    const title = event || r.entities[0]?.name || r.topic;
+    return [
+      [need.visualDescription, title].filter(Boolean).join(" ").slice(0, 120),
+      [title, ents !== title ? ents : "", need.visualDescription.split(" ").slice(0, 6).join(" ")].filter(Boolean).join(" ").slice(0, 120),
+      [need.visualDescription, "official still poster"].join(" ").slice(0, 120),
+    ].filter((q) => q.trim().length > 6);
+  }
   return [
     [ents, need.visualDescription].filter(Boolean).join(" ").slice(0, 120),
     [ents, need.visualDescription.split(" ").slice(0, 5).join(" "), year].filter(Boolean).join(" "),
@@ -349,11 +360,12 @@ export type WindowDecision = {
 export function segmentWindowDecision(
   analyses: (import("./brollRelevance").AssetAnalysis | null)[],
   windowSec = SEGMENT_WINDOW,
+  staged = false,
 ): WindowDecision {
   const points = WINDOW_OFFSETS.map((frac, i) => ({
     offsetFrac: frac,
     atSec: Number((windowSec * frac).toFixed(2)),
-    verdict: analyses[i] ? qcReject(analyses[i]!, { factualBeat: true }) : "кадр не описан",
+    verdict: analyses[i] ? qcReject(analyses[i]!, { factualBeat: true, staged }) : "кадр не описан",
   }));
 
   let cleanParts = 0;
@@ -446,6 +458,7 @@ export async function cutSegments(
   videoId: string,
   wanted: number,
   needs: MediaResearchNeed[] = [],
+  staged = false,
 ): Promise<{ assets: Omit<PackAsset, "compatibleBeatIds" | "relatedFactIds" | "role">[]; duration: number }> {
   let duration = 0;
   if (typeof source === "string") {
@@ -533,7 +546,7 @@ export async function cutSegments(
     if (!parts.length) continue;
 
     const at = parts[0].sh.at;
-    const decision = segmentWindowDecision(parts.map((x) => x.an ?? null), WINDOW);
+    const decision = segmentWindowDecision(parts.map((x) => x.an ?? null), WINDOW, staged);
     if (decision.decision === "REJECT") {
       countQcReason(decision.reason);
       continue;
@@ -632,10 +645,11 @@ const MATCH_SYSTEM = `Ты — ассистент монтажёра. Тебе �
 Один материал может подходить НЕСКОЛЬКИМ блокам — так и укажи, не выбирай один.
 Материал не «занимается» блоком навсегда: расстановкой займётся режиссёр.
 
-ВАЖНО О ПРОИСХОЖДЕНИИ: все материалы уже прошли проверку источника — они взяты из
-репортажей и фото ИМЕННО ЭТОГО события (участники, турнир и год совпали). Кадр
-стадиона, трибун, скамейки или команды здесь — это обстановка ЭТОГО матча, а не
-случайный сток. Поэтому для блока CONTEXT такой кадр — оценка 2 или 3, а не 1.
+ВАЖНО О ПРОИСХОЖДЕНИИ: все материалы уже прошли проверку источника — они относятся
+ИМЕННО К ЭТОЙ истории. Для новостного события кадр стадиона, трибун, скамейки или
+команды — это обстановка ЭТОГО матча, а не случайный сток; для фильма постер,
+кадр из трейлера или промо-фото актёра — это материал самого фильма. Поэтому для
+блока CONTEXT такой кадр — оценка 2 или 3, а не 1.
 Для блока ENTITY портрет или крупный план названного участника — оценка 3.
 
 Ставь 0, если на кадре другая команда, другие люди, другой инцидент или другой турнир.
@@ -816,6 +830,9 @@ export async function buildAssetPack(
 
   /** Сколько видео обрабатывается одновременно: загрузка и зрение — ожидание сети, не процессор. */
   const PARALLEL = 3;
+  /** не новости: постеры, титульные карточки и снятые сцены — материал, а не подделка */
+  const staged = (research.kind ?? "NEWS_EVENT") !== "NEWS_EVENT";
+  if (staged) console.log(`  тип истории: ${research.kind} — постеры и кадры из фильма допускаются, проверка источников по теме`);
   type VideoCand = { url: string; directUrl?: string };
   /**
    * Получить стоп-кадры из ролика: скачиваются только окна (--download-sections),
@@ -849,6 +866,7 @@ export async function buildAssetPack(
             vid,
             wanted,
             needs,
+            staged,
           );
           return { cut, method: got.method };
         } finally {
@@ -867,7 +885,7 @@ export async function buildAssetPack(
     stages.downloadOk++;
     if (yt) stages.ytDownloadOk++;
     try {
-      const cut = await cutSegments(raw, mediaDir, vid, wanted, needs);
+      const cut = await cutSegments(raw, mediaDir, vid, wanted, needs, staged);
       return { cut, method: got.method ?? "extractor" };
     } finally {
       try {
@@ -892,7 +910,7 @@ export async function buildAssetPack(
       if (!pr.ok) return null;
       // многочасовые трансляции и полные матчи для перебивок бесполезны
       if (pr.durationSec && pr.durationSec > MAX_SOURCE_SEC) {
-        console.log(`  пропуск: длительность ${Math.round(pr.durationSec / 60)} мин — это не новостной сюжет`);
+        console.log(`  пропуск: длительность ${Math.round(pr.durationSec / 60)} мин — слишком длинно для перебивок`);
         return null;
       }
       durationSec = pr.durationSec;
@@ -1045,7 +1063,7 @@ export async function buildAssetPack(
             addCost({ visionCalls: 1 });
             if (!an) continue;
             // блок излагает факт — постановке и объяснялке здесь не место
-            const bad = qcReject(an, { factualBeat: need.intent === "EXACT_EVENT" || need.intent === "ENTITY" });
+            const bad = qcReject(an, { factualBeat: need.intent === "EXACT_EVENT" || need.intent === "ENTITY", staged });
             if (bad) {
               countQcReason(bad);
               continue;

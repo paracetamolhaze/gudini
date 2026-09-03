@@ -3,6 +3,7 @@ import path from "path";
 import { Readable } from "stream";
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, projectDir, updateProject } from "@/lib/store";
+import { freeBytes } from "@/lib/diskStatus";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -11,16 +12,6 @@ const ALLOWED = [".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"];
 function safeExt(name: string): string {
   const ext = (path.extname(name || "").toLowerCase() || ".mp4").replace(/[^.a-z0-9]/g, "");
   return ALLOWED.includes(ext) ? ext : ".mp4";
-}
-
-/** Свободное место на диске с данными сайта (байты); -1 — узнать не удалось. */
-function freeBytes(dir: string): number {
-  try {
-    const st = fs.statfsSync(dir);
-    return Number(st.bavail) * Number(st.bsize);
-  } catch {
-    return -1;
-  }
 }
 
 /**

@@ -170,6 +170,7 @@ export async function processProject(id: string): Promise<void> {
         [
           "-ss", String(segments[0].start), "-t", String(segments[0].end - segments[0].start),
           "-i", raw,
+          "-vf", CLEAN_SCALE,
           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
           "-c:a", "aac", "-b:a", "192k",
           "clean.mp4",
@@ -395,6 +396,9 @@ export async function makeCover(
 }
 
 /** Склейка сегментов речи в чистый исходник; на каждой границе — аудиофейды 15 мс (без щелчков). */
+/** Геометрия чистого файла: та же, что у выхода; для 1080p-исходника — без изменений. */
+const CLEAN_SCALE = "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920";
+
 export async function buildCleanSource(
   dir: string,
   raw: string,
@@ -412,8 +416,13 @@ export async function buildCleanSource(
     );
     labels.push(`[v${i}][a${i}]`);
   });
+  // Чистый файл сразу в 1080×1920: выход всё равно такой, а 4K-исходник иначе
+  // перекодировался бы в 4K (4 минуты, 870 МБ) и рендер читал бы 4K-кадры.
+  // Уменьшение то же, что в рендере, только на шаг раньше; по пикселям результат
+  // не отличается. Исходник raw.mp4 остаётся нетронутым.
   const graph =
-    parts.join(";") + `;${labels.join("")}concat=n=${segments.length}:v=1:a=1[v][a]`;
+    parts.join(";") +
+    `;${labels.join("")}concat=n=${segments.length}:v=1:a=1[vc][a];[vc]${CLEAN_SCALE}[v]`;
 
   const total = segments.reduce((sum, s) => sum + (s.end - s.start), 0);
   await runFfmpeg(

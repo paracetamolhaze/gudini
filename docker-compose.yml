@@ -1,8 +1,31 @@
-# Воркер монтажа Гудини для Docker Desktop.
-# Запуск один раз: docker compose up -d --build
-# Дальше контейнер gudini-worker виден в Docker Desktop, стартует сам вместе с Docker
-# и управляется кнопками ▶/■. Настройки берутся из .env (GUDINI_URL, GUDINI_PASSWORD, ключи ИИ).
+# Гудини целиком на этом компьютере: сайт + воркер монтажа + HTTPS через DuckDNS.
+#
+#   docker compose up -d --build                    # сайт и воркер; сайт на http://localhost:3000
+#   docker compose --profile public up -d --build   # плюс Caddy (HTTPS) и обновление DuckDNS
+#
+# Настройки — в .env: GUDINI_PASSWORD (пароль входа), ключи ИИ, для публичного доступа —
+# DOMAIN (xxx.duckdns.org), DUCKDNS_SUBDOMAIN (xxx), DUCKDNS_TOKEN, SITE_URL (https://xxx.duckdns.org).
+# Данные сайта (проекты, загрузки, готовые ролики) живут в томе gudini-site-data,
+# данные воркера — в gudini-worker-data. Лимита на объём нет: это ваш диск.
 services:
+  gudini-site:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gudini-site
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3000"
+      SITE_PASSWORD: ${GUDINI_PASSWORD:-${SITE_PASSWORD:-}}
+      # адрес, по которому сайт виден снаружи: нужен OAuth-коллбэкам и Instagram Reels
+      PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
+    ports:
+      # только с этого компьютера; из интернета — через caddy
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - gudini-site-data:/app/data
+
   gudini-worker:
     build:
       context: .
@@ -10,8 +33,46 @@ services:
     container_name: gudini-worker
     restart: unless-stopped
     env_file: .env
+    environment:
+      # воркер ходит на сайт по внутренней сети Docker, исходник не гоняется через интернет
+      GUDINI_URL: http://gudini-site:3000
+    depends_on:
+      - gudini-site
     volumes:
       - gudini-worker-data:/app/data
 
+  # --- публичный HTTPS: включается профилем `public`, когда домен и проброс порта готовы ---
+  caddy:
+    profiles: ["public"]
+    build: ./deploy/caddy
+    container_name: gudini-caddy
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-}
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - gudini-site
+
+  duckdns:
+    profiles: ["public"]
+    image: lscr.io/linuxserver/duckdns:latest
+    container_name: gudini-duckdns
+    restart: unless-stopped
+    environment:
+      SUBDOMAINS: ${DUCKDNS_SUBDOMAIN:-}
+      TOKEN: ${DUCKDNS_TOKEN:-}
+      UPDATE_IP: ipv4
+      LOG_FILE: "false"
+
 volumes:
+  gudini-site-data:
   gudini-worker-data:
+  caddy-data:
+  caddy-config:

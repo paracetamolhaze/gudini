@@ -1,0 +1,10 @@
+{$DOMAIN} {
+	encode zstd gzip
+	# сайт внутри сети Docker; тела запросов не ограничены — исходники на гигабайт проходят
+	reverse_proxy gudini-site:3000 {
+		flush_interval -1
+	}
+	tls {
+		dns duckdns {$DUCKDNS_TOKEN}
+	}
+}

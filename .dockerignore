@@ -8,3 +8,13 @@ caddy.exe
 Caddyfile
 docs
 README.md
+
+# артефакты диагностики в корне — в образ не нужны
+/*.jpg
+/*.jpeg
+/*.png
+/*.mp4
+/*.wav
+/*.log
+/_pack*
+/_*.jpg

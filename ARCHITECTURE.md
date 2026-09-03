@@ -383,6 +383,35 @@ Punch-in, каллауты     отключены намеренно
 
 ---
 
+## Запуск целиком на своём компьютере (Docker)
+
+Railway с томом 500 МБ не вмещает исходник на гигабайт; переезд сайта в Docker
+рядом с воркером снимает лимит — диск свой. `docker-compose.yml` поднимает:
+
+| Сервис | Что | Данные |
+|---|---|---|
+| `gudini-site` | сайт (Next.js), `http://localhost:3000` только с этого компьютера | том `gudini-site-data` (`/app/data`: проекты, загрузки, ролики) |
+| `gudini-worker` | монтаж; ходит на сайт по внутренней сети `http://gudini-site:3000` | том `gudini-worker-data` |
+| `caddy` (профиль `public`) | HTTPS для домена DuckDNS, сертификат Let's Encrypt через DNS-запись | `caddy-data` |
+| `duckdns` (профиль `public`) | обновляет IP домена при смене адреса провайдером | — |
+
+Публичный HTTPS нужен камере в браузере телефона, OAuth-коллбэкам TikTok/YouTube/Meta
+и Instagram Reels (скачивает ролик по ссылке). Для него: в `.env` — `DOMAIN`,
+`DUCKDNS_SUBDOMAIN`, `DUCKDNS_TOKEN`, `SITE_URL=https://…duckdns.org`; на роутере —
+проброс порта 443 (и 80) на этот компьютер; провайдер должен давать публичный IP
+(за CGNAT проброс не работает — тогда Tailscale Funnel). После смены адреса — новые
+Redirect URI в консолях TikTok, Google, Meta и повторное подключение аккаунтов.
+
+Перенос с Railway: список проектов экспортируется через `GET /api/projects` в
+`db.json`, файлы готовых проектов уже лежат в томе воркера; ключи — из `.env`.
+
+```bash
+docker compose up -d --build                    # сайт + воркер
+docker compose --profile public up -d --build   # + HTTPS, когда домен готов
+```
+
+---
+
 ## Полезные команды
 
 ```bash

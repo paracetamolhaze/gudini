@@ -21,7 +21,10 @@ import { applyScriptFormatting } from "./scriptFormat";
 import { attachScriptPunctuation } from "./scriptPunctuation";
 import { generateMeta } from "./ai";
 import { buildStoryAssetPack } from "./storyAssets";
-import { resetCost, writeCost } from "./pipelineCost";
+import { resetCost } from "./pipelineCost";
+import { resetLedger, writeLedger, summarize } from "./costLedger";
+import { formatCostReport } from "./costReport";
+import { buildStoryResearchPack } from "./storyResearch";
 import { generateCoverConcept } from "./cover";
 import { resolveHeadline } from "./coverHeadline";
 import { buildCover } from "./coverPipeline";
@@ -66,6 +69,7 @@ export async function processProject(id: string): Promise<void> {
   if (running.has(id)) return;
   running.add(id);
   resetCost();
+  resetLedger();
   try {
     const project = getProject(id);
     if (!project) throw new Error("Проект не найден");
@@ -205,11 +209,21 @@ export async function processProject(id: string): Promise<void> {
     // Отката на старый планировщик нет ни на одном шаге: молчаливая подмена монтажа
     // однажды уже дала ролик, собранный непонятно чем, и разбираться было дороже.
     if (montageV3()) {
-      const research = getProject(id)?.research;
+      let research = getProject(id)?.research;
       if (!research) {
-        throw new Error(
-          "Montage V3: у проекта нет исследования истории. Монтаж без проверенных фактов не собирается.",
-        );
+        // Сценарий написан обычной генерацией по теме, без исследования. Медиатека
+        // без фактов и источников не собирается, поэтому исследование строится здесь
+        // и сохраняется в проект — повторный монтаж его уже не оплачивает.
+        setStep(id, "Исследование истории", 24);
+        research = (await buildStoryResearchPack(project.topic, project.sourceUrl)) ?? undefined;
+        if (!research) {
+          throw new Error(
+            "Montage V3: исследование истории не построено (нет источников или ключа поиска). " +
+              "Монтаж без проверенных фактов не собирается.",
+          );
+        }
+        updateProject(id, { research });
+        console.log(`Исследование истории построено: сущностей ${research.entities.length}, фактов ${research.facts.length}`);
       }
       setStep(id, "Блоки сценария и медиатека", 26);
       const v3 = await runMontageV3({
@@ -265,13 +279,12 @@ export async function processProject(id: string): Promise<void> {
     ].filter((t) => t > 0.2 && t < effDur - 0.2);
     await selfCheck(dir, effDur, checkPoints);
 
-    const cost = writeCost(dir);
-    console.log(
-      `Стоимость прогона: brave(news ${cost.braveNewsRequests}/video ${cost.braveVideoRequests}/img ` +
-        `${cost.braveImageRequests}/web ${cost.braveWebRequests}), страниц ${cost.pageFetches}, ` +
-        `видео скачано ${cost.videoDownloads}, vision ${cost.visionCalls}, LLM ` +
-        `${cost.researchLlmCalls + cost.scriptLlmCalls + cost.speechCleanupCalls + cost.editPlannerCalls}`,
-    );
+    // Деньги: леджер реальных вызовов (модель, токены, цена) пишется в pipeline-cost.json
+    // и печатается в лог воркера. Старые счётчики не видели вызовов через mediaLlm и
+    // показывали «LLM 0» при реально оплаченной чистке речи.
+    writeLedger(dir);
+    console.log(formatCostReport({ title: "COST OF THIS RUN", includeHistoricalCover: true, dataDir: path.resolve(dir, "..", "..") }));
+    console.log(`Стоимость прогона (переменные API): $${summarize().totals.variableApiCost.toFixed(4)}`);
 
     updateProject(id, {
       processedVideo: "out.mp4",
@@ -286,6 +299,11 @@ export async function processProject(id: string): Promise<void> {
     updateProject(id, {
       processing: { state: "error", step: "Ошибка", progress: 0, error: String(e?.message ?? e) },
     });
+    // неудачный прогон тоже стоил денег — леджер сохраняется и печатается
+    try {
+      writeLedger(projectDir(id));
+      console.log(`Стоимость неудачного прогона (переменные API): $${summarize().totals.variableApiCost.toFixed(4)}`);
+    } catch {}
   } finally {
     running.delete(id);
   }

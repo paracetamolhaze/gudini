@@ -242,7 +242,15 @@ export async function fetchVideoSections(
 ): Promise<{ ok: true; files: SectionFile[]; method: "extractor-sections" } | { ok: false; reason: string }> {
   if (!sections.length) return { ok: false, reason: "нет окон" };
   if (!(await extractorPresent())) return { ok: false, reason: "экстрактор не установлен" };
-  const template = `${outPrefix}-%(section_number)s.%(ext)s`;
+  const dir = path.dirname(outPrefix);
+  const base = path.basename(outPrefix);
+  // %(section_number)s в этой версии yt-dlp для временных окон не заполняется (NA), и все
+  // окна писались в один файл. Имя строится из начала и конца окна, а файлы потом
+  // сопоставляются с окнами по числу в имени — формат числа не важен.
+  const template = `${outPrefix}-%(section_start)s-%(section_end)s.%(ext)s`;
+  const cleanup = () => {
+    for (const f of fs.readdirSync(dir)) if (f.startsWith(base + "-") && f.endsWith(".mp4")) fs.rmSync(path.join(dir, f), { force: true });
+  };
   try {
     await run(
       "yt-dlp",
@@ -262,18 +270,27 @@ export async function fetchVideoSections(
       ],
       { timeout: 360_000, maxBuffer: 8 * 1024 * 1024 },
     );
+    const produced = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith(base + "-") && f.endsWith(".mp4"))
+      .map((f) => {
+        const m = f.slice(base.length + 1, -4).match(/^([0-9.]+)-/);
+        return { file: path.join(dir, f), start: m ? Number(m[1]) : NaN };
+      })
+      .filter((x) => Number.isFinite(x.start) && fs.statSync(x.file).size >= 5_000);
     const files: SectionFile[] = [];
-    for (let n = 0; n < sections.length; n++) {
-      const file = `${outPrefix}-${n + 1}.mp4`;
-      if (!fs.existsSync(file) || fs.statSync(file).size < 5_000) {
-        for (const f of files) fs.rmSync(f.file, { force: true });
-        return { ok: false, reason: `окно ${n + 1} не скачалось` };
+    for (const sec of sections) {
+      const hit = produced.find((x) => Math.abs(x.start - sec.start) < 0.6 && !files.some((f) => f.file === x.file));
+      if (!hit) {
+        cleanup();
+        return { ok: false, reason: `окно ${sec.index} не скачалось (файлов ${produced.length} из ${sections.length})` };
       }
-      files.push({ index: sections[n].index, start: sections[n].start, end: sections[n].end, file });
+      files.push({ index: sec.index, start: sec.start, end: sec.end, file: hit.file });
     }
     addCost({ videoDownloads: 1 });
     return { ok: true, files, method: "extractor-sections" };
   } catch (e: any) {
+    cleanup();
     const msg = String(e?.stderr ?? e?.message ?? e);
     const reason = msg.split(/\r?\n/).filter((l) => /ERROR|WARNING/i.test(l)).join(" ").replace(/\s+/g, " ").trim().slice(0, 120) || msg.replace(/\s+/g, " ").slice(0, 120);
     return { ok: false, reason };

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "worker": "tsx worker/index.ts",
-    "test": "tsx --test tests/editPlan.test.ts tests/subtitles.test.ts tests/speechCleanup.test.ts tests/fallbacks.test.ts tests/brollRelevance.test.ts tests/coverLayout.test.ts tests/coverPrompt.test.ts tests/coverTypography.test.ts tests/coverQc.test.ts tests/coverHeadline.test.ts tests/montageSimplify.test.ts tests/brollWeb.test.ts tests/montageDynamics.test.ts tests/brollVideo.test.ts tests/storyPipeline.test.ts tests/assetPackV2.test.ts tests/montageV3.test.ts tests/mediaProvider.test.ts tests/qcAndCost.test.ts tests/sceneDiversity.test.ts tests/providerPolicy.test.ts tests/providerIsolation.test.ts tests/montageV3Production.test.ts tests/renderIntegrity.test.ts",
+    "test": "tsx --test tests/editPlan.test.ts tests/subtitles.test.ts tests/speechCleanup.test.ts tests/fallbacks.test.ts tests/brollRelevance.test.ts tests/coverLayout.test.ts tests/coverPrompt.test.ts tests/coverTypography.test.ts tests/coverQc.test.ts tests/coverHeadline.test.ts tests/montageSimplify.test.ts tests/brollWeb.test.ts tests/montageDynamics.test.ts tests/brollVideo.test.ts tests/storyPipeline.test.ts tests/assetPackV2.test.ts tests/montageV3.test.ts tests/mediaProvider.test.ts tests/qcAndCost.test.ts tests/sceneDiversity.test.ts tests/providerPolicy.test.ts tests/providerIsolation.test.ts tests/montageV3Production.test.ts tests/renderIntegrity.test.ts tests/montageRefine.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

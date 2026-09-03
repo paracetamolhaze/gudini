@@ -47,8 +47,11 @@ const SYNC: [RegExp, RegExp][] = [
 const FALLBACK_MIN_LEN = 8;
 
 const skeleton = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]/gu, "");
+/** Одна основа. Короткие слова (≤4 букв) — только точное совпадение: «мире» ≠ «мира». */
 function sameStem(a: string, b: string): boolean {
-  if (!a || !b || Math.abs(a.length - b.length) > 3) return false;
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) <= 4 || Math.abs(a.length - b.length) > 3) return false;
   let n = 0;
   while (n < a.length && n < b.length && a[n] === b[n]) n++;
   return n >= Math.max(3, Math.min(a.length, b.length) - 2);
@@ -61,14 +64,18 @@ export function beatStarts(beats: RefineBeat[], words: Word[]): (number | null)[
   return beats.map((b) => {
     const toks = String(b.text).split(/\s+/).map(skeleton).filter((t) => t.length >= 4).slice(0, 5);
     if (!toks.length) return null;
-    const heads = toks.slice(0, 2);
     const lim = Math.min(words.length, j + 80);
+    // сначала ищется первое значимое слово блока, и только если его нет — второе:
+    // иначе «мира» из второго блока цеплялось за «мире» в конце первого
     let hit = -1;
-    for (let k = j; k < lim && hit < 0; k++) {
-      if (!heads.some((t) => sameStem(sk[k], t))) continue;
-      let found = 0;
-      for (let m = k; m < Math.min(words.length, k + 8); m++) if (toks.some((t) => sameStem(sk[m], t))) found++;
-      if (found >= Math.min(2, toks.length)) hit = k;
+    for (const head of toks.slice(0, 2)) {
+      for (let k = j; k < lim && hit < 0; k++) {
+        if (!sameStem(sk[k], head)) continue;
+        let found = 0;
+        for (let m = k; m < Math.min(words.length, k + 8); m++) if (toks.some((t) => sameStem(sk[m], t))) found++;
+        if (found >= Math.min(2, toks.length)) hit = k;
+      }
+      if (hit >= 0) break;
     }
     if (hit < 0) return null;
     j = hit + 1;
@@ -118,7 +125,13 @@ export function refineMontage(args: {
   });
   if (!slots.length) return { plan: montage, slots, notes: [...notes, "ни один блок не найден в речи — план режиссёра оставлен как есть"] };
   for (let i = 0; i < slots.length; i++) slots[i].end = i + 1 < slots.length ? slots[i + 1].start : duration;
-  slots[0].start = FIRST_BY; // первая карточка — ровно к концу вступительного наезда
+  // первая карточка — ровно к концу вступительного наезда; если первый блок к этому
+  // моменту уже кончается, его отрезок отдаётся следующему
+  while (slots.length > 1 && slots[1].start < FIRST_BY + MIN) {
+    notes.push(`блок ${slots[0].beatId} кончается до ${FIRST_BY + MIN}с — отрезок отдан следующему`);
+    slots.splice(0, 1);
+  }
+  slots[0].start = FIRST_BY;
   // Короткий отрезок (после чистки речи «с поля на носилках» длится 1.5 с) не
   // исчезает, а занимает недостающее у соседа, если тот остаётся не короче минимума:
   // сначала у предыдущего (картинка встаёт чуть раньше слов — это естественно),
@@ -220,14 +233,31 @@ export function refineMontage(args: {
   // части длинных отрезков: сначала самые длинные; свои кандидаты (≥2, или ≥1 если
   // это выбор режиссёра либо отрезок длиннее FALLBACK_MIN_LEN), затем запасной пул
   const wasDirector = new Set(montage.events.map((e) => e.assetId));
-  for (const s of [...slots].sort((a, b) => b.end - b.start - (a.end - a.start))) {
+  const partsFor = (s: RefineSlot) => {
     const len = s.end - s.start;
-    let parts = len > MAX ? Math.max(2, Math.round(len / TYP)) : 1;
-    parts = Math.min(parts, Math.floor(len / MIN));
+    const parts = len > MAX ? Math.max(2, Math.round(len / TYP)) : 1;
+    return Math.min(parts, Math.floor(len / MIN));
+  };
+  const byLength = [...slots].sort((a, b) => b.end - b.start - (a.end - a.start));
+  // фаза A: каждый отрезок добирает части из СВОИХ кандидатов — прежде чем запасной
+  // пул длинного отрезка заберёт кадр, который соседу нужен как сильный кандидат
+  for (const s of byLength) {
+    const len = s.end - s.start;
     const chosen = chosenBySlot.get(s.beatId)!;
-    while (chosen.length < parts) {
+    while (chosen.length < partsFor(s)) {
       const own = ranked(s.beatId).find(({ a, s: sc }) => sc >= 2 || ((len > FALLBACK_MIN_LEN || wasDirector.has(a.id)) && sc >= 1))?.a;
-      const alt = own ?? (len > FALLBACK_MIN_LEN ? fallback(s.beatId)[0] : undefined);
+      if (!own) break;
+      used.add(own.id);
+      chosen.push(own);
+    }
+  }
+  // фаза B: только длинные отрезки — из запасного пула контекста
+  for (const s of byLength) {
+    const len = s.end - s.start;
+    if (len <= FALLBACK_MIN_LEN) continue;
+    const chosen = chosenBySlot.get(s.beatId)!;
+    while (chosen.length < partsFor(s)) {
+      const alt = fallback(s.beatId)[0];
       if (!alt) break;
       used.add(alt.id);
       chosen.push(alt);
@@ -250,12 +280,19 @@ export function refineMontage(args: {
     }
     return best;
   };
-  const quoteFor = (start: number, end: number) =>
-    words
-      .filter((w) => w.end > start && w.start < end)
-      .map((w) => w.word.replace(/[{}\\]/g, ""))
-      .slice(0, 12)
-      .join(" ");
+  // цитата — слова под вставкой; если часть легла в паузу и слов меньше двух,
+  // берутся ближайшие к её середине (валидатор требует дословную цитату речи)
+  const quoteFor = (start: number, end: number) => {
+    let inside = words.filter((w) => w.end > start && w.start < end);
+    if (inside.length < 2) {
+      const mid = (start + end) / 2;
+      inside = [...words]
+        .sort((a, b) => Math.abs((a.start + a.end) / 2 - mid) - Math.abs((b.start + b.end) / 2 - mid))
+        .slice(0, 3)
+        .sort((a, b) => a.start - b.start);
+    }
+    return inside.map((w) => w.word.replace(/[{}\\]/g, "")).slice(0, 12).join(" ");
+  };
   const syncScore = (spoken: string[], a: PackAsset) =>
     SYNC.reduce((n, [ru, en]) => n + (spoken.some((w) => ru.test(w)) && en.test(String(a.description)) ? 1 : 0), 0);
   const events: MontageEvent[] = [];

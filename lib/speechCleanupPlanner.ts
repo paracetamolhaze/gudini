@@ -67,9 +67,10 @@ export async function planSpeechCleanup(
   const raw = (
     await mediaComplete({
       system: CLEANUP_SYSTEM,
-      // план чистки на минуту речи — пара тысяч токенов; 16000 заставляли
-      // пессимистичную оценку бюджета блокировать дешёвый запрос
-      maxTokens: 6000,
+      // Модель отвечает длинно (на 200 слов речи — до 6000 токенов): при лимите
+      // 6000 ответ обрезался, JSON не разбирался, и план сводился к одним обрывам.
+      // Лимит прежний; оценка бюджета по нему пессимистична — это осознанно.
+      maxTokens: 16000,
       stage: "Speech Cleanup",
       user:
         (script ? `Оригинальный сценарий:\n${script}\n\n` : "Оригинального сценария нет.\n\n") +
@@ -79,10 +80,27 @@ export async function planSpeechCleanup(
     .replace(/^```(json)?/m, "")
     .replace(/```$/m, "")
     .trim();
+  const actions = parseCleanupResponse(raw);
+  if (!actions) console.warn(`Speech Cleanup: ответ модели не разобран (${raw.length} символов): ${raw.slice(0, 400)}`);
+  return actions;
+}
+
+/**
+ * Разбор ответа: сначала как целый JSON; если он обрезан или обёрнут в текст —
+ * действия вытаскиваются по одному объекту. Обрезанный ответ раньше означал
+ * «плана нет», и ролик уходил с невырезанными дублями.
+ */
+export function parseCleanupResponse(raw: string): RawCleanupAction[] | null {
+  const text = raw.replace(/^```(json)?/m, "").replace(/```$/m, "").trim();
   try {
-    const json = JSON.parse(raw);
-    return Array.isArray(json.actions) ? json.actions : null;
-  } catch {
-    return null;
+    const json = JSON.parse(text);
+    if (Array.isArray(json?.actions)) return json.actions;
+  } catch {}
+  const salvaged: RawCleanupAction[] = [];
+  for (const m of text.matchAll(/\{[^{}]*"type"\s*:\s*"(REMOVE_FRAGMENT|SHORTEN_PAUSE)"[^{}]*\}/g)) {
+    try {
+      salvaged.push(JSON.parse(m[0]));
+    } catch {}
   }
+  return salvaged.length ? salvaged : null;
 }

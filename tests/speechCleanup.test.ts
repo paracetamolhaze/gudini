@@ -11,6 +11,7 @@ import {
   cleanToRaw,
 } from "../lib/speechCleanupPlan";
 import { Word } from "../lib/transcribe";
+import { parseCleanupResponse } from "../lib/speechCleanupPlanner";
 
 function makeWords(n: number, wordDur = 0.4): Word[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -306,4 +307,16 @@ test("Cleanup: карта чистого времени в сырое по се�
   assert.equal(cleanToRaw(8, segs), 15, "граница сегмента — это начало следующего");
   assert.equal(cleanToRaw(9, segs), 16);
   assert.equal(cleanToRaw(99, segs), 20);
+});
+
+test("Cleanup: обрезанный или обёрнутый в текст ответ модели не теряет действия", () => {
+  const full = '{"actions":[{"type":"REMOVE_FRAGMENT","fromWord":1,"toWord":2,"reason":"FILLER","confidence":0.9}]}';
+  assert.equal(parseCleanupResponse(full)!.length, 1);
+  const truncated =
+    'Вот план:\n{"actions":[{"type":"REMOVE_FRAGMENT","fromWord":1,"toWord":2,"reason":"FALSE_START","confidence":0.9},' +
+    '{"type":"SHORTEN_PAUSE","silenceIndex":3,"verdict":"UNNECESSARY","confidence":0.85},{"type":"REMOVE_FRAG';
+  const got = parseCleanupResponse(truncated)!;
+  assert.equal(got.length, 2, "два целых действия спасены, обрезанное отброшено");
+  assert.equal(got[1].silenceIndex, 3);
+  assert.equal(parseCleanupResponse("ничего похожего на план"), null);
 });

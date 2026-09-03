@@ -128,9 +128,15 @@ async function runJob(id: string): Promise<void> {
     project: Project;
   };
 
-  // локальная копия проекта для конвейера
+  // Локальная копия проекта для конвейера. Исследование истории и блоки сценария
+  // живут у воркера: если сайт их не прислал (старый сайт или проект без них),
+  // сохранённые локально остаются — иначе повторный монтаж заново платил бы за
+  // исследование, а с новым отпечатком — и за всю медиатеку.
+  const local = getProject(id);
   upsertProject({
     ...project,
+    research: project.research ?? local?.research,
+    scriptBeats: project.scriptBeats ?? local?.scriptBeats,
     processedVideo: null,
     processing: { state: "idle", step: "", progress: 0 },
   });
@@ -164,13 +170,15 @@ async function runJob(id: string): Promise<void> {
         brollCount: done.brollCount ?? 0,
         coverOffsetSec: done.coverOffsetSec ?? 1,
         meta: done.meta,
+        research: done.research,
       }),
     });
     console.log(`✔ Задача ${id} готова`);
   } else {
     await api(`/api/worker/complete/${id}`, {
       method: "POST",
-      body: JSON.stringify({ error: done.processing.error ?? "Неизвестная ошибка воркера" }),
+      // исследование построено и оплачено — сайт получает его и после неудачи
+      body: JSON.stringify({ error: done.processing.error ?? "Неизвестная ошибка воркера", research: done.research }),
     });
     console.log(`✖ Задача ${id} упала: ${done.processing.error}`);
   }

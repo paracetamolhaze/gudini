@@ -104,11 +104,27 @@ export async function processProject(id: string): Promise<void> {
     const wav = path.join(dir, "audio_full.wav");
     let rawWords: Word[] | null = null;
     let subtitlesSource: "scribe" | "whisper" | "script" = "script";
+    // Повторный монтаж того же исходника не платит за распознавание второй раз:
+    // расшифровка привязана к длине звука и размеру файла.
+    const audioKey = `${duration.toFixed(2)}:${fs.statSync(path.join(dir, raw)).size}`;
+    const transcriptFile = path.join(dir, "transcript.json");
+    let transcriptReused = false;
     try {
-      rawWords = await scribeTranscribe(wav);
-      if (rawWords) subtitlesSource = "scribe";
-    } catch (e) {
-      console.warn("Scribe недоступен:", e);
+      const saved = fs.existsSync(transcriptFile) ? JSON.parse(fs.readFileSync(transcriptFile, "utf8")) : null;
+      if (saved?.audioKey === audioKey && Array.isArray(saved.words) && saved.words.length) {
+        rawWords = saved.words;
+        subtitlesSource = saved.source === "whisper" ? "whisper" : "scribe";
+        transcriptReused = true;
+        console.log(`Расшифровка переиспользована: ${rawWords!.length} слов (${subtitlesSource})`);
+      }
+    } catch {}
+    if (!rawWords) {
+      try {
+        rawWords = await scribeTranscribe(wav);
+        if (rawWords) subtitlesSource = "scribe";
+      } catch (e) {
+        console.warn("Scribe недоступен:", e);
+      }
     }
     if (!rawWords) {
       try {
@@ -118,13 +134,13 @@ export async function processProject(id: string): Promise<void> {
         console.warn("Whisper недоступен:", e);
       }
     }
-    if (rawWords) {
+    if (rawWords && !transcriptReused) {
       // Пословная расшифровка сохраняется: без неё чистку речи нельзя перепланировать,
       // не заплатив за распознавание второй раз, а субтитры пришлось восстанавливать
       // из фраз. Стоимость распознавания — в леджер, по минутам звука.
       fs.writeFileSync(
-        path.join(dir, "transcript.json"),
-        JSON.stringify({ source: subtitlesSource, createdAt: new Date().toISOString(), words: rawWords }, null, 2),
+        transcriptFile,
+        JSON.stringify({ source: subtitlesSource, audioKey, createdAt: new Date().toISOString(), words: rawWords }, null, 2),
         "utf8",
       );
       const asrModel = subtitlesSource === "scribe" ? "elevenlabs/scribe" : "openai/whisper-1";
@@ -141,16 +157,30 @@ export async function processProject(id: string): Promise<void> {
     setStep(id, "Чистка речи", 16);
     let cuts: CutRegion[] | null = null;
     if (rawWords && smartSpeechCleanup()) {
+      // План чистки зависит от расшифровки и сценария: если они те же, что в прошлый
+      // раз, план берётся из файла — два вызова модели не оплачиваются повторно.
+      const planFile = path.join(dir, "speech-cleanup-plan.json");
+      const cleanupKey = `${audioKey}:${(project.script ?? "").length}:${rawWords.length}`;
+      let reusedPlan: { actions: any[] } | null = null;
       try {
-        const run = await planCleanupCuts({ script: project.script, words: rawWords, silences, edges, duration, log: (l) => console.log(l) });
-        cuts = run.cuts;
-        fs.writeFileSync(
-          path.join(dir, "speech-cleanup-plan.json"),
-          JSON.stringify({ version: 1, actions: run.actions }, null, 2),
-          "utf8",
+        const saved = fs.existsSync(planFile) ? JSON.parse(fs.readFileSync(planFile, "utf8")) : null;
+        if (saved?.cleanupKey === cleanupKey && Array.isArray(saved.actions)) reusedPlan = saved;
+      } catch {}
+      if (reusedPlan) {
+        cuts = reusedPlan.actions.map((a: any) =>
+          a.type === "REMOVE_FRAGMENT"
+            ? { start: a.start, end: a.end }
+            : { start: a.start + a.keepDuration * 0.55, end: a.end - a.keepDuration * 0.45 },
         );
-      } catch (e) {
-        console.warn("Speech cleanup недоступен, работаем без него:", e);
+        console.log(`План чистки речи переиспользован: ${reusedPlan.actions.length} действий`);
+      } else {
+        try {
+          const run = await planCleanupCuts({ script: project.script, words: rawWords, silences, edges, duration, log: (l) => console.log(l) });
+          cuts = run.cuts;
+          fs.writeFileSync(planFile, JSON.stringify({ version: 1, cleanupKey, actions: run.actions }, null, 2), "utf8");
+        } catch (e) {
+          console.warn("Speech cleanup недоступен, работаем без него:", e);
+        }
       }
     }
     if (!cuts) cuts = mechanicalCuts(silences, edges); // фолбэк без расшифровки: только механические паузы

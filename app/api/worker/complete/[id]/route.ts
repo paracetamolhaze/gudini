@@ -14,9 +14,13 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   if (!project) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
 
   const body = await req.json();
+  // исследование истории строит воркер; сайт хранит его, чтобы повторный монтаж
+  // и добор материала его не оплачивали заново
+  const research = body.research && typeof body.research === "object" ? body.research : undefined;
   if (body.error) {
     return NextResponse.json(
       updateProject(id, {
+        ...(research ? { research } : {}),
         processing: { state: "error", step: "Ошибка", progress: 0, error: String(body.error) },
       }),
     );
@@ -34,6 +38,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       subtitlesSource: body.subtitlesSource,
       brollCount: Number(body.brollCount) || 0,
       meta: body.meta ?? project.meta,
+      ...(research ? { research } : {}),
       processing: { state: "done", step: "Готово", progress: 100 },
     }),
   );

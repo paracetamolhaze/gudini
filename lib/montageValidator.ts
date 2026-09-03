@@ -227,15 +227,20 @@ export function packDistribution(
 ): PackDistribution {
   const visual = beats.filter((b) => b.visualNeed !== "NONE");
   const per = duration / Math.max(1, visual.length);
+  const best = (b: { id: string }) => pack.coverage.find((c) => c.beatId === b.id)?.bestScore ?? 0;
   // честным считаем блок с оценкой 2 и выше: «сойдёт как обстановка» провалов не закрывает
-  const covered = visual.map((b) => (pack.coverage.find((c) => c.beatId === b.id)?.bestScore ?? 0) >= 2);
+  const covered = visual.map((b) => best(b) >= 2);
+  // Дыра — блок, под который нет ВООБЩЕ ничего: уплотнение после режиссёра ставит
+  // в слабый блок (оценка 1) карточку-обстановку, и экран не пустует. Проект
+  // «Мстителей» упирался в два соседних слабых блока при 80% сильного покрытия.
+  const anything = visual.map((b) => best(b) >= 1);
 
   const firstIdx = covered.indexOf(true);
   const firstExternalVisualAt = firstIdx < 0 ? duration : Number((firstIdx * per).toFixed(2));
 
   let run = 0;
   let maxRun = 0;
-  for (const c of covered) {
+  for (const c of anything) {
     run = c ? 0 : run + 1;
     maxRun = Math.max(maxRun, run);
   }
@@ -276,8 +281,12 @@ export function montagePreflight(
       `первый визуал только на ${d.firstExternalVisualAt.toFixed(1)}с — начало ролика будет статичным (предел ${PACING.firstVisualBy}с)`,
     );
   }
-  if (d.maxContinuousARoll > PACING.maxARollGap) {
-    reasons.push(`подряд ${d.maxContinuousARoll.toFixed(1)}с без материала — предел ${PACING.maxARollGap}с`);
+  // Длина блока оценивается как средняя: одна пустая дыра на длинном ролике не
+  // должна проваливать проверку только из-за грубой оценки длины блока.
+  const visualCount = Math.max(1, beats.filter((b) => b.visualNeed !== "NONE").length);
+  const gapLimit = Math.max(PACING.maxARollGap, 1.2 * (duration / visualCount));
+  if (d.maxContinuousARoll > gapLimit) {
+    reasons.push(`подряд ${d.maxContinuousARoll.toFixed(1)}с без материала — предел ${gapLimit.toFixed(1)}с`);
   }
   for (const [name, v] of [
     ["начале", d.externalCoverageFirstThird],

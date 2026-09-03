@@ -8,10 +8,11 @@ import {
   segmentsFromCuts,
   remapWordsWithIndex,
   remapWords,
-  validateCleanupActions,
   CutRegion,
 } from "./speechCleanupPlan";
 import { planSpeechCleanup } from "./speechCleanupPlanner";
+import { planCleanupCuts } from "./speechCleanupRun";
+import { recordFlat, AUDIO_PRICES } from "./costLedger";
 import { runMontageV3 } from "./montageV3Pipeline";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { buildAss } from "./subtitles";
@@ -103,55 +104,42 @@ export async function processProject(id: string): Promise<void> {
         console.warn("Whisper недоступен:", e);
       }
     }
+    if (rawWords) {
+      // Пословная расшифровка сохраняется: без неё чистку речи нельзя перепланировать,
+      // не заплатив за распознавание второй раз, а субтитры пришлось восстанавливать
+      // из фраз. Стоимость распознавания — в леджер, по минутам звука.
+      fs.writeFileSync(
+        path.join(dir, "transcript.json"),
+        JSON.stringify({ source: subtitlesSource, createdAt: new Date().toISOString(), words: rawWords }, null, 2),
+        "utf8",
+      );
+      const asrModel = subtitlesSource === "scribe" ? "elevenlabs/scribe" : "openai/whisper-1";
+      recordFlat({
+        stage: "Transcription",
+        provider: subtitlesSource === "scribe" ? "elevenlabs" : "openai",
+        model: asrModel,
+        cost: (AUDIO_PRICES[asrModel] ?? 0) * (duration / 60),
+        estimated: true,
+      });
+    }
 
     // --- Speech Cleanup: запинки/повторы/фальстарты + умные паузы (только при реальном ASR) ---
     setStep(id, "Чистка речи", 16);
     let cuts: CutRegion[] | null = null;
     if (rawWords && smartSpeechCleanup()) {
       try {
-        const rawActions = await planSpeechCleanup(project.script, rawWords, silences);
-        if (rawActions) {
-          const validated = validateCleanupActions(rawActions, rawWords, silences, duration);
-          cuts = validated.cuts;
-          const actions = [...validated.plan.actions];
-
-          // ВТОРОЙ ПРОХОД: первый редко ловит всё. Смотрим на уже почищенную
-          // транскрипцию и ищем оставшиеся повторы, фальстарты и неудачные дубли.
-          // Режем всё одним разом — исходник перекодируется только один раз.
-          try {
-            const clean = remapWordsWithIndex(rawWords, segmentsFromCuts(edges, validated.cuts));
-            const second = await planSpeechCleanup(project.script, clean.words, []);
-            if (second?.length) {
-              const mapped = second
-                .filter((a) => String(a.type) === "REMOVE_FRAGMENT")
-                .map((a) => ({
-                  ...a,
-                  fromWord: clean.srcIndex[Math.trunc(Number(a.fromWord))],
-                  toWord: clean.srcIndex[Math.trunc(Number(a.toWord))],
-                }))
-                .filter((a) => Number.isFinite(a.fromWord) && Number.isFinite(a.toWord));
-              const extra = validateCleanupActions(mapped, rawWords, [], duration);
-              if (extra.cuts.length) {
-                cuts = [...validated.cuts, ...extra.cuts];
-                actions.push(...extra.plan.actions);
-                console.log(`Чистка речи, второй проход: +${extra.cuts.length} фрагментов`);
-              }
-            }
-          } catch (e) {
-            console.warn("Второй проход чистки пропущен:", String(e).slice(0, 120));
-          }
-
-          fs.writeFileSync(
-            path.join(dir, "speech-cleanup-plan.json"),
-            JSON.stringify({ version: 1, actions }, null, 2),
-            "utf8",
-          );
-        }
+        const run = await planCleanupCuts({ script: project.script, words: rawWords, silences, edges, duration, log: (l) => console.log(l) });
+        cuts = run.cuts;
+        fs.writeFileSync(
+          path.join(dir, "speech-cleanup-plan.json"),
+          JSON.stringify({ version: 1, actions: run.actions }, null, 2),
+          "utf8",
+        );
       } catch (e) {
         console.warn("Speech cleanup недоступен, работаем без него:", e);
       }
     }
-    if (!cuts) cuts = mechanicalCuts(silences, edges); // фолбэк: только механические паузы
+    if (!cuts) cuts = mechanicalCuts(silences, edges); // фолбэк без расшифровки: только механические паузы
 
     const segments = segmentsFromCuts(edges, cuts);
     const effDur = segments.reduce((sum, s) => sum + (s.end - s.start), 0);
@@ -378,7 +366,7 @@ export async function makeCover(
 }
 
 /** Склейка сегментов речи в чистый исходник; на каждой границе — аудиофейды 15 мс (без щелчков). */
-async function buildCleanSource(
+export async function buildCleanSource(
   dir: string,
   raw: string,
   segments: { start: number; end: number }[],
@@ -470,7 +458,9 @@ export async function renderPlan(
       "-filter_complex", `${chain};${audioChain}`,
       "-map", "[v]", "-map", "[a]",
       "-threads", "4",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+      // CRF 18 / medium вместо 21 / veryfast: ~8–9 Мбит/с на 1080×1920 — запас под
+      // пережатие площадками; рендер дольше на десятки секунд, денег не стоит
+      "-c:v", "libx264", "-preset", "medium", "-crf", "18",
       "-c:a", "aac", "-b:a", "192k",
       "-movflags", "+faststart",
       ...(music ? ["-shortest"] : []),

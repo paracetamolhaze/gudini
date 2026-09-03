@@ -6,6 +6,9 @@ import {
   mechanicalCuts,
   segmentsFromCuts,
   remapWords,
+  pausesFromWords,
+  deterministicFillers,
+  cleanToRaw,
 } from "../lib/speechCleanupPlan";
 import { Word } from "../lib/transcribe";
 
@@ -147,7 +150,7 @@ test("Cleanup: INTENTIONAL-пауза не трогается, UNNECESSARY уж�
   assert.ok(cuts[0].start > 20 && cuts[0].end < 22);
 });
 
-test("Cleanup: неклассифицированная пауза > 2.5с ужимается автоматически (страховка)", () => {
+test("Cleanup: неклассифицированная пауза > 1.2с ужимается автоматически (страховка)", () => {
   const silences = [{ start: 30, end: 34 }];
   const { plan } = validateCleanupActions([], words, silences, duration);
   assert.equal(plan.actions.length, 1);
@@ -225,4 +228,82 @@ test("remapWords: таймкоды пересчитаны, вырезанные 
   assert.ok(Math.abs(out[0].start - 1) < 0.01);
   assert.equal(out[1].word, "б");
   assert.ok(Math.abs(out[1].start - (5 + 2)) < 0.01); // 5 (первый сегмент) + (10-8)
+});
+
+test("Cleanup: вдох 0.77с — это пауза, а не ритм (случай «футболист. … Весь»)", () => {
+  const w: Word[] = [
+    { word: "опытный", start: 16.74, end: 17.1 },
+    { word: "футболист.", start: 17.22, end: 17.84 },
+    { word: "Весь", start: 18.52, end: 18.7 },
+    { word: "матч", start: 18.78, end: 19.0 },
+  ];
+  // детектор на старом пороге эту паузу не видел; зазор между словами — видит
+  const pauses = pausesFromWords(w, []);
+  assert.equal(pauses.length, 1);
+  assert.ok(Math.abs(pauses[0].start - 17.84) < 1e-6 && Math.abs(pauses[0].end - 18.52) < 1e-6);
+  const { plan, cuts } = validateCleanupActions(
+    [{ type: "SHORTEN_PAUSE", silenceIndex: 0, verdict: "UNNECESSARY", confidence: 0.9 }],
+    w,
+    pauses,
+    30,
+  );
+  assert.equal(plan.actions.length, 1, "пауза 0.68с ужимается (раньше порог 0.8с её пропускал)");
+  const left = pauses[0].end - pauses[0].start - (cuts[0].end - cuts[0].start);
+  assert.ok(left > 0.3 && left < 0.4, `оставлено ${left.toFixed(2)}с — должно быть ~0.35`);
+  // тишина по детектору и зазор слов сливаются в одну паузу
+  assert.equal(pausesFromWords(w, [{ start: 17.9, end: 18.6 }]).length, 1);
+});
+
+test("Cleanup: вырезка фальстарта забирает паузу после него (случай «эк-- э-э-э, … Хендерсон»)", () => {
+  const w: Word[] = [
+    { word: "через", start: 37.16, end: 37.32 },
+    { word: "эк--", start: 37.46, end: 37.6 },
+    { word: "э-э-э,", start: 37.64, end: 37.68 },
+    { word: "Хендерсон", start: 38.24, end: 38.7 },
+  ];
+  const fillers = deterministicFillers(w);
+  assert.equal(fillers.length, 1, "обрыв и протянутое э-э-э найдены без модели");
+  assert.equal(fillers[0].fromWord, 1);
+  assert.equal(fillers[0].toWord, 2);
+  const { cuts } = validateCleanupActions(fillers, w, [], 60);
+  assert.equal(cuts.length, 1);
+  const gapLeft = w[3].start - cuts[0].end;
+  assert.ok(gapLeft <= 0.12 + 1e-6, `после вырезки остался зазор ${gapLeft.toFixed(2)}с — пауза 0.56с должна уйти`);
+  assert.ok(cuts[0].start >= w[0].end + 0.02, "согласные предыдущего слова не задеты");
+});
+
+test("Cleanup: союз перед фальстартом уходит вместе с ним, повторов «и … и» не остаётся", () => {
+  const w: Word[] = [
+    { word: "щит", start: 41.32, end: 42.16 },
+    { word: "и", start: 42.28, end: 42.38 },
+    { word: "неудачно", start: 42.98, end: 43.52 },
+    { word: "с", start: 44.12, end: 44.14 },
+    { word: "под--", start: 44.2, end: 45.2 },
+    { word: "и", start: 45.28, end: 45.32 },
+    { word: "спотыкается,", start: 45.36, end: 45.98 },
+  ];
+  // модель отметила фальстарт вместе с союзом (слова 1..4), как велит промпт
+  const { cuts } = validateCleanupActions(
+    [{ type: "REMOVE_FRAGMENT", fromWord: 1, toWord: 4, reason: "FALSE_START", confidence: 0.9 }],
+    w,
+    [],
+    60,
+  );
+  assert.equal(cuts.length, 1);
+  const kept = remapWords(w, segmentsFromCuts({ start: 0, end: 60 }, cuts)).map((x) => x.word);
+  assert.deepEqual(kept, ["щит", "и", "спотыкается,"]);
+  // и зазор 0.6с между «и» и «неудачно» тоже ушёл: до следующего слова остаётся ≤0.12с
+  assert.ok(w[5].start - cuts[0].end <= 0.12 + 1e-6);
+});
+
+test("Cleanup: карта чистого времени в сырое по сегментам", () => {
+  const segs = [
+    { start: 2, end: 10 },
+    { start: 15, end: 20 },
+  ];
+  assert.equal(cleanToRaw(0, segs), 2);
+  assert.ok(Math.abs(cleanToRaw(7.999, segs) - 9.999) < 1e-6);
+  assert.equal(cleanToRaw(8, segs), 15, "граница сегмента — это начало следующего");
+  assert.equal(cleanToRaw(9, segs), 16);
+  assert.equal(cleanToRaw(99, segs), 20);
 });

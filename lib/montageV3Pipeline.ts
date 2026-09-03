@@ -4,6 +4,7 @@ import { StoryResearchPack } from "./storyResearch";
 import { buildScriptBeats, ScriptBeat } from "./scriptBeats";
 import { buildAssetPack, StoryAssetPackV2 } from "./storyAssetPack";
 import { directMontage, MontagePlan } from "./creativeDirector";
+import { refineMontage } from "./montageRefine";
 import { validateMontage, packReady, montagePreflight, PackDistribution } from "./montageValidator";
 import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE } from "./editPlan";
 import { Word } from "./transcribe";
@@ -102,8 +103,22 @@ export async function runMontageV3(args: {
     throw err;
   }
 
-  const montage = await directMontage(research, beats, pack, words, duration, speechCuts);
-  if (!montage) throw new Error("Режиссёр монтажа не вернул план");
+  const directed = await directMontage(research, beats, pack, words, duration, speechCuts);
+  if (!directed) throw new Error("Режиссёр монтажа не вернул план");
+
+  // Уплотнение по блокам: режиссёр отдаёт валидный, но грубый темп (вставки по 6 с
+  // подряд, 16 с на одной картинке). Детерминированно, без второго вызова.
+  const refined = refineMontage({
+    montage: directed,
+    pack,
+    beats,
+    needs,
+    words,
+    duration,
+    personNames: research.entities.filter((e) => e.type === "PERSON").map((e) => e.name),
+  });
+  for (const n of refined.notes) console.log("Уплотнение: " + n);
+  const montage = refined.plan;
 
   const check = validateMontage(montage, pack);
   if (check.errors.length) {

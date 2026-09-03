@@ -142,7 +142,10 @@ export async function detectSilences(file: string, cwd: string, duration: number
   const stderr = await new Promise<string>((resolve, reject) => {
     const proc = spawn(
       ffmpegBin(),
-      ["-hide_banner", "-i", file, "-af", "silencedetect=n=-40dB:d=0.6", "-f", "null", "-"],
+      // -40 дБ и от 0.6 с пропускали вдох между фразами (громче порога, короче 0.6 с):
+      // такие паузы оставались в ролике провалами. Порог мягче, минимум короче;
+      // сами решения о паузах принимает планировщик, а не детектор.
+      ["-hide_banner", "-i", file, "-af", "silencedetect=n=-34dB:d=0.3", "-f", "null", "-"],
       { cwd, windowsHide: true },
     );
     let out = "";

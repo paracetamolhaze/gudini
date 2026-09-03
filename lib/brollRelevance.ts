@@ -375,6 +375,8 @@ export async function analyzeFrames(
         mediaType: detectImageMediaType(buffers[i]),
       })),
       maxTokens: 400 + todo.length * 320,
+      // кадры уменьшены до 384px: ~110 токенов каждый; оставляем запас втрое
+      imageTokensEach: 350,
     })
   )
     .replace(/^```(json)?/m, "")

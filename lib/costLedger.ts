@@ -338,6 +338,12 @@ export function projectRequestCost(args: {
   promptChars: number;
   /** сколько изображений уходит в запрос */
   images?: number;
+  /**
+   * токенов на одно изображение. По умолчанию — кадр 1080p (~1600), но кадр
+   * контроля качества 384px стоит ~110: считать его по 1600 значит завышать
+   * оценку в разы и останавливать запросы, которые укладываются в лимит.
+   */
+  imageTokensEach?: number;
   maxTokens: number;
 }): number {
   const p = MODEL_PRICES[args.model];
@@ -346,7 +352,7 @@ export function projectRequestCost(args: {
   // ~3 символа на токен для кириллицы: намеренно меньше обычных 4, чтобы не занизить
   const textTokens = Math.ceil(args.promptChars / 3);
   // кадр 1080×1920 в base64 обходится примерно в полторы тысячи токенов
-  const imageTokens = (args.images ?? 0) * 1600;
+  const imageTokens = (args.images ?? 0) * (args.imageTokensEach ?? 1600);
   const { cost } = priceTokens(args.model, {
     inputTokens: textTokens + imageTokens,
     outputTokens: args.maxTokens,

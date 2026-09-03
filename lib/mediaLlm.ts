@@ -56,7 +56,8 @@ function anthropicKeyOrFail(stage: CostStage): string {
 /** Списание по фактическому расходу токенов Anthropic. */
 function recordAnthropic(stage: CostStage, model: string, response: any, failed = false, retry = false): void {
   assertProvider(stage, "anthropic");
-  assertBudget(stage);
+  // Бюджет проверяется ДО запроса, а не здесь: ответ уже оплачен, и отказ
+  // записать его означал бы потерянные деньги без следа в учёте.
   const u = response?.usage ?? {};
   recordTokens({
     stage,
@@ -112,7 +113,7 @@ async function completeOnce(
   // Политика проверяется ДО обращения к API: запрещённая пара не должна
   // успеть потратить деньги, а потом быть замеченной при учёте.
   assertProvider(stage, "anthropic");
-  assertBudget(stage);
+  assertBudget(stage, projectRequestCost({ model, promptChars: system.length + user.length, maxTokens }));
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({
@@ -141,6 +142,8 @@ export type VisionArgs = {
   images?: VisionImage[];
   maxTokens?: number;
   stage?: CostStage;
+  /** оценка токенов на кадр для резервирования бюджета; по умолчанию — полный кадр */
+  imageTokensEach?: number;
   /** модель стадии: QC обложки дешевле делать на младшей модели */
   model?: string;
 };
@@ -155,7 +158,7 @@ export async function mediaVision(args: VisionArgs): Promise<string> {
 }
 
 async function visionOnce(
-  { system, user, image, images, maxTokens = 2000, stage = "Vision Verification", model: modelOverride }: VisionArgs,
+  { system, user, image, images, maxTokens = 2000, stage = "Vision Verification", model: modelOverride, imageTokensEach }: VisionArgs,
   isRetry = false,
 ): Promise<string> {
   const frames = images ?? (image ? [image] : []);
@@ -165,7 +168,7 @@ async function visionOnce(
   assertProvider(stage, "anthropic");
   assertBudget(
     stage,
-    projectRequestCost({ model, promptChars: system.length + user.length, images: frames.length, maxTokens }),
+    projectRequestCost({ model, promptChars: system.length + user.length, images: frames.length, imageTokensEach, maxTokens }),
   );
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });

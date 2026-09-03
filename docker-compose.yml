@@ -17,7 +17,8 @@ services:
     env_file: .env
     environment:
       PORT: "3000"
-      SITE_PASSWORD: ${GUDINI_PASSWORD:-${SITE_PASSWORD:-}}
+      # пусто — сайт открыт без пароля; GUDINI_PASSWORD воркера при этом просто не проверяется
+      SITE_PASSWORD: ${SITE_PASSWORD:-}
       # адрес, по которому сайт виден снаружи: нужен OAuth-коллбэкам и Instagram Reels
       PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
     ports:

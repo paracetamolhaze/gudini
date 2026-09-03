@@ -90,8 +90,7 @@ export const WINDOW_QC_MODEL = "claude-haiku-4-5-20251001";
 
 const VISION_SYSTEM = `You inspect a candidate frame for use as b-roll in a short video.
 Reply with STRICT JSON only:
-{"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words","isScreenshot":<true if this is a screenshot of a web page, social post, article, chat, table, chart or app UI rather than a photograph or video frame>,"hasLargeText":<true if readable text occupies a noticeable part of the frame: burned-in headlines, big captions, subtitle bars, news chyrons, annotation labels drawn over the footage>,"hasLargeWatermark":<true if a large watermark or logo covers a significant area>,"hasChannelPromo":<true if the frame shows channel calls to action: SUBSCRIBE, LIKE, BELL, THANKS FOR WATCHING, follow handles>,"hasFaceOverlay":<true if a commentator/streamer/reactor face or webcam box is composited ON TOP of other footage, e.g. picture-in-picture reaction>,"isTitleOrOutroCard":<true if the frame is an intro/outro/title card built from text and graphics rather than filmed material>,"hasPlayerOrSocialUi":<true if video player controls, progress bars, or social app interface are visible>,"isStudioExplainer":<true if this is a person talking to camera in a studio, office or home explaining something, rather than footage of an event>,"isReenactmentOrSkit":<true if this is staged, acted, animated, a comedy sketch or a reconstruction rather than documentary footage>,"sceneFamily":"UPPER_SNAKE_CASE label of WHAT IS HAPPENING, 1-3 words, e.g. SIDELINE_INJURY, CELEBRATION, STRETCHER, PRESS_CONFERENCE, HOSPITAL, CROWD, MATCH_PLAY. Frames of the same moment of the same action share one label."}
-Be generous with objects: include category words (e.g. for a tiger: tiger, big cat, predator, animal, wildlife).
+{"description":"max 12 words, what is happening","environment":"1-3 words","action":"1-3 words","isScreenshot":<true if this is a screenshot of a web page, social post, article, chat, table, chart or app UI rather than a photograph or video frame>,"hasLargeText":<true if readable text occupies a noticeable part of the frame: burned-in headlines, big captions, subtitle bars, news chyrons, annotation labels drawn over the footage>,"hasLargeWatermark":<true if a large watermark or logo covers a significant area>,"hasChannelPromo":<true if the frame shows channel calls to action: SUBSCRIBE, LIKE, BELL, THANKS FOR WATCHING, follow handles>,"hasFaceOverlay":<true if a commentator/streamer/reactor face or webcam box is composited ON TOP of other footage, e.g. picture-in-picture reaction>,"isTitleOrOutroCard":<true if the frame is an intro/outro/title card built from text and graphics rather than filmed material>,"hasPlayerOrSocialUi":<true if video player controls, progress bars, or social app interface are visible>,"isStudioExplainer":<true if this is a person talking to camera in a studio, office or home explaining something, rather than footage of an event>,"isReenactmentOrSkit":<true if this is staged, acted, animated, a comedy sketch or a reconstruction rather than documentary footage>,"sceneFamily":"UPPER_SNAKE_CASE label of WHAT IS HAPPENING, 1-3 words, e.g. SIDELINE_INJURY, CELEBRATION, STRETCHER, PRESS_CONFERENCE, HOSPITAL, CROWD, MATCH_PLAY. Frames of the same moment of the same action share one label."}
 Judge isScreenshot strictly: a photo of a person holding a phone is NOT a screenshot; a captured tweet or article IS.
 Sponsor boards, jerseys and stadium signage are NOT hasLargeText: they belong to the scene.
 A person filmed at a press conference or interview at the venue is NOT isStudioExplainer.`;
@@ -334,7 +333,7 @@ export function qcReject(an: AssetAnalysis, opts: QcOptions = {}): string | null
 const BATCH_SYSTEM = `You inspect frames sampled from ONE source video for use as b-roll.
 The frames are given in order. Judge EACH frame independently.
 Reply with STRICT JSON only:
-{"frames":[{"i":1,"description":"one sentence what is happening","objects":["lowercase english nouns and categories, 5-12 items"],"environment":"few words","action":"few words","isScreenshot":false,"hasLargeText":false,"hasLargeWatermark":false,"hasChannelPromo":false,"hasFaceOverlay":false,"isTitleOrOutroCard":false,"hasPlayerOrSocialUi":false,"isStudioExplainer":false,"isReenactmentOrSkit":false}]}
+{"frames":[{"i":1,"description":"max 12 words, what is happening","environment":"1-3 words","action":"1-3 words","isScreenshot":false,"hasLargeText":false,"hasLargeWatermark":false,"hasChannelPromo":false,"hasFaceOverlay":false,"isTitleOrOutroCard":false,"hasPlayerOrSocialUi":false,"isStudioExplainer":false,"isReenactmentOrSkit":false}]}
 Flag meanings:
 - hasLargeText: burned-in headlines, big captions, subtitle bars, news chyrons, annotation labels drawn over footage. Sponsor boards, jerseys and stadium signage are NOT this: they belong to the scene.
 - hasChannelPromo: SUBSCRIBE, LIKE, BELL, THANKS FOR WATCHING, follow handles.
@@ -343,7 +342,7 @@ Flag meanings:
 - hasPlayerOrSocialUi: video player controls, progress bars, social app interface.
 - isStudioExplainer: a person talking to camera in a studio, office or home explaining something. A person filmed at a press conference or interview at the venue is NOT this.
 - isReenactmentOrSkit: staged, acted, animated, comedy sketch or reconstruction.
-Return exactly one entry per frame, with "i" being the 1-based frame number.`;
+Return exactly one entry per frame, with "i" being the 1-based frame number. Be terse: no prose outside the JSON, no extra keys.`;
 
 /**
  * Описывает СРАЗУ ВСЕ кадры одного исходного видео одним запросом.
@@ -391,7 +390,7 @@ export async function analyzeFrames(
     if (target === undefined) continue;
     const analysis: AssetAnalysis = {
       description: String(f.description ?? ""),
-      objects: Array.isArray(f.objects) ? f.objects.map((o: unknown) => String(o).toLowerCase()) : [],
+      objects: Array.isArray(f.objects) ? f.objects.map((o: unknown) => String(o).toLowerCase()) : [], // в V3 не используется
       environment: String(f.environment ?? "").toLowerCase(),
       action: String(f.action ?? "").toLowerCase(),
       isScreenshot: f.isScreenshot === true,

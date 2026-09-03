@@ -205,8 +205,53 @@ function renderPhrase(p: Phrase, all: PunctWord[], style: CaptionStyle): string[
   return wrapPhrase(shown);
 }
 
+/** Пословный режим: удержание после слова, зазор и минимум — как в первых роликах. */
+const WORD_HOLD = 0.1;
+const WORD_MIN_DUR = 0.08;
+
+/**
+ * Субтитры по одному слову: Arial 84, белый, чёрная обводка 6, тень 2.5, поля 70,
+ * нижняя граница на 560 px от низа. Ровно тот стиль, что был в первых роликах.
+ * События не пересекаются: старт не раньше конца предыдущего.
+ */
+function buildWordAss(words: Word[], style: CaptionStyle): string {
+  const marginV = style.position === "center" ? 900 : 560;
+  const header = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Caption,Arial,${style.fontSize},&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,-1,0,0,0,100,100,0.5,0,1,6,2.5,2,70,70,${marginV},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+  const items = words
+    .map((w) => ({ start: w.start, end: w.end, text: displayWord(w.word, style.uppercase) }))
+    .filter((w) => w.text);
+  const lines: string[] = [];
+  let prevEnd = -Infinity;
+  for (let i = 0; i < items.length; i++) {
+    const w = items[i];
+    const next = items[i + 1];
+    const start = Math.max(w.start, prevEnd + GAP);
+    let end = Math.min(w.end + WORD_HOLD, next ? next.start - GAP : Infinity);
+    if (end < start + WORD_MIN_DUR) end = start + WORD_MIN_DUR;
+    lines.push(`Dialogue: 0,${assTime(start)},${assTime(end)},Caption,,0,0,0,,${w.text}`);
+    prevEnd = end;
+  }
+  return header + lines.join("\n") + "\n";
+}
+
 export function buildAss(words: Word[], styleOverride?: Partial<CaptionStyle>): string {
   const style: CaptionStyle = { ...DEFAULT_CAPTION_STYLE, ...styleOverride };
+  if (style.mode === "word") return buildWordAss(words, style);
+  // фразовый режим: кегль 58, как был рассчитан под две строки
+  if (styleOverride?.fontSize === undefined) style.fontSize = 58;
   // Ориентир по вертикали: текст на уровне груди автора и выше интерфейса TikTok.
   const marginV = style.position === "center" ? 900 : 400;
 

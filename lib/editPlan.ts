@@ -74,6 +74,8 @@ export type EditEvent = {
 };
 
 export type CaptionStyle = {
+  /** word — по одному слову (как в первых роликах); phrase — короткие фразы по смыслу */
+  mode: "word" | "phrase";
   maxWords: number;
   uppercase: boolean;
   highlightKeyword: boolean;
@@ -82,13 +84,14 @@ export type CaptionStyle = {
 };
 
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
-  // Короткая смысловая фраза, а не отдельное слово: по одному слову читать
-  // тяжело, а взгляд всё время дёргается вслед за сменой текста.
+  // По одному слову, Arial 84, белый с чёрной обводкой — стиль первых роликов,
+  // возвращён по просьбе автора. Фразовый режим остаётся доступным (mode: "phrase").
+  mode: "word",
   maxWords: 6,
   uppercase: true,
   highlightKeyword: false,
   position: "lower",
-  fontSize: 58,
+  fontSize: 84,
 };
 
 /** Раскладка вставки с безопасным значением для старых планов. */

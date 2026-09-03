@@ -68,17 +68,27 @@ const FRAGMENT_REASONS = new Set(["REPEATED_WORDS", "FALSE_START", "FILLER", "SE
  * Валидация плана чистки: только уверенные и безопасные действия.
  * Принцип: лучше вырезать меньше, чем сломать речь.
  */
+export type ValidateOptions = {
+  /** предел суммарной вырезки фрагментов; для дублей, найденных по сценарию, — без предела */
+  removedCap?: number;
+  maxRetakeSec?: number;
+  maxRetakeWords?: number;
+};
+
 export function validateCleanupActions(
   raw: RawCleanupAction[],
   words: Word[],
   silences: SilenceEvent[],
   duration: number,
+  opts: ValidateOptions = {},
 ): { plan: SpeechCleanupPlan; cuts: CutRegion[] } {
   const actions: SpeechCleanupAction[] = [];
   const cuts: CutRegion[] = [];
   let removedTotal = 0;
   // запас чуть шире прежнего: неудачный дубль сам по себе занимает несколько секунд
-  const removedCap = Math.min(duration * 0.2, 15);
+  const removedCap = opts.removedCap ?? Math.min(duration * 0.2, 15);
+  const maxRetakeSec = opts.maxRetakeSec ?? MAX_RETAKE_SEC;
+  const maxRetakeWords = opts.maxRetakeWords ?? MAX_RETAKE_WORDS;
   const classified = new Set<number>();
 
   for (const a of raw ?? []) {
@@ -93,7 +103,7 @@ export function validateCleanupActions(
       const from = Math.trunc(Number(a.fromWord));
       const to = Math.trunc(Number(a.toWord));
       if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < from) continue;
-      if (to >= words.length || to - from + 1 > (retake ? MAX_RETAKE_WORDS : MAX_FRAGMENT_WORDS)) continue;
+      if (to >= words.length || to - from + 1 > (retake ? maxRetakeWords : MAX_FRAGMENT_WORDS)) continue;
 
       // Границы — по стыкам с соседними словами. Вырезка забирает и зазоры вокруг
       // фрагмента: после вырезанного фальстарта «…через эк-- э-э-э,» оставалась
@@ -107,7 +117,7 @@ export function validateCleanupActions(
       const start = from > 0 ? prevEnd + Math.min(FRAGMENT_EDGE_KEEP, Math.max(0.02, leadGap / 2)) : Math.max(0, words[from].start - 0.05);
       const end = to < words.length - 1 ? nextStart - Math.min(FRAGMENT_EDGE_KEEP, Math.max(0.02, trailGap / 2)) : Math.min(duration, words[to].end + 0.05);
       if (end - start < 0.12) continue;
-      if (end - start > (retake ? MAX_RETAKE_SEC : MAX_FRAGMENT_SEC)) continue;
+      if (end - start > (retake ? maxRetakeSec : MAX_FRAGMENT_SEC)) continue;
       // хук защищён от вырезки — кроме СТОПРОЦЕНТНЫХ коротких филлеров («эээ», «ну эээ»)
       if (start < HOOK_GUARD_SEC) {
         const shortObviousFiller = reason === "FILLER" && confidence >= 0.92 && end - start <= 1.2;
@@ -218,6 +228,17 @@ export function cleanToRaw(t: number, segments: { start: number; end: number }[]
     cum += len;
   }
   return segments.length ? segments[segments.length - 1].end : t;
+}
+
+/** Время исходника → время чистого таймлайна; точка внутри вырезки схлопывается в место склейки. */
+export function rawToClean(t: number, segments: { start: number; end: number }[]): number {
+  let cum = 0;
+  for (const s of segments) {
+    if (t < s.start) return cum;
+    if (t < s.end) return cum + (t - s.start);
+    cum += s.end - s.start;
+  }
+  return cum;
 }
 
 /** Механическая логика пауз (фолбэк без LLM): внутренние >1.2с ужимаются до ~0.45с. */

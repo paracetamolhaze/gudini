@@ -38,9 +38,15 @@ const JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node";
 const VIDEO_ONLY = "bv*[height<=720][ext=mp4]/bv*[height<=720]/bv*[ext=mp4]/bv*/best";
 const MAX_BYTES = 90_000_000;
 
+/**
+ * Есть ли экстрактор. Разовый сбой этой проверки на старте контейнера однажды
+ * объявил yt-dlp «не установленным» на весь прогон: десять кандидатов пропущены,
+ * ни одного стоп-кадра, а деньги на поиск и зрение потрачены. Поэтому таймаут
+ * щедрый, положительный ответ запоминается, отрицательный — перепроверяется.
+ */
 async function hasExtractor(): Promise<boolean> {
   try {
-    await run("yt-dlp", ["--version"], { timeout: 15_000 });
+    await run("yt-dlp", ["--version"], { timeout: 60_000 });
     return true;
   } catch {
     return false;
@@ -48,6 +54,15 @@ async function hasExtractor(): Promise<boolean> {
 }
 
 let extractorAvailable: boolean | null = null;
+let extractorChecks = 0;
+
+async function extractorPresent(): Promise<boolean> {
+  if (extractorAvailable === true) return true;
+  if (extractorAvailable === false && extractorChecks >= 3) return false;
+  extractorChecks++;
+  extractorAvailable = await hasExtractor();
+  return extractorAvailable;
+}
 
 /** Прямое скачивание файла. */
 async function direct(url: string, out: string): Promise<FetchResult> {
@@ -72,8 +87,7 @@ async function direct(url: string, out: string): Promise<FetchResult> {
  * что отдаётся без логина.
  */
 async function viaExtractor(pageUrl: string, out: string): Promise<FetchResult> {
-  if (extractorAvailable === null) extractorAvailable = await hasExtractor();
-  if (!extractorAvailable) return { ok: false, reason: "экстрактор не установлен" };
+  if (!(await extractorPresent())) return { ok: false, reason: "экстрактор не установлен" };
   try {
     await run(
       "yt-dlp",
@@ -146,8 +160,7 @@ function platformOf(url: string): string {
  */
 export async function probeVideo(pageUrl: string): Promise<ProbeInfo> {
   const platform = platformOf(pageUrl);
-  if (extractorAvailable === null) extractorAvailable = await hasExtractor();
-  if (!extractorAvailable) {
+  if (!(await extractorPresent())) {
     const info = { url: pageUrl, platform, ok: false, reason: "экстрактор не установлен" };
     probeLog.push(info);
     return info;
@@ -217,6 +230,5 @@ export async function fetchVideo(directUrl: string | undefined, pageUrl: string,
 }
 
 export async function extractorReady(): Promise<boolean> {
-  if (extractorAvailable === null) extractorAvailable = await hasExtractor();
-  return extractorAvailable;
+  return extractorPresent();
 }

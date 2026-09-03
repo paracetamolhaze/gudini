@@ -80,6 +80,14 @@ function writeAnalysisCache(cache: Record<string, AssetAnalysis>) {
   } catch {}
 }
 
+/**
+ * Модель для разбора кадров. Это простая классификация — «что на кадре и нет ли
+ * на нём чужой заставки», — а не рассуждение о смысле истории. На известном
+ * случае с карточкой SUBSCRIBE младшая модель дала тот же ответ, что старшая,
+ * и обошлась втрое дешевле. Переопределяется через MEDIA_WINDOW_QC_MODEL.
+ */
+export const WINDOW_QC_MODEL = "claude-haiku-4-5-20251001";
+
 const VISION_SYSTEM = `You inspect a candidate frame for use as b-roll in a short video.
 Reply with STRICT JSON only:
 {"description":"one sentence what is happening","objects":["nouns and broad synonyms/categories, lowercase english, 5-12 items"],"environment":"where it takes place, few words","action":"main action, few words","isScreenshot":<true if this is a screenshot of a web page, social post, article, chat, table, chart or app UI rather than a photograph or video frame>,"hasLargeText":<true if readable text occupies a noticeable part of the frame: burned-in headlines, big captions, subtitle bars, news chyrons, annotation labels drawn over the footage>,"hasLargeWatermark":<true if a large watermark or logo covers a significant area>,"hasChannelPromo":<true if the frame shows channel calls to action: SUBSCRIBE, LIKE, BELL, THANKS FOR WATCHING, follow handles>,"hasFaceOverlay":<true if a commentator/streamer/reactor face or webcam box is composited ON TOP of other footage, e.g. picture-in-picture reaction>,"isTitleOrOutroCard":<true if the frame is an intro/outro/title card built from text and graphics rather than filmed material>,"hasPlayerOrSocialUi":<true if video player controls, progress bars, or social app interface are visible>,"isStudioExplainer":<true if this is a person talking to camera in a studio, office or home explaining something, rather than footage of an event>,"isReenactmentOrSkit":<true if this is staged, acted, animated, a comedy sketch or a reconstruction rather than documentary footage>,"sceneFamily":"UPPER_SNAKE_CASE label of WHAT IS HAPPENING, 1-3 words, e.g. SIDELINE_INJURY, CELEBRATION, STRETCHER, PRESS_CONFERENCE, HOSPITAL, CROWD, MATCH_PLAY. Frames of the same moment of the same action share one label."}
@@ -106,6 +114,9 @@ export async function analyzeAsset(
   const raw = (
     await mediaVision({
       system: VISION_SYSTEM,
+      // Та же простая классификация, что и у пакетного разбора: старшая модель
+      // здесь стоила $0.20 за 23 фото и ничего не добавила к ответу.
+      model: process.env.MEDIA_WINDOW_QC_MODEL || WINDOW_QC_MODEL,
       user: "Describe this preview frame.",
       image: buffer
         ? { base64: buffer.toString("base64"), mediaType: detectImageMediaType(buffer) }
@@ -319,14 +330,6 @@ export function qcReject(an: AssetAnalysis, opts: QcOptions = {}): string | null
   if (opts.factualBeat && an.isStudioExplainer) return "объяснялка в студии вместо съёмки события";
   return null;
 }
-
-/**
- * Модель для разбора кадров. Это простая классификация — «что на кадре и нет ли
- * на нём чужой заставки», — а не рассуждение о смысле истории. На известном
- * случае с карточкой SUBSCRIBE младшая модель дала тот же ответ, что старшая,
- * и обошлась втрое дешевле. Переопределяется через MEDIA_WINDOW_QC_MODEL.
- */
-export const WINDOW_QC_MODEL = "claude-haiku-4-5-20251001";
 
 const BATCH_SYSTEM = `You inspect frames sampled from ONE source video for use as b-roll.
 The frames are given in order. Judge EACH frame independently.

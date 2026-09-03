@@ -561,8 +561,14 @@ const MATCH_SYSTEM = `Ты — ассистент монтажёра. Тебе �
 Один материал может подходить НЕСКОЛЬКИМ блокам — так и укажи, не выбирай один.
 Материал не «занимается» блоком навсегда: расстановкой займётся режиссёр.
 
+ВАЖНО О ПРОИСХОЖДЕНИИ: все материалы уже прошли проверку источника — они взяты из
+репортажей и фото ИМЕННО ЭТОГО события (участники, турнир и год совпали). Кадр
+стадиона, трибун, скамейки или команды здесь — это обстановка ЭТОГО матча, а не
+случайный сток. Поэтому для блока CONTEXT такой кадр — оценка 2 или 3, а не 1.
+Для блока ENTITY портрет или крупный план названного участника — оценка 3.
+
 Ставь 0, если на кадре другая команда, другие люди, другой инцидент или другой турнир.
-Оценку 3 не ставь, если на кадре не происходит именно описанное действие.
+Оценку 3 для EXACT_EVENT не ставь, если на кадре не происходит именно описанное действие.
 
 Для каждого материала укажи честную роль:
 EVENT — видно само событие истории;
@@ -574,7 +580,7 @@ CONTEXT — обстановка.
 где ключ "a" — номер материала, ключи внутри scores — номера блоков.`;
 
 /** Сопоставляет материалы с блоками сценария одним вызовом. */
-async function matchToBeats(
+export async function matchToBeats(
   assets: PackAsset[],
   beats: ScriptBeat[],
   research: StoryResearchPack,
@@ -585,7 +591,11 @@ async function matchToBeats(
   }
   // нумерация вместо длинных идентификаторов: короче запрос и меньше шансов на опечатку
   const visualBeats = beats.filter((b) => b.visualNeed !== "NONE");
-  const beatList = visualBeats.map((b, i) => `${i + 1}. (${b.visualNeed}) ${b.text}`).join("\n");
+  // Участники блока показываются явно: хук «первый футболист, который не провёл на
+  // поле ни секунды» не называет героя по имени, и без этого портрет героя получал 0.
+  const beatList = visualBeats
+    .map((b, i) => `${i + 1}. (${b.visualNeed}${b.entities.length ? ": " + b.entities.join(", ") : ""}) ${b.text}`)
+    .join("\n");
   const assetList = assets
     .map((a, i) => `${i + 1}. [${a.kind === "VIDEO_SEGMENT" ? "видео" : "фото"}] ${a.description.slice(0, 130)}`)
     .join("\n");
@@ -639,6 +649,43 @@ async function matchToBeats(
  * Собирает медиатеку под конкретный сценарий.
  * Сначала CORE (главное видео истории), потом BEAT (добор под незакрытые блоки).
  */
+/** Покрытие блоков по сопоставленным материалам. Отдельно, чтобы пересчитывать без пересборки. */
+export function computeCoverage(
+  usable: PackAsset[],
+  beats: ScriptBeat[],
+): { coverage: BeatCoverage[]; coverageRatio: number; hardCoverageRatio: number; uniqueScenes: number } {
+  const visual = beats.filter((b) => b.visualNeed !== "NONE");
+  const coverage: BeatCoverage[] = visual.map((b) => {
+    const fit = usable.filter((a) => a.compatibleBeatIds.includes(b.id));
+    const scoreOf = (a: PackAsset) => a.beatScores?.[b.id] ?? 1;
+    const bestScore = fit.reduce((m, a) => Math.max(m, scoreOf(a)), 0);
+    return {
+      beatId: b.id,
+      text: b.text.slice(0, 60),
+      need: b.visualNeed,
+      videos: fit.filter((a) => a.kind === "VIDEO_SEGMENT").length,
+      images: fit.filter((a) => a.kind === "IMAGE").length,
+      covered: fit.length > 0,
+      bestScore,
+      // лучшие материалы: видео впереди фото при равной оценке
+      bestAssetIds: fit
+        .filter((a) => scoreOf(a) === bestScore)
+        .sort((x, y) => (x.kind === y.kind ? 0 : x.kind === "VIDEO_SEGMENT" ? -1 : 1))
+        .slice(0, 4)
+        .map((a) => a.id),
+      scenes: new Set(fit.map((a) => a.sceneId ?? a.id)).size,
+    };
+  });
+  const denom = Math.max(1, visual.length);
+  // мягкое покрытие — «хоть что-то есть», жёсткое — «есть честный материал»
+  const coverageRatio = visual.length ? Number((coverage.filter((c) => c.bestScore >= 1).length / denom).toFixed(2)) : 0;
+  const hardCoverageRatio = visual.length
+    ? Number((coverage.filter((c) => c.bestScore >= 2).length / denom).toFixed(2))
+    : 0;
+  const uniqueScenes = new Set(usable.map((a) => a.sceneId ?? a.id)).size;
+  return { coverage, coverageRatio, hardCoverageRatio, uniqueScenes };
+}
+
 export async function buildAssetPack(
   research: StoryResearchPack,
   beats: ScriptBeat[],
@@ -926,35 +973,7 @@ export async function buildAssetPack(
   }
   console.log(`  сопоставление с блоками: ${assets.length} -> ${usable.length}`);
 
-  const visual = beats.filter((b) => b.visualNeed !== "NONE");
-  const coverage: BeatCoverage[] = visual.map((b) => {
-    const fit = usable.filter((a) => a.compatibleBeatIds.includes(b.id));
-    const scoreOf = (a: PackAsset) => a.beatScores?.[b.id] ?? 1;
-    const bestScore = fit.reduce((m, a) => Math.max(m, scoreOf(a)), 0);
-    return {
-      beatId: b.id,
-      text: b.text.slice(0, 60),
-      need: b.visualNeed,
-      videos: fit.filter((a) => a.kind === "VIDEO_SEGMENT").length,
-      images: fit.filter((a) => a.kind === "IMAGE").length,
-      covered: fit.length > 0,
-      bestScore,
-      // лучшие материалы: видео впереди фото при равной оценке
-      bestAssetIds: fit
-        .filter((a) => scoreOf(a) === bestScore)
-        .sort((x, y) => (x.kind === y.kind ? 0 : x.kind === "VIDEO_SEGMENT" ? -1 : 1))
-        .slice(0, 4)
-        .map((a) => a.id),
-      scenes: new Set(fit.map((a) => a.sceneId ?? a.id)).size,
-    };
-  });
-  const denom = Math.max(1, visual.length);
-  // мягкое покрытие — «хоть что-то есть», жёсткое — «есть честный материал»
-  const coverageRatio = visual.length ? Number((coverage.filter((c) => c.bestScore >= 1).length / denom).toFixed(2)) : 0;
-  const hardCoverageRatio = visual.length
-    ? Number((coverage.filter((c) => c.bestScore >= 2).length / denom).toFixed(2))
-    : 0;
-  const uniqueScenes = new Set(usable.map((a) => a.sceneId ?? a.id)).size;
+  const { coverage, coverageRatio, hardCoverageRatio, uniqueScenes } = computeCoverage(usable, beats);
 
   const pack: StoryAssetPackV2 = {
     storyId: research.storyId,

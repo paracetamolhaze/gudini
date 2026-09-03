@@ -94,7 +94,10 @@ async function withOneRetry<T>(fn: (isRetry: boolean) => Promise<T>): Promise<T>
     return await fn(false);
   } catch (e: any) {
     const msg = String(e?.message ?? e);
-    if (!/пустой ответ|429|5\d\d:|timeout|ECONNRESET|fetch failed/i.test(msg)) throw e;
+    // Код ошибки может стоять и перед двоеточием, и перед телом ответа («500 {…}»):
+    // разовый 500 от провайдера однажды уронил сопоставление после полностью
+    // собранной медиатеки, потому что регулярка ждала только «500:».
+    if (!/пустой ответ|(?:429|5\d\d)|timeout|ECONNRESET|fetch failed|overloaded|api_error/i.test(msg)) throw e;
     return await fn(true);
   }
 }

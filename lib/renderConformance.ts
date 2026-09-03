@@ -2,20 +2,18 @@ import fs from "fs";
 import path from "path";
 import { runFfmpeg } from "./ffmpeg";
 import { frameHash, hamming } from "./sceneHash";
-import { EditPlan, EditEvent, eventLayout } from "./editPlan";
-import { insetBox, insetCropFilter, insetScaleFilter, AUTHOR_SAFE_TOP, INSET } from "./topInset";
-import { probe } from "./ffmpeg";
+import { EditPlan, EditEvent } from "./editPlan";
+import { CARD, CARD_FILTER, CARD_CROP, AUTHOR_CROP } from "./topInset";
 
 /**
  * Сверка отрендеренного ролика с планом.
  *
- * План может быть безупречным, а в готовом файле вставки не окажется: фото на
- * 43.9–47.4 существовало в плане и отсутствовало в MP4 три секунды подряд.
- * Техническая самопроверка этого не видит — она смотрит на длительность и
- * потоки, а не на то, ЧТО на экране.
+ * План может быть безупречным, а в готовом файле картинки не окажется. Поэтому
+ * готовый файл проверяется по факту: в области карточки — строго x=90, y=120,
+ * 900×506 — должен быть ожидаемый материал, а ниже — автор.
  *
  * Главное правило: каждая запланированная точка обязана получить результат.
- * Пропуск «не смогли проверить» — это не «всё хорошо»: именно молчаливый пропуск
+ * Пропуск «не смогли проверить» — это не «всё хорошо»: молчаливый пропуск
  * однажды спрятал ту самую вставку, ради которой проверка и делалась.
  *
  * Всё локально: ffmpeg и арифметика, ни одного платного вызова.
@@ -23,16 +21,14 @@ import { probe } from "./ffmpeg";
 
 /** Расстояние между хэшами, ниже которого считаем «на экране тот самый материал». */
 export const MATCH_DISTANCE = 18;
-
-/** Полноэкранная раскладка — только для старых планов. */
-const FULLSCREEN = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920";
+/** Насколько карточка может измениться внутри одной вставки: больше — это уже видео. */
+export const STILL_TOLERANCE = 10;
 
 export type CheckStatus = "PASS" | "FAIL" | "ERROR";
 
 export type CheckPoint = {
   assetId: string;
   assetFile: string;
-  kind: "EXTERNAL_IMAGE" | "EXTERNAL_VIDEO";
   plannedStart: number;
   plannedEnd: number;
   at: number;
@@ -47,20 +43,16 @@ export type ConformanceResult = {
   passed: number;
   failed: number;
   errored: number;
+  /** контрольные секунды после вступления, где по плану карточки нет */
+  gaps: { at: number }[];
   ok: boolean;
 };
 
-const isStill = (f: string) => /\.(jpe?g|png|webp|bmp|gif)$/i.test(f);
+const isStill = (f: string) => /\.(jpe?g|png|webp|bmp)$/i.test(f);
 
-/**
- * Снимает кадр и приводит его к монтажному виду.
- *
- * У неподвижной картинки кадр ровно один, и перемотка к нулю уводит за его
- * пределы: ffmpeg отдаёт «frame=0» и пустой файл. Поэтому для картинок
- * перемотки нет — это та же причина, по которой фото пропадало из ролика.
- */
-async function grab(file: string, at: number, out: string, still: boolean, vf = FULLSCREEN): Promise<string | null> {
+async function grab(file: string, at: number, out: string, still: boolean, vf: string): Promise<string | null> {
   try {
+    // у картинки кадр один: перемотка к нулю уводит за его пределы
     const seek = still ? [] : ["-ss", at.toFixed(3)];
     await runFfmpeg([...seek, "-i", file, "-frames:v", "1", "-vf", vf, "-q:v", "4", out]);
     if (!fs.existsSync(out) || fs.statSync(out).size === 0) return "ffmpeg не создал кадр";
@@ -76,18 +68,22 @@ export function checkPointsFor(ev: EditEvent): number[] {
 }
 
 /**
- * Проверяет, что в запланированные моменты на экране действительно материал
- * вставки. Возвращает результат ПО КАЖДОЙ точке — без исключений.
+ * Проверяет, что в запланированные моменты в области карточки действительно
+ * ожидаемая картинка, автор под ней виден, карточка неподвижна, а после
+ * вступления она есть на каждой контрольной секунде. Результат — ПО КАЖДОЙ
+ * точке, без исключений.
  */
 export async function checkRenderConformance(
   dir: string,
   renderedFile: string,
   plan: EditPlan,
+  opts: { introEnd?: number } = {},
 ): Promise<ConformanceResult> {
   const tmp = path.join(dir, "_conformance");
   fs.mkdirSync(tmp, { recursive: true });
-  const inserts = plan.events.filter((e) => e.type === "B_ROLL" && e.file);
+  const inserts = plan.events.filter((e) => e.type === "B_ROLL" && e.file).sort((a, b) => a.start - b.start);
   const points: CheckPoint[] = [];
+  const gaps: { at: number }[] = [];
 
   const fail = (base: Omit<CheckPoint, "status" | "distance">, reason: string): CheckPoint => ({
     ...base,
@@ -99,117 +95,91 @@ export async function checkRenderConformance(
   try {
     for (const [i, ev] of inserts.entries()) {
       const file = ev.file!;
-      const still = isStill(file);
-      const kind = still ? "EXTERNAL_IMAGE" : "EXTERNAL_VIDEO";
       const assetId = path.basename(file).replace(/\.[a-z0-9]+$/i, "");
+      const baseOf = (at: number) => ({
+        assetId,
+        assetFile: path.basename(file),
+        plannedStart: Number(ev.start.toFixed(2)),
+        plannedEnd: Number(ev.end.toFixed(2)),
+        at: Number(at.toFixed(2)),
+      });
 
-      // Геометрия вставки та же, что у рендерера: общий helper, а не своя копия.
-      const inset = eventLayout(ev) !== "fullscreen";
-      let box = insetBox(INSET.maxW, INSET.maxH);
-      if (inset && fs.existsSync(file)) {
-        try {
-          const info = await probe(file);
-          box = insetBox(info.width, info.height);
-        } catch {}
+      // Только картинки: видеофайл в карточке — ошибка плана, а не рендера.
+      if (!isStill(file)) {
+        for (const at of checkPointsFor(ev)) points.push(fail(baseOf(at), "в карточке видеофайл, а разрешены только картинки"));
+        continue;
       }
-      // эталон приводится к размеру вставки, а кадр ролика — вырезается по её области
-      const refVf = inset ? insetScaleFilter(box) : FULLSCREEN;
-      const outVf = inset ? insetCropFilter(box) : FULLSCREEN;
-
-      // Для картинки эталон один — она сама, приведённая к монтажному виду.
-      // Для видео эталон свой на каждую точку: сегмент движется, и кадр на 0.3с
-      // не похож на кадр на 2.5с даже внутри одной вставки.
-      let stillRefHash: bigint | null = null;
-      let stillRefError: string | null = null;
-      if (still) {
-        const refFile = path.join(tmp, `ref-${i}.jpg`);
-        const err = await grab(file, 0, refFile, true, refVf);
-        if (err) stillRefError = `эталон изображения не снят: ${err}`;
-        else {
-          stillRefHash = await frameHash(refFile, tmp);
-          if (stillRefHash === null) stillRefError = "эталон изображения не поддался разбору";
-        }
+      if (!fs.existsSync(file)) {
+        for (const at of checkPointsFor(ev)) points.push(fail(baseOf(at), "файл материала отсутствует на диске"));
+        continue;
       }
 
+      // эталон один: сама картинка, приведённая к карточке тем же фильтром, что и в рендере
+      const refFile = path.join(tmp, `ref-${i}.jpg`);
+      const refErr = await grab(file, 0, refFile, true, CARD_FILTER);
+      const refHash = refErr ? null : await frameHash(refFile, tmp);
+      if (refErr || refHash === null) {
+        for (const at of checkPointsFor(ev)) points.push(fail(baseOf(at), `эталон карточки не снят: ${refErr ?? "не разобран"}`));
+        continue;
+      }
+
+      const cardHashes: bigint[] = [];
       for (const at of checkPointsFor(ev)) {
-        const base = {
-          assetId,
-          assetFile: path.basename(file),
-          kind: kind as CheckPoint["kind"],
-          plannedStart: Number(ev.start.toFixed(2)),
-          plannedEnd: Number(ev.end.toFixed(2)),
-          at: Number(at.toFixed(2)),
-        };
-
-        if (!fs.existsSync(file)) {
-          points.push(fail(base, "файл материала отсутствует на диске"));
-          continue;
-        }
-
-        let refHash = stillRefHash;
-        if (!still) {
-          const offset = Math.max(0, at - ev.start);
-          const refFile = path.join(tmp, `ref-${i}-${offset.toFixed(2)}.jpg`);
-          const err = await grab(file, offset, refFile, false, refVf);
-          if (err) {
-            points.push(fail(base, `эталонный кадр материала не снят: ${err}`));
-            continue;
-          }
-          refHash = await frameHash(refFile, tmp);
-          if (refHash === null) {
-            points.push(fail(base, "эталонный кадр не поддался разбору"));
-            continue;
-          }
-        } else if (stillRefError) {
-          points.push(fail(base, stillRefError));
-          continue;
-        }
-
-        const shot = path.join(tmp, `out-${i}-${at.toFixed(2)}.jpg`);
-        const outErr = await grab(renderedFile, at, shot, false, outVf);
+        const base = baseOf(at);
+        const shot = path.join(tmp, `card-${i}-${at.toFixed(2)}.jpg`);
+        const outErr = await grab(renderedFile, at, shot, false, CARD_CROP);
         if (outErr) {
-          points.push(fail(base, `кадр готового ролика не снят: ${outErr}`));
+          points.push(fail(base, `кадр карточки не снят: ${outErr}`));
           continue;
         }
         const outHash = await frameHash(shot, tmp);
         if (outHash === null) {
-          points.push(fail(base, "кадр готового ролика не поддался разбору"));
+          points.push(fail(base, "кадр карточки не поддался разбору"));
           continue;
         }
+        cardHashes.push(outHash);
 
-        const distance = hamming(refHash!, outHash);
+        const distance = hamming(refHash, outHash);
         if (distance > MATCH_DISTANCE) {
-          points.push({ ...base, distance, status: "FAIL", reason: "на экране не запланированный материал" });
+          points.push({ ...base, distance, status: "FAIL", reason: "в области карточки не запланированная картинка" });
           continue;
         }
 
-        // Автор — главный слой: под вставкой он обязан оставаться виден.
-        // Полноэкранная перебивка в новом стиле — ошибка, а не «просто иначе».
-        if (inset) {
-          const authorShot = path.join(tmp, `author-${i}-${at.toFixed(2)}.jpg`);
-          const authorVf = `crop=${INSET.frameW}:${INSET.frameH - AUTHOR_SAFE_TOP}:0:${AUTHOR_SAFE_TOP}`;
-          const aErr = await grab(renderedFile, at, authorShot, false, authorVf);
-          if (aErr) {
-            points.push(fail(base, `не удалось проверить зону автора: ${aErr}`));
-            continue;
-          }
-          const authorHash = await frameHash(authorShot, tmp);
-          try {
-            fs.rmSync(authorShot, { force: true });
-          } catch {}
-          if (authorHash === null) {
-            points.push(fail(base, "зона автора не поддалась разбору"));
-            continue;
-          }
-          // вставка не должна оказаться и внизу тоже: это признак растяжения на весь кадр
-          if (hamming(refHash!, authorHash) <= MATCH_DISTANCE) {
-            points.push({ ...base, distance, status: "FAIL", reason: "вставка занимает и нижнюю часть кадра — автор перекрыт" });
-            continue;
-          }
+        // автор под карточкой обязан оставаться на экране
+        const authorShot = path.join(tmp, `author-${i}-${at.toFixed(2)}.jpg`);
+        const aErr = await grab(renderedFile, at, authorShot, false, AUTHOR_CROP);
+        if (aErr) {
+          points.push(fail(base, `зона автора не снята: ${aErr}`));
+          continue;
         }
-
+        const authorHash = await frameHash(authorShot, tmp);
+        if (authorHash === null) {
+          points.push(fail(base, "зона автора не поддалась разбору"));
+          continue;
+        }
+        if (hamming(refHash, authorHash) <= MATCH_DISTANCE) {
+          points.push({ ...base, distance, status: "FAIL", reason: "картинка занимает и зону автора — он перекрыт" });
+          continue;
+        }
         points.push({ ...base, distance, status: "PASS" });
       }
+
+      // карточка неподвижна: если три её кадра заметно различаются — это видео
+      if (cardHashes.length === 3) {
+        const drift = Math.max(hamming(cardHashes[0], cardHashes[1]), hamming(cardHashes[1], cardHashes[2]));
+        if (drift > STILL_TOLERANCE) {
+          const last = points[points.length - 1];
+          if (last && last.status === "PASS") {
+            points[points.length - 1] = { ...last, status: "FAIL", reason: `содержимое карточки движется (дрейф ${drift})` };
+          }
+        }
+      }
+    }
+
+    // после вступления карточка должна быть на КАЖДОЙ контрольной секунде
+    const introEnd = opts.introEnd ?? inserts[0]?.start ?? plan.duration;
+    for (let t = introEnd + 0.5; t < plan.duration - 0.2; t += 1) {
+      if (!inserts.some((e) => e.start <= t && t <= e.end + 1 / 30)) gaps.push({ at: Number(t.toFixed(2)) });
     }
   } finally {
     try {
@@ -218,16 +188,10 @@ export async function checkRenderConformance(
   }
 
   const expected = inserts.length * 3;
-  const passed = points.filter((p) => p.status === "PASS").length;
-  const failed = points.filter((p) => p.status === "FAIL").length;
-  const errored = points.filter((p) => p.status === "ERROR").length;
-
-  // Недосчитанная точка — тоже провал: отчёт обязан покрыть все запланированные.
   if (points.length !== expected) {
     points.push({
       assetId: "-",
       assetFile: "-",
-      kind: "EXTERNAL_VIDEO",
       plannedStart: 0,
       plannedEnd: 0,
       at: 0,
@@ -236,13 +200,18 @@ export async function checkRenderConformance(
       reason: `проверено ${points.length} точек из ${expected} запланированных`,
     });
   }
-
+  const passed = points.filter((p) => p.status === "PASS").length;
+  const failed = points.filter((p) => p.status === "FAIL").length;
+  const errored = points.filter((p) => p.status === "ERROR").length;
   return {
     expected,
     points,
     passed,
     failed,
-    errored: points.filter((p) => p.status === "ERROR").length,
-    ok: passed === expected && failed === 0 && errored === 0,
+    errored,
+    gaps,
+    ok: passed === expected && failed === 0 && errored === 0 && gaps.length === 0,
   };
 }
+
+export { CARD };

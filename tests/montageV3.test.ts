@@ -67,6 +67,13 @@ test("3: режиссёр не может взять материал вне м�
 test("4: звук внешнего материала всегда выключен", () => {
   for (const f of ["lib/storyAssetPack.ts", "lib/videoFetch.ts"]) {
     const src = fs.readFileSync(f, "utf8");
+    if (f.endsWith("storyAssetPack.ts")) {
+      // медиатека нового формата состоит только из стоп-кадров и фото:
+      // у картинки звука нет по построению, отбрасывать нечего
+      assert.ok(src.includes('kind: "IMAGE"'), `${f}: материалы — только картинки`);
+      assert.ok(!src.includes('kind: "VIDEO_SEGMENT"'), `${f}: видео-сегменты в медиатеку больше не попадают`);
+      continue;
+    }
     if (src.includes("runFfmpeg")) assert.ok(src.includes('"-an"'), `${f}: аудио внешнего видео не отбрасывается`);
   }
   const taste = JSON.parse(fs.readFileSync("montage-taste.json", "utf8"));

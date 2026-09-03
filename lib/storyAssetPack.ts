@@ -12,6 +12,7 @@ import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
 import { taste } from "./montageTaste";
 import { frameHash, groupScenes } from "./sceneHash";
+import { CARD_FILTER, sourceBigEnough, GOOD_SOURCE } from "./topInset";
 
 const rank = (i: string) => (i === "HIGH" ? 0 : i === "MEDIUM" ? 1 : 2);
 /**
@@ -40,7 +41,12 @@ const domainOf = (u: string) => {
  * поэтому это не возврат к слепому поиску по фразе.
  */
 
-export const PACK_VERSION = 2;
+/**
+ * Версия формата медиатеки. 3 — только неподвижные картинки в единой геометрии
+ * карточки: видео-сегменты, обрезанные под вертикаль, для нового стиля
+ * непригодны, и пакет прошлой версии переиспользовать нельзя.
+ */
+export const PACK_VERSION = 3;
 
 /**
  * Версия правил визуального контроля. Меняется, когда отбор материала становится
@@ -141,6 +147,8 @@ export type PackAsset = {
   /** смысловая сцена: празднование, носилки, пресс-конференция — из разбора кадра */
   sceneFamily?: string;
   segment?: { start: number; end: number };
+  /** реальный размер исходника до приведения к карточке — для контроля качества */
+  sourceResolution?: string;
   description: string;
   role: "EVENT" | "PERSON" | "CONTEXT";
   compatibleBeatIds: string[];
@@ -482,33 +490,32 @@ async function cutSegments(
     if (seenDesc.some((d) => similar(d, an.description))) continue;
     seenDesc.push(an.description);
 
-    const clip = path.join(dir, `seg-${videoId}-${i}.mp4`);
+    // Верхняя карточка — только неподвижная картинка. Из проверенного исходника
+    // берётся чистый стоп-кадр в максимальном качестве и сразу приводится к
+    // единой геометрии карточки. Никаких вертикальных обрезок: раньше сегменты
+    // резались под 1080×1920, и в карточке они выглядели узкой полоской.
+    const still = path.join(dir, `still-${videoId}-${i}.jpg`);
     try {
+      const sourceInfo = await probe(file);
+      if (!sourceBigEnough(sourceInfo.width, sourceInfo.height)) {
+        countQcReason(`исходник ${sourceInfo.width}×${sourceInfo.height} меньше карточки`);
+        continue;
+      }
       await runFfmpeg(
-        [
-          "-ss", at.toFixed(2),
-          "-i", path.basename(file),
-          "-t", segLen.toFixed(2),
-          "-an",
-          // Пропорции исходника СОХРАНЯЮТСЯ: сегмент показывается верхней
-          // вставкой, а не на весь экран. Прежняя обрезка под вертикаль
-          // превращала горизонтальный сюжет в узкую полоску.
-          "-vf", `scale='min(1280,iw)':-2:force_original_aspect_ratio=decrease,setsar=1`,
-          "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast",
-          path.basename(clip),
-        ],
+        ["-ss", at.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", path.basename(still)],
         { cwd: dir },
       );
       out.push({
         id: sid(`${videoId}:${i}`),
-        kind: "VIDEO_SEGMENT",
-        file: path.basename(clip),
+        kind: "IMAGE",
+        file: path.basename(still),
         sourceUrl: "",
         sourceDomain: "",
         sourceVideoId: videoId,
         sceneId: `${videoId}-s${sceneOf[shots.indexOf(parts[0].sh)]}`,
         sceneFamily: an.sceneFamily,
         segment: { start: Number(at.toFixed(2)), end: Number((at + segLen).toFixed(2)) },
+        sourceResolution: `${sourceInfo.width}×${sourceInfo.height}`,
         description: an.description,
         verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
       });
@@ -860,7 +867,22 @@ export async function buildAssetPack(
               countQcReason(bad);
               continue;
             }
-            fs.writeFileSync(file, buf);
+            // Реальный размер файла проверяется ПОСЛЕ скачивания: миниатюра
+            // выглядит картинкой, но на карточке 900×506 превращается в мыло.
+            const rawFile = file.replace(/\.jpg$/, ".src.jpg");
+            fs.writeFileSync(rawFile, buf);
+            let dims = { width: 0, height: 0 };
+            try {
+              dims = await probe(rawFile);
+            } catch {}
+            if (!sourceBigEnough(dims.width, dims.height)) {
+              countQcReason(`изображение ${dims.width}×${dims.height} меньше карточки`);
+              fs.rmSync(rawFile, { force: true });
+              continue;
+            }
+            // единая геометрия карточки — та же, что у стоп-кадров и у рендера
+            await runFfmpeg(["-i", rawFile, "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", file]);
+            fs.rmSync(rawFile, { force: true });
             stages.imagesAccepted++;
             gotImage = true;
             assets.push({
@@ -869,6 +891,7 @@ export async function buildAssetPack(
               file: path.basename(file),
               sourceUrl: im.url,
               sourceDomain: domainOf(im.url),
+              sourceResolution: `${dims.width}×${dims.height}`,
               description: an.description,
               role: "CONTEXT",
               compatibleBeatIds: [],

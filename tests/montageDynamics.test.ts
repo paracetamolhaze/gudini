@@ -73,7 +73,7 @@ test("4: единственный переход — hard cut, никаких э
     assert.ok(!chain.includes(effect), `в видеоцепочке найден эффект: ${effect}`);
   }
   assert.ok(/overlay=[^;]*eof_action=pass/.test(chain), "вставка просто перекрывает часть кадра, без перехода");
-  assert.ok(chain.includes("insetScaleFilter"), "вставка вписывается в верхнюю область, а не растягивается");
+  assert.ok(chain.includes("CARD_FILTER"), "картинка приводится к единой карточке 900×506, а не растягивается на кадр");
   // аудио-микрофейды на склейках речи остаются — это только звук
   const source = pipeline.slice(pipeline.indexOf("async function buildCleanSource"));
   assert.ok(source.includes("afade=t=in:d=0.015"), "микрофейд 15мс на стыках аудио");

@@ -41,6 +41,8 @@ export function toEditEvents(montage: MontagePlan, pack: StoryAssetPackV2, media
   for (const e of montage.events) {
     const asset = byId.get(e.assetId);
     if (!asset) continue;
+    // в карточку идут только картинки — видеофайл здесь означает старый пакет
+    if (asset.kind !== "IMAGE") throw new Error(`${asset.id}: в карточку попал ${asset.kind}, разрешены только изображения`);
     const file = path.join(mediaDir, asset.file);
     if (!fs.existsSync(file)) continue;
     out.push({

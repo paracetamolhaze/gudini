@@ -19,6 +19,9 @@ import { EditPlan } from "./editPlan";
  */
 
 export type CriticIssueType =
+  | "MOVING_CARD"
+  | "EMPTY_CARD"
+  | "WRONG_CARD_SIZE"
   | "FULLSCREEN_BROLL"
   | "AUTHOR_COVERED"
   | "INSET_OUT_OF_SAFE_AREA"
@@ -53,15 +56,19 @@ const CRITIC_SYSTEM = `You are reviewing a FINISHED vertical short-form video (T
 You are given contact sheets: frames sampled from the final render, each labelled with its timecode in seconds.
 You also get the planned timeline and the spoken transcript.
 
-The intended style: the presenter fills the frame and stays visible the whole time;
-external photos and videos appear as a RECTANGULAR ILLUSTRATION IN THE TOP PART of
-the frame, roughly 900x520 px at y=130, centred, never covering the presenter's face
-and never touching the captions at the bottom. Captions are short phrases, white,
-1-3 lines, in the lower third.
+The intended style: the presenter fills the frame and stays visible the whole time.
+After a short intro (the first ~3 seconds, presenter only, with a subtle zoom-in), a
+STILL IMAGE CARD sits in the top part of the frame: always the same 900x506 box at
+x=90, y=120. From the first card until the very end, some card is ALWAYS present;
+cards replace each other with hard cuts. No video inserts, no card animation.
+Captions are short phrases, white, 1-3 lines, in the lower third.
 
 Judge the ACTUAL RESULT, not the intention. Report problems a viewer would notice:
 
-- FULLSCREEN_BROLL: external footage fills the whole frame instead of sitting in the top area.
+- FULLSCREEN_BROLL: external footage fills the whole frame instead of sitting in the card.
+- MOVING_CARD: the card shows moving video instead of a still image.
+- EMPTY_CARD: after the intro, the top card area is empty (presenter only).
+- WRONG_CARD_SIZE: the card is narrower or taller than the standard box, or in a different place.
 - AUTHOR_COVERED: the presenter's face is hidden behind an insert.
 - INSET_OUT_OF_SAFE_AREA: the insert sits too low, off-centre, or overlaps the bottom half.
 - STRETCHED_IMAGE: the insert is squashed or stretched, aspect ratio broken.

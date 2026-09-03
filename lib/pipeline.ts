@@ -15,8 +15,7 @@ import { planSpeechCleanup } from "./speechCleanupPlanner";
 import { runMontageV3 } from "./montageV3Pipeline";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { buildAss } from "./subtitles";
-import { insetBox, insetScaleFilter, InsetBox, INSET } from "./topInset";
-import { eventLayout } from "./editPlan";
+import { CARD, CARD_FILTER, introZoomFilter } from "./topInset";
 import { applyScriptFormatting } from "./scriptFormat";
 import { generateMeta } from "./ai";
 import { buildStoryAssetPack } from "./storyAssets";
@@ -421,45 +420,32 @@ export async function renderPlan(
   const music = hasMusic();
   const brolls = plan.events.filter((e) => e.type === "B_ROLL" && e.file);
 
-  // A-roll проходит РОВНО один путь обработки: scale → crop → fps.
+  // A-roll проходит РОВНО один путь обработки: scale → crop → fps → вступительный зум.
   // Никаких split/повторных scale поверх той же картинки: раньше punch-in накладывал
   // пересканированную копию кадра, и на этих секундах заметно менялись цвет и контраст.
-  let chain = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30[vbase]`;
+  // Зум здесь — обрезка того же кадра, копии нет, цвет одинаковый до, во время и после.
+  let chain =
+    `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,` +
+    `${introZoomFilter()}[vbase]`;
   let current = "vbase";
 
-  // Неподвижная картинка — это ОДИН кадр. Без зацикливания ffmpeg отдаёт его
-  // ровно раз, fps его не размножает, а overlay после конца входа пропускает
-  // A-roll — фото было видно 1/30 секунды вместо трёх секунд. Поэтому картинки
-  // подаются с -loop 1 и собственной длительностью.
-  const isStill = (f: string) => /\.(jpe?g|png|webp|bmp|gif)$/i.test(f);
-
-  // Размеры каждого материала нужны заранее: вставка вписывается в верхнюю
-  // область С СОХРАНЕНИЕМ ПРОПОРЦИЙ, а не растягивается на весь кадр.
-  const boxes: InsetBox[] = [];
+  // Верхняя карточка — только неподвижная картинка, всегда одного размера и
+  // в одном месте. Видеофайл сюда попасть не может: материал приводится к
+  // картинке ещё при сборке медиатеки.
+  const isStill = (f: string) => /\.(jpe?g|png|webp|bmp)$/i.test(f);
   for (const b of brolls) {
-    try {
-      const info = await probe(b.file!);
-      boxes.push(insetBox(info.width, info.height));
-    } catch {
-      boxes.push(insetBox(INSET.maxW, INSET.maxH));
+    if (!isStill(b.file!)) {
+      throw new Error(`Верхняя карточка принимает только изображения, получен ${path.basename(b.file!)}`);
     }
   }
 
-  // Внешний материал ложится ПОВЕРХ автора отдельным прямоугольником сверху.
-  // Автор остаётся фоном и виден всё время: перекрывать его целиком нельзя.
   brolls.forEach((b, k) => {
     const inputIdx = (music ? 2 : 1) + k;
     const clipDur = (b.end - b.start).toFixed(3);
-    const box = boxes[k];
-    const full = eventLayout(b) === "fullscreen";
-    const geom = full
-      ? `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920`
-      : insetScaleFilter(box);
-    const place = full ? "0:0" : `${box.x}:${box.y}`;
     chain +=
-      `;[${inputIdx}:v]${geom},fps=30,` +
+      `;[${inputIdx}:v]${CARD_FILTER},fps=30,` +
       `trim=duration=${clipDur},setpts=PTS-STARTPTS+${b.start.toFixed(3)}/TB[bv${k}]` +
-      `;[${current}][bv${k}]overlay=${place}:eof_action=pass:enable='between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})'[vo${k}]`;
+      `;[${current}][bv${k}]overlay=${CARD.x}:${CARD.y}:eof_action=pass:enable='between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})'[vo${k}]`;
     current = `vo${k}`;
   });
 
@@ -476,11 +462,8 @@ export async function renderPlan(
     [
       "-i", source,
       ...(music ? ["-stream_loop", "-1", "-i", MUSIC_FILE] : []),
-      ...brolls.flatMap((b) =>
-        isStill(b.file!)
-          ? ["-loop", "1", "-framerate", "30", "-t", (b.end - b.start).toFixed(3), "-i", b.file!]
-          : ["-i", b.file!],
-      ),
+      // картинка — один кадр; без зацикливания overlay показал бы её 1/30 секунды
+      ...brolls.flatMap((b) => ["-loop", "1", "-framerate", "30", "-t", (b.end - b.start).toFixed(3), "-i", b.file!]),
       "-filter_complex", `${chain};${audioChain}`,
       "-map", "[v]", "-map", "[a]",
       "-threads", "4",

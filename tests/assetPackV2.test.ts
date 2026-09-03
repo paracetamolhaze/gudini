@@ -46,7 +46,7 @@ test("4: одно исходное видео даёт НЕСКОЛЬКО раз
   assert.ok(cut.includes("for (let i = 0; i < samples; i++)"), "видео сэмплируется по таймлайну");
   assert.ok(cut.includes("sourceVideoId: videoId"), "сегменты помнят исходное видео");
   assert.ok(cut.includes("seenDesc.some((d) => similar(d, an.description))"), "почти одинаковые кадры не дублируются");
-  assert.ok(cut.includes('"-an"'), "звук исходного видео не сохраняется");
+  assert.ok(cut.includes("CARD_FILTER"), "из исходника берётся стоп-кадр в геометрии карточки — звука у него нет по природе");
 });
 
 test("5: в пакет попадают только материалы, совместимые с блоками", () => {

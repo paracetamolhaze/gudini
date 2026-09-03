@@ -104,11 +104,32 @@ export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): Vali
   if (s.maxARollGap > PACING.maxARollGap) {
     errors.push(`подряд ${s.maxARollGap.toFixed(1)}с без визуала — предел ${PACING.maxARollGap}с`);
   }
-  const first = [...plan.events].sort((a, b) => a.start - b.start)[0];
+  const byStart = [...plan.events].sort((a, b) => a.start - b.start);
+  const first = byStart[0];
   if (!first) {
     errors.push("в плане нет ни одной вставки");
   } else if (first.start > PACING.firstVisualBy) {
-    errors.push(`первая вставка на ${first.start.toFixed(1)}с — позже ${PACING.firstVisualBy}с, начало ролика статично`);
+    errors.push(`первая картинка на ${first.start.toFixed(1)}с — позже ${PACING.firstVisualBy}с, начало ролика статично`);
+  }
+  // сверху только картинки
+  for (const e of plan.events) {
+    if (e.type !== "EXTERNAL_IMAGE") errors.push(`${e.assetId}: движущаяся вставка (${e.type}) — разрешены только картинки`);
+  }
+  // после первой картинки дорожка непрерывна: допустим зазор не больше одного кадра
+  for (let i = 1; i < byStart.length; i++) {
+    const gap = byStart[i].start - byStart[i - 1].end;
+    if (gap > 1 / 30 + 0.001) errors.push(`пустой верх ${gap.toFixed(2)}с между ${byStart[i - 1].assetId} и ${byStart[i].assetId}`);
+  }
+  if (first && plan.duration - byStart[byStart.length - 1].end > 1 / 30 + 0.001) {
+    errors.push(`пустой верх в конце: последняя картинка кончается на ${byStart[byStart.length - 1].end.toFixed(1)}с из ${plan.duration.toFixed(1)}`);
+  }
+  // покрытие после вступления не ниже 98%
+  if (first) {
+    const after = plan.duration - first.start;
+    const covered = byStart.reduce((n, e) => n + (e.end - e.start), 0);
+    if (after > 0 && covered / after < 0.98) {
+      errors.push(`после вступления картинка есть лишь ${((covered / after) * 100).toFixed(0)}% времени — нужно ≥ 98%`);
+    }
   }
   // вставки не должны стоять одним комом: считаем разброс по таймлайну
   if (plan.events.length >= 3) {

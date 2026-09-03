@@ -1,4 +1,5 @@
 import { Word } from "./transcribe";
+import { PunctWord } from "./scriptPunctuation";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE, EditEvent } from "./editPlan";
 
 /**
@@ -21,7 +22,7 @@ const PAUSE_BREAK = 0.42;
 /** Больше трёх строк на экране не показываем. */
 const MAX_LINES = 3;
 /** Символов в строке — дальше libass переносит сам, но мы делаем это осмысленно. */
-const LINE_CHARS = 22;
+const LINE_CHARS = 20;
 
 export type Phrase = { start: number; end: number; words: string[] };
 
@@ -32,10 +33,29 @@ export type Phrase = { start: number; end: number; words: string[] };
  * набирается до maxWords. Дробь «1/8», сумма «$5000», процент и счёт «2:0»
  * остаются целыми — это одно слово транскрипции, и разрывать его нельзя.
  */
-export function groupWordsIntoPhrases(words: Word[], maxWords = 6): Phrase[] {
+export function groupWordsIntoPhrases(words: PunctWord[], maxWords = 6): Phrase[] {
   const limit = Math.max(1, Math.min(9, Math.round(maxWords)));
+  const list = words.filter((w) => String(w.word ?? "").trim());
   const out: Phrase[] = [];
-  let cur: Word[] = [];
+  let cur: PunctWord[] = [];
+
+  const hardAt = (i: number) => {
+    const w = list[i];
+    const next = list[i + 1];
+    const pause = next ? next.start - w.end >= PAUSE_BREAK : true;
+    const dot = /[.!?…]$/.test(String(w.word).trim());
+    return !next || Boolean(w.sentenceEnd) || Boolean(w.paragraphEnd) || dot || pause;
+  };
+  const softAt = (i: number) => /[,;:—–]/.test(list[i].punct ?? "") || /[,;:—–]$/.test(list[i].word.trim());
+  /** сколько слов до ближайшей жёсткой границы, включая текущее */
+  const untilHard = (i: number) => {
+    let n = 0;
+    for (let k = i; k < list.length; k++) {
+      n++;
+      if (hardAt(k)) break;
+    }
+    return n;
+  };
 
   const flush = () => {
     if (!cur.length) return;
@@ -43,26 +63,23 @@ export function groupWordsIntoPhrases(words: Word[], maxWords = 6): Phrase[] {
     cur = [];
   };
 
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i];
-    if (!String(w.word ?? "").trim()) continue;
-    cur.push(w);
-
-    const next = words[i + 1];
-    const endsSentence = /[.!?…]$/.test(w.word.trim());
-    const softBreak = /[,;:—–]$/.test(w.word.trim());
-    const pause = next ? next.start - w.end >= PAUSE_BREAK : true;
-
-    if (!next || endsSentence || pause) {
+  for (let i = 0; i < list.length; i++) {
+    cur.push(list[i]);
+    if (hardAt(i)) {
       flush();
       continue;
     }
-    // мягкий разрыв закрывает фразу только когда она уже набрала вес
-    if (softBreak && cur.length >= Math.max(3, limit - 2)) {
+    // запятая закрывает фразу, когда в ней уже есть мысль, а не одно слово
+    if (softAt(i) && cur.length >= 3) {
       flush();
       continue;
     }
-    if (cur.length >= limit) flush();
+    if (cur.length >= limit) {
+      // не оставлять сироту: если до конца предложения одно-два слова — забираем их
+      const rest = untilHard(i + 1);
+      if (rest > 0 && rest <= 2 && cur.length + rest <= limit + 2) continue;
+      flush();
+    }
   }
   flush();
   return out;
@@ -70,11 +87,30 @@ export function groupWordsIntoPhrases(words: Word[], maxWords = 6): Phrase[] {
 
 /** Раскладывает фразу по строкам, не разрывая слова. */
 export function wrapPhrase(words: string[], maxLines = MAX_LINES, lineChars = LINE_CHARS): string[] {
+  // теги {s..} не занимают места на экране — длину считаем по видимому тексту
+  const vis = (t: string) => t.replace(/\{[^}]*\}/g, "").length;
+  const plain = words.join(" ");
+  if (vis(plain) <= lineChars) return [plain];
+  // две строки — норма: делим по слову, ближайшему к середине
+  if (vis(plain) <= lineChars * 2 + 4 || maxLines === 2) {
+    let best = 1;
+    let bestDiff = Infinity;
+    for (let k = 1; k < words.length; k++) {
+      const l = vis(words.slice(0, k).join(" "));
+      const r = vis(words.slice(k).join(" "));
+      const diff = Math.abs(l - r);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = k;
+      }
+    }
+    return [words.slice(0, best).join(" "), words.slice(best).join(" ")];
+  }
   const lines: string[] = [];
   let line = "";
   for (const w of words) {
     const candidate = line ? `${line} ${w}` : w;
-    if (line && candidate.length > lineChars && lines.length < maxLines - 1) {
+    if (line && vis(candidate) > lineChars && lines.length < maxLines - 1) {
       lines.push(line);
       line = w;
     } else {
@@ -82,9 +118,29 @@ export function wrapPhrase(words: string[], maxLines = MAX_LINES, lineChars = LI
     }
   }
   if (line) lines.push(line);
-  // если строк всё же больше предела — доклеиваем хвост к последней
   while (lines.length > maxLines) lines[maxLines - 1] += " " + lines.splice(maxLines, 1)[0];
   return lines;
+}
+
+/**
+ * Слова фразы для показа: знаки препинания возвращаются, ключевые слова крупнее.
+ * Цвет остаётся белым — выделение только размером, без жёлтого.
+ */
+function renderPhrase(p: Phrase, all: PunctWord[], style: CaptionStyle): string[] {
+  const inPhrase = all.filter((w) => w.start >= p.start - 1e-6 && w.end <= p.end + 1e-6 && String(w.word).trim());
+  const source = inPhrase.length === p.words.length ? inPhrase : p.words.map((w) => ({ word: w } as PunctWord));
+  const shown: string[] = [];
+  source.forEach((w, i) => {
+    let t = displayWord(w.word, style.uppercase);
+    if (!t) return;
+    const last = i === source.length - 1;
+    const punct = (w.punct ?? "").replace(/[;:]/g, ",");
+    // в конце фразы запятая лишняя, а точка, вопрос и восклицание — нужны
+    if (punct && !(last && /^[,—–]+$/.test(punct))) t += punct;
+    if (w.emphasis) t = `{\\fs${style.fontSize + 8}}${t}{\\fs${style.fontSize}}`;
+    shown.push(t);
+  });
+  return wrapPhrase(shown);
 }
 
 export function buildAss(words: Word[], styleOverride?: Partial<CaptionStyle>): string {
@@ -109,14 +165,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   // maxWords теперь действительно работает: раньше поле существовало, но каждое
   // слово всё равно становилось отдельным событием.
-  const phrases = groupWordsIntoPhrases(words, style.maxWords);
+  const list = words as PunctWord[];
+  const phrases = groupWordsIntoPhrases(list, style.maxWords);
 
   const lines: string[] = [];
   let prevEnd = -Infinity;
   for (let i = 0; i < phrases.length; i++) {
     const p = phrases[i];
     const next = phrases[i + 1];
-    const text = wrapPhrase(p.words.map((w) => displayWord(w, style.uppercase)).filter(Boolean)).join("\\N");
+    const text = renderPhrase(p, list, style).join("\\N");
     if (!text) continue;
 
     const start = Math.max(p.start, prevEnd + GAP);

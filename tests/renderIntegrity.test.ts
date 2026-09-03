@@ -9,7 +9,7 @@ import { checkRenderConformance, checkPointsFor } from "../lib/renderConformance
 import { frameHash, hamming } from "../lib/sceneHash";
 import { CARD, CARD_FILTER, CARD_CROP, AUTHOR_CROP, INTRO_ZOOM } from "../lib/topInset";
 import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
-import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS } from "../lib/storyAssetPack";
+import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS, pickFrameForNeeds } from "../lib/storyAssetPack";
 import { packDistribution, montagePreflight } from "../lib/montageValidator";
 import { blackBarReport } from "../lib/blackBars";
 import { densifyTimeline, chainTimeline, MontageEvent } from "../lib/creativeDirector";
@@ -307,4 +307,20 @@ test("7: долгое удержание делится неиспользова
   const lone = [ev("used", "b0", 3, 19), ev("tail", "b3", 19, 30)];
   densifyTimeline(lone, { assets: [asset("used", { b0: 3 })], coverage: [] } as any, beats, 30);
   assert.equal(lone.length, 2, "нечем уплотнять — ничего не выдумано");
+});
+
+test("8: стоп-кадр выбирается под смысл блока, а не первый чистый", () => {
+  const frames = [
+    { description: "wide view of the stadium crowd" },
+    { description: "player on the bench arguing with the referee" },
+    { description: "ball in the goal net" },
+  ];
+  const needs = [{ visualDescription: "substitute arguing with referee from the bench" }];
+  const pick = pickFrameForNeeds(frames, needs);
+  assert.equal(pick.index, 1, "выбран кадр со спором у скамейки");
+  assert.ok(pick.score >= 2);
+  // без потребностей — первый доступный
+  assert.equal(pickFrameForNeeds(frames, []).index, 0);
+  // пустые кадры пропускаются
+  assert.equal(pickFrameForNeeds([null, frames[1]], needs).index, 1);
 });

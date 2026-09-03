@@ -393,14 +393,47 @@ export function segmentWindowDecision(
 }
 
 /**
+ * Выбор стоп-кадра ПОД СМЫСЛ, а не «первый чистый в окне».
+ *
+ * Кадры одного окна описаны все; равномерная сетка попадает куда попало — под
+ * «спорит с судьёй» уходил мяч в сетке. Здесь среди чистых кадров окна берётся
+ * тот, чьё описание сильнее всего пересекается с тем, что ищут блоки сценария.
+ * Считается по словам, локально, бесплатно.
+ */
+const stop = new Set(["with","from","that","this","they","their","there","near","into","onto","over","under","while","after","before","during","being","some","other","another","which","have","has","are","were","been"]);
+const tokens = (s: string) =>
+  s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3 && !stop.has(w));
+
+export function pickFrameForNeeds<T extends { description: string }>(
+  frames: (T | null)[],
+  needs: { visualDescription: string }[],
+): { index: number; score: number } {
+  let best = { index: frames.findIndex((f) => f !== null), score: 0 };
+  if (!needs.length) return best;
+  const needTokens = needs.map((n) => new Set(tokens(n.visualDescription)));
+  frames.forEach((f, i) => {
+    if (!f) return;
+    const desc = tokens(f.description);
+    let score = 0;
+    for (const nt of needTokens) {
+      const hit = desc.filter((w) => nt.has(w)).length;
+      score = Math.max(score, hit);
+    }
+    if (score > best.score) best = { index: i, score };
+  });
+  return best;
+}
+
+/**
  * Режет исходное видео на самостоятельные сегменты: сэмплирует кадры, описывает
  * зрением и оставляет визуально разные моменты. Один сюжет даёт несколько вставок.
  */
-async function cutSegments(
+export async function cutSegments(
   file: string,
   dir: string,
   videoId: string,
   wanted: number,
+  needs: MediaResearchNeed[] = [],
 ): Promise<{ assets: Omit<PackAsset, "compatibleBeatIds" | "relatedFactIds" | "role">[]; duration: number }> {
   let duration = 0;
   try {
@@ -487,7 +520,12 @@ async function cutSegments(
       stages.segmentsTrimmed++;
     }
 
-    const an = parts[0].an!;
+    // среди чистых частей окна выбираем кадр под смысл блоков, а не первый попавшийся
+    const cleanParts = parts.slice(0, decision.firstBadIndex < 0 ? parts.length : decision.firstBadIndex);
+    const choice = pickFrameForNeeds(cleanParts.map((x) => x.an ?? null), needs);
+    const chosen = cleanParts[Math.max(0, choice.index)] ?? parts[0];
+    const an = chosen.an!;
+    const frameAt = at + WINDOW * OFFSETS[chosen.sh.part];
     // почти одинаковые кадры не плодим: сегменты должны отличаться
     if (seenDesc.some((d) => similar(d, an.description))) continue;
     seenDesc.push(an.description);
@@ -504,7 +542,7 @@ async function cutSegments(
         continue;
       }
       await runFfmpeg(
-        ["-ss", at.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", path.basename(still)],
+        ["-ss", frameAt.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", path.basename(still)],
         { cwd: dir },
       );
       // чёрные полосы внутри кадра обрезкой не лечатся — такой стоп-кадр не берём
@@ -522,7 +560,7 @@ async function cutSegments(
         sourceVideoId: videoId,
         sceneId: `${videoId}-s${sceneOf[shots.indexOf(parts[0].sh)]}`,
         sceneFamily: an.sceneFamily,
-        segment: { start: Number(at.toFixed(2)), end: Number((at + segLen).toFixed(2)) },
+        segment: { start: Number(frameAt.toFixed(2)), end: Number((frameAt + 0.04).toFixed(2)) },
         sourceResolution: `${sourceInfo.width}×${sourceInfo.height}`,
         description: an.description,
         verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
@@ -783,7 +821,7 @@ export async function buildAssetPack(
     stages.downloadOk++;
     if (yt) stages.ytDownloadOk++;
 
-    const cut = await cutSegments(raw, mediaDir, vid, T0.segments_per_source_video);
+    const cut = await cutSegments(raw, mediaDir, vid, T0.segments_per_source_video, needs);
     try {
       fs.rmSync(raw, { force: true });
     } catch {}
@@ -861,7 +899,7 @@ export async function buildAssetPack(
           if (!got.ok) continue;
           stages.downloadOk++;
           if (ytB) stages.ytDownloadOk++;
-          const cut = await cutSegments(raw, mediaDir, vid, 4);
+          const cut = await cutSegments(raw, mediaDir, vid, 4, needs);
           try {
             fs.rmSync(raw, { force: true });
           } catch {}

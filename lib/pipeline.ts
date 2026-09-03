@@ -17,6 +17,7 @@ import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from
 import { buildAss } from "./subtitles";
 import { CARD, CARD_FILTER, introZoomFilter } from "./topInset";
 import { applyScriptFormatting } from "./scriptFormat";
+import { attachScriptPunctuation } from "./scriptPunctuation";
 import { generateMeta } from "./ai";
 import { buildStoryAssetPack } from "./storyAssets";
 import { resetCost, writeCost } from "./pipelineCost";
@@ -186,6 +187,8 @@ export async function processProject(id: string): Promise<void> {
     }
     // каноническая запись из сценария: «18» → «1/8», «5000» → «$5000», имена с большой буквы
     words = applyScriptFormatting(words, project.script);
+    // границы предложений, знаки и ключевые слова — из сценария: субтитры режутся по смыслу
+    words = attachScriptPunctuation(words, project.script);
 
     // --- Метаданные (нужны до обложки) ---
     setStep(id, "Описание и хэштеги", 20);

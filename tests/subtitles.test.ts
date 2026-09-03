@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildAss, dropDuplicateCallouts, displayWord } from "../lib/subtitles";
+import { buildAss, dropDuplicateCallouts, displayWord, groupWordsIntoPhrases } from "../lib/subtitles";
+import { attachScriptPunctuation } from "../lib/scriptPunctuation";
 import { Word } from "../lib/transcribe";
 import type { EditEvent } from "../lib/editPlan";
 
@@ -32,10 +33,10 @@ test("Test 1: короткая фраза на экране, события ни
   const events = parseDialogues(buildAss(words));
   assert.ok(events.length < words.length, "слова сгруппированы во фразы, а не по одному");
   for (const e of events) {
-    const plain = e.text.replace(/\N/g, " ");
+    const plain = e.text.replace(/\\N/g, " ");
     const n = plain.split(/\s+/).filter(Boolean).length;
     assert.ok(n >= 1 && n <= 9, `во фразе ${n} слов — вне 1–9: «${plain}»`);
-    assert.ok(e.text.split("\N").length <= 3, `больше трёх строк: «${e.text}»`);
+    assert.ok(e.text.split("\\N").length <= 3, `больше трёх строк: «${e.text}»`);
   }
   for (let i = 1; i < events.length; i++) {
     assert.ok(
@@ -65,7 +66,7 @@ test("Test 2: смысловая пунктуация сохраняется —
   ]);
   const events = parseDialogues(buildAss(words));
   // слова теперь в одной фразе, но записи внутри неё не повреждены
-  const text = events.map((e) => e.text.replace(/\N/g, " ")).join(" ");
+  const text = events.map((e) => e.text.replace(/\\N/g, " ")).join(" ");
   assert.match(text, /МИРА/);
   assert.match(text, /1\/8/, "дробь цела");
   assert.match(text, /ФИНАЛА/);
@@ -105,7 +106,7 @@ test("Test 4: фраза заканчивается на паузе и на ко
   const events = parseDialogues(buildAss(words));
   assert.equal(events.length, 2, "конец предложения и пауза разделили фразы");
   assert.match(events[0].text, /АНГЛИЯ ПОБЕЖДАЕТ/);
-  assert.match(events[1].text.replace(/\N/g, " "), /ВСЕ БЕГУТ ПРАЗДНОВАТЬ/);
+  assert.match(events[1].text.replace(/\\N/g, " "), /ВСЕ БЕГУТ ПРАЗДНОВАТЬ/);
   assert.ok(events[0].end <= events[1].start, "события не пересекаются");
 });
 
@@ -117,7 +118,7 @@ test("Test 5: maxWords реально ограничивает длину фра
   }));
   const short = parseDialogues(buildAss(words, { maxWords: 3 }));
   for (const e of short) {
-    const n = e.text.replace(/\N/g, " ").split(/\s+/).filter(Boolean).length;
+    const n = e.text.replace(/\\N/g, " ").split(/\s+/).filter(Boolean).length;
     assert.ok(n <= 3, `maxWords=3 нарушен: ${n} слов`);
   }
   const long = parseDialogues(buildAss(words, { maxWords: 8 }));
@@ -134,4 +135,32 @@ test("Test 6: субтитры в нижней трети и не под инт�
   const baseline = 1920 - marginV;
   assert.ok(baseline >= 1450 && baseline <= 1560, `текст на ${baseline}px вне 1450–1560`);
   assert.equal(parts[3], "&H00FFFFFF", "белый основной цвет");
+});
+
+test("Test 7: границы фраз берутся из пунктуации сценария, а не из счётчика слов", () => {
+  const script =
+    "Это первый футболист в мире, который умудрился получить жёлтую карточку." + "\n\n" +
+    "Чемпионат мира, 1/8 финала, Англия играет с Мексикой.";
+  const spoken = ["это", "первый", "футболист", "в", "мире", "который", "умудрился", "получить", "желтую", "карточку", "чемпионат", "мира", "1/8", "финала", "англия", "играет", "с", "мексикой"];
+  const words = spoken.map((w, i) => ({ word: w, start: i * 0.4, end: i * 0.4 + 0.35 }));
+  const punct = attachScriptPunctuation(words, script);
+  assert.equal(punct[9].sentenceEnd, true, "после «карточку» кончается предложение");
+  assert.equal(punct[9].paragraphEnd, true, "и абзац");
+  assert.equal(punct[11].punct, ",", "после «мира» запятая");
+  assert.equal(punct[12].emphasis, true, "1/8 — ключевое");
+
+  const phrases = groupWordsIntoPhrases(punct, 6);
+  const texts = phrases.map((p) => p.words.join(" "));
+  const iKart = texts.findIndex((t) => t.endsWith("карточку"));
+  const iChemp = texts.findIndex((t) => t.startsWith("чемпионат"));
+  assert.ok(iKart >= 0 && iChemp === iKart + 1, `граница предложения не соблюдена: ${JSON.stringify(texts)}`);
+  assert.ok(!texts.some((t, k) => t.split(" ").length === 1 && k !== texts.length - 1), "сирот из одного слова нет");
+
+  const ass = buildAss(punct);
+  const events = parseDialogues(ass).map((e) => e.text);
+  assert.ok(events.some((e) => /КАРТОЧКУ\./.test(e)), "точка в конце предложения показана");
+  assert.ok(events.some((e) => /МИРА,/.test(e)), "запятая внутри фразы показана");
+  assert.ok(events.some((e) => e.includes("{\\fs66}1/8{\\fs58}")), "ключевое слово выделено размером, не цветом");
+  assert.ok(!ass.includes("\\c&H"), "цвет остался белым");
+  for (const e of events) assert.ok(e.split("\\N").length <= 3, "не больше трёх строк");
 });

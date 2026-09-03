@@ -67,7 +67,9 @@ export async function planSpeechCleanup(
   const raw = (
     await mediaComplete({
       system: CLEANUP_SYSTEM,
-      maxTokens: 16000,
+      // план чистки на минуту речи — пара тысяч токенов; 16000 заставляли
+      // пессимистичную оценку бюджета блокировать дешёвый запрос
+      maxTokens: 6000,
       stage: "Speech Cleanup",
       user:
         (script ? `Оригинальный сценарий:\n${script}\n\n` : "Оригинального сценария нет.\n\n") +

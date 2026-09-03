@@ -32,6 +32,8 @@ export type MontageTaste = {
   core_download_shortlist: number;
   max_source_videos: number;
   segments_per_source_video: number;
+  /** предел материалов в пакете; точечный добор под незакрытые блоки должен успевать до него */
+  max_total_assets: number;
   min_usable_video_segments: number;
   min_total_assets: number;
   min_beat_coverage: number;
@@ -64,7 +66,8 @@ const DEFAULTS: MontageTaste = {
   core_video_queries: 6,
   core_download_shortlist: 10,
   max_source_videos: 4,
-  segments_per_source_video: 6,
+  segments_per_source_video: 8,
+  max_total_assets: 48,
   // Видео больше не обязательно: пакет из хороших проверенных фотографий
   // с честным покрытием — полноценная медиатека для иллюстративного стиля.
   min_usable_video_segments: 0,

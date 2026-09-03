@@ -22,7 +22,7 @@
   "beat_image_queries": 2,
   "core_video_queries": 6,
   "max_source_videos": 4,
-  "segments_per_source_video": 6,
+  "segments_per_source_video": 8,
   "_guardrails": "ниже этих значений монтаж не запускается",
   "min_usable_video_segments": 0,
   "min_total_assets": 12,
@@ -31,5 +31,6 @@
   "_pacing": "жёсткие пределы валидатора берутся отсюда же, чтобы числа не расходились",
   "first_visual_by": 5.0,
   "first_visual_after": 1.8,
-  "min_external_coverage": 0.5
+  "min_external_coverage": 0.5,
+  "max_total_assets": 48
 }

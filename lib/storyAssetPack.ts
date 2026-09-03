@@ -64,7 +64,7 @@ export const QC_RULES_VERSION = 3;
  * вставки: сегменты, обрезанные под вертикаль, в ней выглядят узкой полоской.
  * Профиль монтажа сюда не входит: он влияет на расстановку, а не на пригодность.
  */
-export const RETRIEVAL_VERSION = 3;
+export const RETRIEVAL_VERSION = 4;
 
 /** Счётчики по стадиям: видно, на каком шаге кандидаты исчезают. */
 export type StageCounts = {
@@ -728,7 +728,7 @@ export async function buildAssetPack(
     stages.downloadOk++;
     if (yt) stages.ytDownloadOk++;
 
-    const cut = await cutSegments(raw, mediaDir, vid, 6);
+    const cut = await cutSegments(raw, mediaDir, vid, T0.segments_per_source_video);
     try {
       fs.rmSync(raw, { force: true });
     } catch {}
@@ -759,7 +759,7 @@ export async function buildAssetPack(
   const seenImage = new Set<string>();
 
   for (const need of ordered) {
-    if (assets.length >= 30) break;
+    if (assets.length >= T.max_total_assets) break;
     const covered = () => assets.some((a) => a.compatibleBeatIds.includes(need.beatId));
     const queries = beatQueries(research, need);
 
@@ -776,9 +776,9 @@ export async function buildAssetPack(
     const searchVideo = async (): Promise<void> => {
       const videoBudget = need.importance === "HIGH" ? T.beat_video_queries : Math.max(1, T.beat_video_queries - 1);
       for (const q of queries.slice(0, videoBudget)) {
-        if (gotVideo || assets.length >= 30) break;
+        if (gotVideo || assets.length >= T.max_total_assets) break;
         for (const v of (await braveVideos(q)).slice(0, 6)) {
-          if (gotVideo || assets.length >= 30) break;
+          if (gotVideo || assets.length >= T.max_total_assets) break;
           stages.videoResults++;
           if (isYoutube(v.url)) stages.ytUrlsDiscovered++;
           const vid = sid(v.url);
@@ -839,7 +839,7 @@ export async function buildAssetPack(
       if (gotVideo && !imageFirst) return;
       for (const q of queries.slice(0, T.beat_image_queries)) {
         for (const im of (await braveImages(q)).slice(0, 6)) {
-          if (assets.length >= 30) break;
+          if (assets.length >= T.max_total_assets) break;
           stages.imageResults++;
           const key = im.imageUrl.split("?")[0];
           if (seenImage.has(key)) continue;

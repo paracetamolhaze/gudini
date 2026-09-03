@@ -46,9 +46,11 @@ export async function blackBarReport(file: string, tmpDir: string): Promise<BarR
     const top = mean(buf, [0, W], [0, 4]);
     const bottom = mean(buf, [0, W], [H - 4, H]);
     const center = mean(buf, [25, W - 25], [12, H - 12]);
-    const side = left < BAR_MAX && right < BAR_MAX;
-    const band = top < BAR_MAX && bottom < BAR_MAX;
-    return { left, right, top, bottom, center, hasBars: (side || band) && center > CENTER_MIN };
+    // Полоса и с одной стороны — дефект: телефонная съёмка в рамке бывает
+    // прижата к краю, и в готовом ролике справа стоял чёрный столб при светлом
+    // левом крае. Кромка темнее порога при заметно светлом центре — это полоса.
+    const edgeDark = Math.min(left, right, top, bottom) < BAR_MAX;
+    return { left, right, top, bottom, center, hasBars: edgeDark && center > CENTER_MIN };
   } finally {
     try {
       fs.rmSync(raw, { force: true });

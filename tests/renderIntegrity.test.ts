@@ -263,10 +263,14 @@ test("6: чёрные полосы внутри картинки распозн�
     // вертикальная картинка в чёрной рамке 16:9 — ровно то, что выкладывают с телефона
     await runFfmpeg(["-f", "lavfi", "-i", "testsrc2=s=506x900", "-frames:v", "1", "-vf", "pad=1600:900:(ow-iw)/2:0:black", path.join(dir, "pillar.png")]);
     await runFfmpeg(["-f", "lavfi", "-i", "testsrc2=s=1600x900", "-frames:v", "1", path.join(dir, "plain.png")]);
+    // и односторонняя полоса: картинка прижата к левому краю, чёрное только справа
+    await runFfmpeg(["-f", "lavfi", "-i", "testsrc2=s=1100x900", "-frames:v", "1", "-vf", "pad=1600:900:0:0:black", path.join(dir, "right-bar.png")]);
     const p = await blackBarReport(path.join(dir, "pillar.png"), dir);
     const q = await blackBarReport(path.join(dir, "plain.png"), dir);
+    const r = await blackBarReport(path.join(dir, "right-bar.png"), dir);
     assert.equal(p.hasBars, true, `полосы не распознаны: ${JSON.stringify(p)}`);
     assert.equal(q.hasBars, false, `ложное срабатывание: ${JSON.stringify(q)}`);
+    assert.equal(r.hasBars, true, `односторонняя полоса не распознана: ${JSON.stringify(r)}`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

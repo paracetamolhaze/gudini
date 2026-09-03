@@ -1,5 +1,5 @@
 import { Word } from "./transcribe";
-import { PunctWord } from "./scriptPunctuation";
+import { PunctWord, isFunctionWord } from "./scriptPunctuation";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE, EditEvent } from "./editPlan";
 
 /**
@@ -24,83 +24,144 @@ const MAX_LINES = 3;
 /** Символов в строке — дальше libass переносит сам, но мы делаем это осмысленно. */
 const LINE_CHARS = 20;
 
-export type Phrase = { start: number; end: number; words: string[] };
+export type Phrase = { start: number; end: number; words: string[]; tokens?: PunctWord[] };
+
+/** Местоимения: фраза на них обрываться может, но лучше не надо («тренер его | так и не выпускает»). */
+const PRONOUNS = new Set(["его", "ее", "их", "ему", "ей", "им", "нас", "вас", "мне", "тебе", "себя", "это", "этот", "эта", "эти", "тот", "та", "те"]);
+const isPronoun = (w: string) => PRONOUNS.has(w.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}]/gu, ""));
 
 /**
- * Группирует слова в фразы.
+ * Группирует слова в фразы по смыслу.
  *
- * Конец предложения и длинная пауза закрывают фразу принудительно; иначе фраза
- * набирается до maxWords. Дробь «1/8», сумма «$5000», процент и счёт «2:0»
- * остаются целыми — это одно слово транскрипции, и разрывать его нельзя.
+ * Речь режется на клаузы: конец предложения, абзаца или длинная пауза — жёсткая
+ * граница, запятая/двоеточие/тире — мягкая. Короткие соседние клаузы внутри
+ * предложения склеиваются, пока помещаются в maxWords; длинная клауза делится на
+ * почти равные части так, чтобы часть не обрывалась на предлоге, союзе или «не».
+ * Так «получить жёлтую карточку.» заканчивается до «Чемпионат мира, 1/8 финала»,
+ * а «ни одной секунды» не разрывается. Сирота из одного слова уходит к предыдущей
+ * фразе. Дробь «1/8», сумма «$5000», счёт «2:0» — одно слово, его не разорвать.
  */
 export function groupWordsIntoPhrases(words: PunctWord[], maxWords = 6): Phrase[] {
   const limit = Math.max(1, Math.min(9, Math.round(maxWords)));
   const list = words.filter((w) => String(w.word ?? "").trim());
-  const out: Phrase[] = [];
-  let cur: PunctWord[] = [];
+  if (!list.length) return [];
 
-  const hardAt = (i: number) => {
-    const w = list[i];
+  const pauseAfter = (i: number) => {
     const next = list[i + 1];
-    const pause = next ? next.start - w.end >= PAUSE_BREAK : true;
+    return !next || next.start - list[i].end >= PAUSE_BREAK;
+  };
+  const hardAfter = (i: number) => {
+    const w = list[i];
     const dot = /[.!?…]$/.test(String(w.word).trim());
-    return !next || Boolean(w.sentenceEnd) || Boolean(w.paragraphEnd) || dot || pause;
+    return pauseAfter(i) || Boolean(w.sentenceEnd) || Boolean(w.paragraphEnd) || dot;
   };
-  const softAt = (i: number) => /[,;:—–]/.test(list[i].punct ?? "") || /[,;:—–]$/.test(list[i].word.trim());
-  /** сколько слов до ближайшей жёсткой границы, включая текущее */
-  const untilHard = (i: number) => {
-    let n = 0;
-    for (let k = i; k < list.length; k++) {
-      n++;
-      if (hardAt(k)) break;
-    }
-    return n;
-  };
+  const softAfter = (i: number) => /[,;:—–]/.test(list[i].punct ?? "") || /[,;:—–]$/.test(String(list[i].word).trim());
 
-  const flush = () => {
-    if (!cur.length) return;
-    out.push({ start: cur[0].start, end: cur[cur.length - 1].end, words: cur.map((w) => w.word) });
-    cur = [];
-  };
+  // 1) клаузы
+  type Clause = { toks: PunctWord[]; hardEnd: boolean; pauseEnd: boolean };
+  const clauses: Clause[] = [];
+  let cur: PunctWord[] = [];
+  list.forEach((w, i) => {
+    cur.push(w);
+    if (hardAfter(i) || softAfter(i)) {
+      clauses.push({ toks: cur, hardEnd: hardAfter(i), pauseEnd: pauseAfter(i) });
+      cur = [];
+    }
+  });
+  if (cur.length) clauses.push({ toks: cur, hardEnd: true, pauseEnd: true });
 
-  for (let i = 0; i < list.length; i++) {
-    cur.push(list[i]);
-    if (hardAt(i)) {
-      flush();
-      continue;
+  // 2) склейка коротких клауз внутри предложения; одинокое слово — к предыдущей
+  //    фразе даже через точку, но не через паузу (иначе субтитр висит в тишине)
+  const merged: Clause[] = [];
+  for (const c of clauses) {
+    const prev = merged[merged.length - 1];
+    if (prev) {
+      const fits = prev.toks.length + c.toks.length <= limit && !prev.hardEnd;
+      const orphan = c.toks.length === 1 && !prev.pauseEnd && prev.toks.length + 1 <= limit + 2;
+      if (fits || orphan) {
+        prev.toks.push(...c.toks);
+        prev.hardEnd = c.hardEnd;
+        prev.pauseEnd = c.pauseEnd;
+        continue;
+      }
     }
-    // запятая закрывает фразу, когда в ней уже есть мысль, а не одно слово
-    if (softAt(i) && cur.length >= 3) {
-      flush();
-      continue;
-    }
-    if (cur.length >= limit) {
-      // не оставлять сироту: если до конца предложения одно-два слова — забираем их
-      const rest = untilHard(i + 1);
-      if (rest > 0 && rest <= 2 && cur.length + rest <= limit + 2) continue;
-      flush();
-    }
+    merged.push({ toks: [...c.toks], hardEnd: c.hardEnd, pauseEnd: c.pauseEnd });
   }
-  flush();
+
+  // 3) длинная клауза — на почти равные части, не обрываясь на служебном слове.
+  //    Если ровное деление всё равно упирается в предлог, пробуем на одну часть
+  //    больше: лишняя часть стоит один балл, обрыв на предлоге — три.
+  const splitClause = (toks: PunctWord[], parts: number): { cuts: number[]; penalty: number } => {
+    const n = toks.length;
+    const cuts: number[] = [];
+    let penalty = 0;
+    let from = 0;
+    for (let k = 1; k < parts; k++) {
+      const ideal = Math.round((n * k) / parts);
+      let best = -1;
+      let bestScore = Infinity;
+      for (let cut = ideal - 2; cut <= ideal + 2; cut++) {
+        if (cut <= from || cut >= n) continue;
+        if (cut - from > limit) continue; // эта часть не длиннее лимита
+        if (n - cut > limit * (parts - k)) continue; // остаток ещё поместится
+        const last = toks[cut - 1].word;
+        const score = Math.abs(cut - ideal) + (isFunctionWord(last) ? 3 : 0) + (isPronoun(last) ? 1 : 0);
+        if (score < bestScore) {
+          bestScore = score;
+          best = cut;
+        }
+      }
+      if (best < 0) return { cuts: [], penalty: Infinity };
+      penalty += bestScore;
+      cuts.push(best);
+      from = best;
+    }
+    return { cuts, penalty };
+  };
+  const out: Phrase[] = [];
+  const push = (toks: PunctWord[]) =>
+    out.push({ start: toks[0].start, end: toks[toks.length - 1].end, words: toks.map((t) => t.word), tokens: toks });
+  for (const c of merged) {
+    const n = c.toks.length;
+    if (n <= limit) {
+      push(c.toks);
+      continue;
+    }
+    const base = Math.ceil(n / limit);
+    let plan = splitClause(c.toks, base);
+    if (plan.penalty > 0 && base < n) {
+      const alt = splitClause(c.toks, base + 1);
+      if (alt.penalty + 1 < plan.penalty) plan = alt;
+    }
+    let from = 0;
+    for (const cut of plan.cuts) {
+      push(c.toks.slice(from, cut));
+      from = cut;
+    }
+    push(c.toks.slice(from));
+  }
   return out;
 }
 
 /** Раскладывает фразу по строкам, не разрывая слова. */
 export function wrapPhrase(words: string[], maxLines = MAX_LINES, lineChars = LINE_CHARS): string[] {
-  // теги {s..} не занимают места на экране — длину считаем по видимому тексту
+  // теги {\fs..} не занимают места на экране — длину считаем по видимому тексту
   const vis = (t: string) => t.replace(/\{[^}]*\}/g, "").length;
   const plain = words.join(" ");
   if (vis(plain) <= lineChars) return [plain];
-  // две строки — норма: делим по слову, ближайшему к середине
-  if (vis(plain) <= lineChars * 2 + 4 || maxLines === 2) {
+  // две строки — норма: делим по слову, ближайшему к середине, но не после служебного слова
+  if (vis(plain) <= lineChars * 2 + 8 || maxLines === 2) {
     let best = 1;
-    let bestDiff = Infinity;
+    let bestScore = Infinity;
     for (let k = 1; k < words.length; k++) {
       const l = vis(words.slice(0, k).join(" "));
       const r = vis(words.slice(k).join(" "));
-      const diff = Math.abs(l - r);
-      if (diff < bestDiff) {
-        bestDiff = diff;
+      // одно слово на строке при фразе из четырёх и больше — сирота: «НА ПОЛЕ НИ ОДНОЙ / СЕКУНДЫ»
+      const lonely = words.length >= 4 && (k === 1 || k === words.length - 1) ? 2 : 0;
+      const score = Math.abs(l - r) + (isFunctionWord(words[k - 1]) ? 8 : 0) + lonely;
+      // при равенстве — более длинная первая строка: «И СКОРЕЕ ВСЕГО / ДЛЯ НЕГО»
+      if (score <= bestScore) {
+        bestScore = score;
         best = k;
       }
     }
@@ -128,13 +189,14 @@ export function wrapPhrase(words: string[], maxLines = MAX_LINES, lineChars = LI
  */
 function renderPhrase(p: Phrase, all: PunctWord[], style: CaptionStyle): string[] {
   const inPhrase = all.filter((w) => w.start >= p.start - 1e-6 && w.end <= p.end + 1e-6 && String(w.word).trim());
-  const source = inPhrase.length === p.words.length ? inPhrase : p.words.map((w) => ({ word: w } as PunctWord));
+  const source = p.tokens ?? (inPhrase.length === p.words.length ? inPhrase : p.words.map((w) => ({ word: w } as PunctWord)));
   const shown: string[] = [];
   source.forEach((w, i) => {
     let t = displayWord(w.word, style.uppercase);
     if (!t) return;
     const last = i === source.length - 1;
-    const punct = (w.punct ?? "").replace(/[;:]/g, ",");
+    const own = String(w.word).trim().match(/[,.!?…]+$/)?.[0] ?? "";
+    const punct = (w.punct ?? own).replace(/[;:]/g, ",");
     // в конце фразы запятая лишняя, а точка, вопрос и восклицание — нужны
     if (punct && !(last && /^[,—–]+$/.test(punct))) t += punct;
     if (w.emphasis) t = `{\\fs${style.fontSize + 8}}${t}{\\fs${style.fontSize}}`;

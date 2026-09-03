@@ -327,6 +327,11 @@ export function qcReject(an: AssetAnalysis, opts: QcOptions = {}): string | null
   if (an.hasLargeText && !opts.textIsTheSubject) return "крупный вшитый текст поверх кадра";
   if (opts.factualBeat && an.isReenactmentOrSkit) return "постановка или скетч вместо реальной съёмки";
   if (opts.factualBeat && an.isStudioExplainer) return "объяснялка в студии вместо съёмки события";
+  // Оформление поверх кадра модель описывает словами, а не флагом: в готовый ролик
+  // попал стоп-кадр «medical staff … with decorative frame overlay» — рамка-виньетка
+  // из чужой нарезки. Такое описание — отказ.
+  if (/decorative|frame overlay|vignette|collage|split[- ]screen|picture[- ]in[- ]picture|thumbnail/i.test(an.description ?? ""))
+    return "оформление поверх кадра: рамка, виньетка или коллаж";
   return null;
 }
 

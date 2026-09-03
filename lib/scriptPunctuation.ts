@@ -24,6 +24,20 @@ export type PunctWord = Word & {
   emphasis?: boolean;
 };
 
+/** Служебные слова: предлоги, союзы, частицы. Ими не кончается ни предложение, ни фраза субтитров. */
+export const FUNCTION_WORDS = new Set([
+  "и", "а", "но", "в", "во", "на", "с", "со", "к", "ко", "у", "о", "об", "обо", "от", "до", "за", "по", "из", "для",
+  "при", "без", "под", "над", "про", "через", "не", "ни", "же", "ли", "бы", "что", "чтобы", "как", "или", "либо", "то",
+]);
+export const isFunctionWord = (w: string) =>
+  FUNCTION_WORDS.has(
+    w
+      .toLowerCase()
+      .replace(/ё/g, "е")
+      .replace(/\{[^}]*\}/g, "")
+      .replace(/[^\p{L}]/gu, ""),
+  );
+
 const skeleton = (s: string) =>
   s
     .toLowerCase()
@@ -56,6 +70,14 @@ function tokenizeScript(script: string): ScriptTok[] {
   return out;
 }
 
+/** Одна основа: общий префикс не короче трёх букв и не короче меньшего слова минус два. */
+function sameStem(a: string, b: string): boolean {
+  if (!a || !b || Math.abs(a.length - b.length) > 3) return false;
+  let n = 0;
+  while (n < a.length && n < b.length && a[n] === b[n]) n++;
+  return n >= Math.max(3, Math.min(a.length, b.length) - 2);
+}
+
 /** Слово сценария, которое стоит выделить: число или имя собственное не в начале предложения. */
 function isKeyword(tok: ScriptTok): boolean {
   if (/\d/.test(tok.text)) return true;
@@ -80,10 +102,23 @@ export function attachScriptPunctuation(words: Word[], script: string | null): P
     const sk = skeleton(w.word);
     let hit = -1;
     if (sk) {
-      for (let k = j; k < Math.min(toks.length, j + LOOKAHEAD); k++) {
+      // Служебное слово («и», «в», «не») встречается в тексте каждые несколько слов:
+      // искать его далеко вперёд — значит перескочить через целое предложение
+      const end = Math.min(toks.length, j + (isFunctionWord(w.word) ? 1 : LOOKAHEAD));
+      for (let k = j; k < end; k++) {
         if (toks[k].sk === sk) {
           hit = k;
           break;
+        }
+      }
+      // речь отклоняется от текста в окончаниях («с Мексикой» / «против Мексики»):
+      // та же основа в окне — то же слово, знак за ним переносится
+      if (hit < 0) {
+        for (let k = j; k < end; k++) {
+          if (sameStem(toks[k].sk, sk)) {
+            hit = k;
+            break;
+          }
         }
       }
     }
@@ -93,6 +128,15 @@ export function attachScriptPunctuation(words: Word[], script: string | null): P
     }
     const t = toks[hit];
     j = hit + 1;
+    // речь начала новое предложение сценария — предыдущее произнесённое слово его
+    // закрывает, даже если в тексте этого слова нет («…опытный футболист. Весь матч…»)
+    // Союз перед новым предложением («…четвертьфинал. И после свистка…») принадлежит
+    // новому предложению: граница ставится перед ним, а не после.
+    if (t.sentenceStart && out.length) {
+      let k = out.length - 1;
+      while (k >= 0 && isFunctionWord(out[k].word)) k--;
+      if (k >= 0 && !out[k].sentenceEnd) out[k].sentenceEnd = true;
+    }
     out.push({
       ...w,
       punct: t.punct || undefined,

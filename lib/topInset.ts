@@ -29,7 +29,13 @@ export const GOOD_SOURCE = { w: 1280, h: 720 } as const;
  * increase + crop: сначала покрываем всю карточку, потом обрезаем лишнее.
  * decrease здесь запрещён — он оставляет поля и даёт разный размер.
  */
-export const CARD_FILTER = `scale=${CARD.w}:${CARD.h}:force_original_aspect_ratio=increase,crop=${CARD.w}:${CARD.h}`;
+/**
+ * Приведение любого изображения к карточке: масштаб «накрыть» и обрезка. Обрезка
+ * смещена к верху (15% лишней высоты сверху, а не 50%): у портретных фото лицо в
+ * верхней трети, и центральный кроп оставлял в карточке туловище без головы.
+ * Для горизонтальных 16:9 источников лишней высоты нет — смещение не работает.
+ */
+export const CARD_FILTER = `scale=${CARD.w}:${CARD.h}:force_original_aspect_ratio=increase,crop=${CARD.w}:${CARD.h}:(iw-${CARD.w})/2:(ih-${CARD.h})*0.15`;
 
 /** Область карточки в готовом кадре — для проверки результата. */
 export const CARD_CROP = `crop=${CARD.w}:${CARD.h}:${CARD.x}:${CARD.y}`;

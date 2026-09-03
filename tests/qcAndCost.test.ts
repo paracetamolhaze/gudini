@@ -30,6 +30,9 @@ test("1: заставки, призывы канала и реакции бло�
   assert.match(String(qcReject(frame({ hasChannelPromo: true }))), /призыв канала/);
   assert.match(String(qcReject(frame({ isTitleOrOutroCard: true }))), /заставка/);
   assert.match(String(qcReject(frame({ hasFaceOverlay: true }))), /реакция/);
+  // оформление поверх кадра модель описывает словами — отказ по описанию
+  assert.match(String(qcReject(frame({ description: "Medical staff treating injured player with decorative frame overlay" } as any))), /рамка/);
+  assert.equal(qcReject(frame({ description: "Medical staff treating injured player on the pitch" } as any)), null);
   assert.match(String(qcReject(frame({ hasLargeText: true }))), /текст/);
   assert.match(String(qcReject(frame({ hasPlayerOrSocialUi: true }))), /интерфейс/);
   // чистый кадр события проходит

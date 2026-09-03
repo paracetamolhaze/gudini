@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildAss, dropDuplicateCallouts, displayWord, groupWordsIntoPhrases } from "../lib/subtitles";
+import { buildAss, dropDuplicateCallouts, displayWord, groupWordsIntoPhrases, wrapPhrase } from "../lib/subtitles";
 import { attachScriptPunctuation } from "../lib/scriptPunctuation";
 import { Word } from "../lib/transcribe";
 import type { EditEvent } from "../lib/editPlan";
@@ -163,4 +163,59 @@ test("Test 7: границы фраз берутся из пунктуации �
   assert.ok(events.some((e) => e.includes("{\\fs66}1/8{\\fs58}")), "ключевое слово выделено размером, не цветом");
   assert.ok(!ass.includes("\\c&H"), "цвет остался белым");
   for (const e of events) assert.ok(e.split("\\N").length <= 3, "не больше трёх строк");
+  assert.ok(!ass.includes("\\\\N"), "перенос строки ASS — один обратный слэш, не два");
+});
+
+test("Test 8: фраза и строка не обрываются на предлоге, союзе или «не»", () => {
+  const spoken = ["который", "не", "провел", "на", "поле", "ни", "одной", "секунды", "но", "умудрился", "сломать", "руку"];
+  const words = spoken.map((w, i) => ({ word: w, start: i * 0.4, end: i * 0.4 + 0.35 }));
+  const punct = attachScriptPunctuation(words, "Который не провёл на поле ни одной секунды, но умудрился сломать руку.");
+  const texts = groupWordsIntoPhrases(punct, 6).map((p) => p.words);
+  for (const t of texts) {
+    assert.ok(t.length >= 2 && t.length <= 6, `фраза из ${t.length} слов: ${t.join(" ")}`);
+    assert.ok(!["не", "на", "ни", "но", "с", "и", "в"].includes(t[t.length - 1]), `обрыв на служебном слове: ${t.join(" ")}`);
+  }
+  assert.ok(texts.some((t) => t.join(" ").includes("ни одной секунды")), "«ни одной секунды» не разорвано");
+  // форма слова в речи отличается от сценария — знак всё равно переносится
+  const fuzzy = attachScriptPunctuation(
+    [{ word: "против", start: 0, end: 0.3 }, { word: "мексики", start: 0.3, end: 0.6 }, { word: "и", start: 0.6, end: 0.8 }],
+    "Англия играет с Мексикой, и в запасе сидит Хендерсон.",
+  );
+  assert.equal(fuzzy[1].punct, ",", "запятая после «Мексики» из «Мексикой,»");
+  // слова, которых нет в сценарии, закрываются там, где сценарий начинает новое предложение
+  const extra = attachScriptPunctuation(
+    ["хендерсон", "опытный", "футболист", "весь", "матч", "тренер"].map((w, i) => ({ word: w, start: i * 0.4, end: i * 0.4 + 0.35 })),
+    "Сидит Хендерсон."+"\n\n"+"Весь матч тренер его не выпускает.",
+  );
+  assert.equal(extra[2].sentenceEnd, true, "«футболист» закрывает предложение перед «Весь матч»");
+  // союз, сказанный перед новым предложением, остаётся с новым предложением
+  const conj = attachScriptPunctuation(
+    ["выходит", "в", "четвертьфинал", "и", "после", "свистка", "все", "бегут"].map((w, i) => ({ word: w, start: i * 0.4, end: i * 0.4 + 0.35 })),
+    "Выходит в четвертьфинал. После свистка все бегут.",
+  );
+  assert.equal(conj[2].sentenceEnd, true);
+  assert.notEqual(conj[3].sentenceEnd, true, "«и» не закрывает предложение");
+  const conjTexts = groupWordsIntoPhrases(conj, 6).map((p) => p.words.join(" "));
+  assert.ok(conjTexts.some((t) => t.startsWith("и после")), `«и» открывает фразу: ${JSON.stringify(conjTexts)}`);
+  // «и» не должно перескочить через предложение к другому «и» в тексте
+  const skip = attachScriptPunctuation(
+    ["через", "щит", "и", "спотыкается", "неудачно", "падает"].map((w, i) => ({ word: w, start: i * 0.4, end: i * 0.4 + 0.35 })),
+    "Через щит у кромки поля. Спотыкается и неудачно падает.",
+  );
+  assert.equal(skip[1].sentenceEnd, true, "«щит» закрывает предложение");
+  assert.equal(skip[3].emphasis, undefined);
+  // длинная клауза без пунктуации: ни одна часть не кончается предлогом
+  const tail = ["как", "можно", "провести", "худший", "матч", "в", "карьере", "сломать", "руку", "но", "при", "этом", "ни", "разу", "не", "выйдя", "на", "поле"]
+    .map((w, i) => ({ word: w, start: i * 0.3, end: i * 0.3 + 0.25 }));
+  for (const t of groupWordsIntoPhrases(tail, 6).map((p) => p.words)) {
+    assert.ok(t.length <= 6 && t.length >= 2, `часть из ${t.length} слов`);
+    assert.ok(!["в", "но", "при", "ни", "не", "на"].includes(t[t.length - 1]), `обрыв на служебном слове: ${t.join(" ")}`);
+  }
+  assert.equal(fuzzy[1].emphasis, true);
+  // перенос строки не оставляет «не»/«с» в конце первой строки
+  const lines = wrapPhrase(["УЕЗЖАЕТ", "ДОМОЙ", "С", "ЖЕЛТОЙ", "КАРТОЧКОЙ"]);
+  assert.equal(lines.length, 2);
+  assert.ok(!/ С$/.test(lines[0]), `первая строка кончается предлогом: ${lines[0]}`);
+  assert.deepEqual(wrapPhrase(["НА", "ПОЛЕ", "НИ", "ОДНОЙ", "СЕКУНДЫ"]), ["НА ПОЛЕ", "НИ ОДНОЙ СЕКУНДЫ"], "слово-сирота на второй строке не остаётся");
+  assert.deepEqual(wrapPhrase(["И", "СКОРЕЕ", "ВСЕГО", "ДЛЯ", "НЕГО"]), ["И СКОРЕЕ ВСЕГО", "ДЛЯ НЕГО"]);
 });

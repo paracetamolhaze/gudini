@@ -12,6 +12,7 @@ import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
 import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS } from "../lib/storyAssetPack";
 import { packDistribution, montagePreflight } from "../lib/montageValidator";
 import { blackBarReport } from "../lib/blackBars";
+import { densifyTimeline, chainTimeline, MontageEvent } from "../lib/creativeDirector";
 
 /**
  * Регрессия на НАСТОЯЩЕМ рендере, покадрово, без единого API-вызова.
@@ -269,4 +270,37 @@ test("6: чёрные полосы внутри картинки распозн�
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("7: долгое удержание делится неиспользованными картинками тех же блоков", () => {
+  const beats: any[] = ["b0", "b1", "b2", "b3"].map((id) => ({ id, visualNeed: "ENTITY", text: id }));
+  const asset = (id: string, scores: Record<string, number>, fam = "A") => ({
+    id, kind: "IMAGE", file: id + ".jpg", sourceUrl: "", sourceDomain: "", description: id, role: "PERSON",
+    compatibleBeatIds: Object.keys(scores), beatScores: scores, relatedFactIds: [], sceneFamily: fam,
+    verification: { sourceVerified: true, visualVerified: true, version: 3 },
+  });
+  const pack: any = {
+    assets: [asset("used", { b0: 3 }), asset("x1", { b1: 3 }, "B"), asset("x2", { b2: 2 }, "C"), asset("weak", { b1: 1 })],
+    coverage: [],
+  };
+  const ev = (assetId: string, beatId: string, start: number, end: number): MontageEvent => ({
+    type: "EXTERNAL_IMAGE", assetId, beatId, quote: "q", start, end, layout: "smart_crop", role: "PERSON",
+  });
+  // одна картинка держится 16 секунд, хотя под соседние блоки есть оценки 3 и 2
+  const events = [ev("used", "b0", 3, 19), ev("tail", "b3", 19, 30)];
+  densifyTimeline(events, pack, beats, 30);
+  const ids = events.map((e) => e.assetId);
+  assert.ok(ids.includes("x1") && ids.includes("x2"), `подходящие картинки вставлены: ${ids.join(",")}`);
+  assert.ok(!ids.includes("weak"), "слабый контекст не берётся");
+  assert.equal(new Set(ids).size, ids.length, "ни одна картинка не повторяется");
+  chainTimeline(events, 30);
+  for (let i = 1; i < events.length; i++) {
+    assert.ok(events[i].start - events[i - 1].end <= 1 / 30 + 0.001, "дорожка осталась непрерывной");
+  }
+  assert.ok(events.every((e) => e.end - e.start <= 16), "удержание стало короче");
+
+  // без подходящих кандидатов удержание не трогается
+  const lone = [ev("used", "b0", 3, 19), ev("tail", "b3", 19, 30)];
+  densifyTimeline(lone, { assets: [asset("used", { b0: 3 })], coverage: [] } as any, beats, 30);
+  assert.equal(lone.length, 2, "нечем уплотнять — ничего не выдумано");
 });

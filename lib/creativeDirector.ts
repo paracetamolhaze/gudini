@@ -141,6 +141,76 @@ export function chooseLayout(width: number, height: number, kind: "VIDEO_SEGMENT
  * Строит монтажный план. Таймкоды ставим САМИ по измеренным словам —
  * модели доверяем только выбор материала и цитату.
  */
+/** Каждая картинка держится до начала следующей, последняя — до конца ролика. */
+export function chainTimeline(events: MontageEvent[], duration: number): void {
+  events.sort((a, b) => a.start - b.start);
+  for (let i = 0; i < events.length; i++) {
+    const next = events[i + 1];
+    events[i].end = Number((next ? next.start - 1 / 30 : duration).toFixed(3));
+  }
+}
+
+/**
+ * Уплотнение долгих удержаний.
+ *
+ * Продлить предыдущую картинку честно только тогда, когда подходящей новой НЕТ.
+ * Режиссёр же оставлял одно фото на двенадцать секунд, хотя под те же блоки в
+ * медиатеке лежали неиспользованные материалы с оценкой 2–3. Здесь такие
+ * удержания делятся ещё не показанными картинками тех же блоков — без нового
+ * вызова модели: выбор из уже сопоставленного делает код.
+ */
+export function densifyTimeline(
+  events: MontageEvent[],
+  pack: StoryAssetPackV2,
+  beats: ScriptBeat[],
+  duration: number,
+): void {
+  const T = taste();
+  const longest = T.max_visual_duration * 1.6;
+  const used = new Set(events.map((e) => e.assetId));
+  const beatIndex = new Map(beats.map((b, i) => [b.id, i]));
+  const byId = new Map(pack.assets.map((a) => [a.id, a]));
+
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    const hold = e.end - e.start;
+    if (hold <= longest) continue;
+    const next = events[i + 1];
+    // блоки, которые этот участок покрывает: от блока картинки до блока следующей
+    const from = beatIndex.get(e.beatId) ?? 0;
+    const to = next ? (beatIndex.get(next.beatId) ?? beats.length) : beats.length;
+    const span = beats.slice(Math.min(from, to), Math.max(from, to) + 1).map((b) => b.id);
+    const current = byId.get(e.assetId);
+    const candidates = pack.assets
+      .filter((a) => !used.has(a.id) && a.kind === "IMAGE")
+      .map((a) => ({ a, score: Math.max(0, ...span.map((b) => a.beatScores?.[b] ?? 0)) }))
+      .filter((c) => c.score >= 2 && (!current?.sceneFamily || c.a.sceneFamily !== current.sceneFamily || c.score === 3))
+      .sort((x, y) => y.score - x.score);
+    if (!candidates.length) continue;
+    const extra = Math.min(candidates.length, 3, Math.floor(hold / T.typical_visual_duration) - 1);
+    if (extra < 1) continue;
+    const step = hold / (extra + 1);
+    for (let k = 1; k <= extra; k++) {
+      const pick = candidates[k - 1].a;
+      used.add(pick.id);
+      events.push({
+        type: "EXTERNAL_IMAGE",
+        assetId: pick.id,
+        beatId: pick.compatibleBeatIds.find((b) => span.includes(b)) ?? e.beatId,
+        quote: e.quote,
+        start: Number((e.start + step * k).toFixed(3)),
+        end: Number((e.start + step * (k + 1)).toFixed(3)),
+        layout: "smart_crop",
+        motion: "static",
+        role: pick.role,
+      });
+    }
+    e.end = Number((e.start + step).toFixed(3));
+    events.sort((a, b) => a.start - b.start);
+  }
+  chainTimeline(events, duration);
+}
+
 export async function directMontage(
   research: StoryResearchPack,
   beats: ScriptBeat[],
@@ -264,10 +334,9 @@ export async function directMontage(
   if (events.length && events[0].start > T.first_visual_by) {
     events[0].start = Number(Math.max(T.first_visual_after, T.first_visual_by).toFixed(3));
   }
-  for (let i = 0; i < events.length; i++) {
-    const next = events[i + 1];
-    events[i].end = Number((next ? next.start - 1 / 30 : duration).toFixed(3));
-  }
+  chainTimeline(events, duration);
+  densifyTimeline(events, pack, beats, duration);
+  chainTimeline(events, duration);
 
   return { version: 3, duration, events, stats: computeStats(events, duration, speechCuts) };
 }

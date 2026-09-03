@@ -24,7 +24,7 @@ import { buildStoryAssetPack } from "./storyAssets";
 import { resetCost } from "./pipelineCost";
 import { resetLedger, writeLedger, summarize } from "./costLedger";
 import { formatCostReport } from "./costReport";
-import { buildStoryResearchPack } from "./storyResearch";
+import { buildStoryResearchPack, StoryResearchPack } from "./storyResearch";
 import { generateCoverConcept } from "./cover";
 import { resolveHeadline } from "./coverHeadline";
 import { buildCover } from "./coverPipeline";
@@ -88,6 +88,16 @@ export async function processProject(id: string): Promise<void> {
     const duration = (await probeDuration(path.join(dir, "audio_full.wav"))) || info.duration;
     const silences = await detectSilences("audio_full.wav", dir, duration);
     const edges = edgesFromSilences(silences, duration);
+
+    // Исследование истории не зависит от речи: оно идёт параллельно с распознаванием,
+    // чисткой и перекодированием, а нужно только к сборке медиатеки. Ошибка
+    // обрабатывается там, где результат используется.
+    const researchPromise: Promise<StoryResearchPack | null> = project.research
+      ? Promise.resolve(project.research)
+      : buildStoryResearchPack(project.topic, project.sourceUrl).catch((e) => {
+          console.warn("Исследование истории не построено:", String(e?.message ?? e).slice(0, 160));
+          return null;
+        });
 
     // --- Распознавание речи ДО вырезки (на полном таймлайне) ---
     setStep(id, "Распознавание речи", 10);
@@ -212,10 +222,11 @@ export async function processProject(id: string): Promise<void> {
       let research = getProject(id)?.research;
       if (!research) {
         // Сценарий написан обычной генерацией по теме, без исследования. Медиатека
-        // без фактов и источников не собирается, поэтому исследование строится здесь
-        // и сохраняется в проект — повторный монтаж его уже не оплачивает.
+        // без фактов и источников не собирается; исследование запущено в начале
+        // задачи параллельно с речью, здесь оно дожидается и сохраняется в проект —
+        // повторный монтаж его уже не оплачивает.
         setStep(id, "Исследование истории", 24);
-        research = (await buildStoryResearchPack(project.topic, project.sourceUrl)) ?? undefined;
+        research = (await researchPromise) ?? undefined;
         if (!research) {
           throw new Error(
             "Montage V3: исследование истории не построено (нет источников или ключа поиска). " +

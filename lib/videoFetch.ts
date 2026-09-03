@@ -225,6 +225,61 @@ export async function probeVideo(pageUrl: string): Promise<ProbeInfo> {
 }
 
 /** Пытается получить видео: сначала прямой файл, затем экстрактор страницы. */
+export type SectionFile = { index: number; start: number; end: number; file: string };
+
+/**
+ * Скачивает только нужные окна ролика, а не весь файл. Для медиатеки из каждого
+ * видео берётся несколько окон по 3 секунды; тянуть ради них десятиминутный ролик
+ * в 1080p — десятки мегабайт и десятки секунд впустую. yt-dlp режет по времени на
+ * стороне загрузки (--download-sections), --force-keyframes-at-cuts даёт точный
+ * старт куска: локальное время в файле = время в ролике минус начало окна.
+ * Файлы называются по номеру окна (%(section_number)s) в порядке аргументов.
+ */
+export async function fetchVideoSections(
+  pageUrl: string,
+  sections: { index: number; start: number; end: number }[],
+  outPrefix: string,
+): Promise<{ ok: true; files: SectionFile[]; method: "extractor-sections" } | { ok: false; reason: string }> {
+  if (!sections.length) return { ok: false, reason: "нет окон" };
+  if (!(await extractorPresent())) return { ok: false, reason: "экстрактор не установлен" };
+  const template = `${outPrefix}-%(section_number)s.%(ext)s`;
+  try {
+    await run(
+      "yt-dlp",
+      [
+        "--no-playlist",
+        "--no-warnings",
+        "--no-progress",
+        "--socket-timeout", "20",
+        "--js-runtimes", JS_RUNTIME,
+        "-f", VIDEO_ONLY,
+        "--user-agent", UA,
+        ...sections.flatMap((x) => ["--download-sections", `*${x.start.toFixed(2)}-${x.end.toFixed(2)}`]),
+        "--force-keyframes-at-cuts",
+        "--merge-output-format", "mp4",
+        "-o", template,
+        pageUrl,
+      ],
+      { timeout: 360_000, maxBuffer: 8 * 1024 * 1024 },
+    );
+    const files: SectionFile[] = [];
+    for (let n = 0; n < sections.length; n++) {
+      const file = `${outPrefix}-${n + 1}.mp4`;
+      if (!fs.existsSync(file) || fs.statSync(file).size < 5_000) {
+        for (const f of files) fs.rmSync(f.file, { force: true });
+        return { ok: false, reason: `окно ${n + 1} не скачалось` };
+      }
+      files.push({ index: sections[n].index, start: sections[n].start, end: sections[n].end, file });
+    }
+    addCost({ videoDownloads: 1 });
+    return { ok: true, files, method: "extractor-sections" };
+  } catch (e: any) {
+    const msg = String(e?.stderr ?? e?.message ?? e);
+    const reason = msg.split(/\r?\n/).filter((l) => /ERROR|WARNING/i.test(l)).join(" ").replace(/\s+/g, " ").trim().slice(0, 120) || msg.replace(/\s+/g, " ").slice(0, 120);
+    return { ok: false, reason };
+  }
+}
+
 export async function fetchVideo(directUrl: string | undefined, pageUrl: string, out: string): Promise<FetchResult> {
   fs.mkdirSync(path.dirname(out), { recursive: true });
   if (directUrl && /\.(mp4|webm|mov|m4v)(\?|$)/i.test(directUrl)) {

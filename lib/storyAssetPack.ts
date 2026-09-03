@@ -6,7 +6,7 @@ import { StoryResearchPack } from "./storyResearch";
 import { ScriptBeat, MediaResearchNeed } from "./scriptBeats";
 import { braveVideos, braveImages } from "./braveSearch";
 import { analyzeAsset, analyzeFrames, qcReject } from "./brollRelevance";
-import { fetchVideo, extractorReady, probeVideo } from "./videoFetch";
+import { fetchVideo, fetchVideoSections, extractorReady, probeVideo } from "./videoFetch";
 import { verifySource } from "./storyAssets";
 import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
@@ -428,22 +428,46 @@ export function pickFrameForNeeds<T extends { description: string }>(
  * Режет исходное видео на самостоятельные сегменты: сэмплирует кадры, описывает
  * зрением и оставляет визуально разные моменты. Один сюжет даёт несколько вставок.
  */
+export type SectionSource = { duration: number; sections: { index: number; start: number; file: string }[] };
+
+/**
+ * Окна для стоп-кадров: одна формула и для целого файла, и для скачивания
+ * кусками — индексы кадров в кэше зрения (seg:{video}:{i}) совпадают.
+ */
+export function planWindows(duration: number, wanted: number): { samples: number; windows: { index: number; at: number }[] } {
+  const samples = Math.min(wanted, Math.max(3, Math.floor(duration / 8)));
+  const windows = Array.from({ length: samples }, (_, i) => ({ index: i, at: ((i + 0.5) / samples) * Math.max(0, duration - SEGMENT_WINDOW) }));
+  return { samples, windows };
+}
+
 export async function cutSegments(
-  file: string,
+  source: string | SectionSource,
   dir: string,
   videoId: string,
   wanted: number,
   needs: MediaResearchNeed[] = [],
 ): Promise<{ assets: Omit<PackAsset, "compatibleBeatIds" | "relatedFactIds" | "role">[]; duration: number }> {
   let duration = 0;
-  try {
-    duration = (await probe(file)).duration;
-  } catch {
-    return { assets: [], duration: 0 };
+  if (typeof source === "string") {
+    try {
+      duration = (await probe(source)).duration;
+    } catch {
+      return { assets: [], duration: 0 };
+    }
+  } else {
+    duration = source.duration;
   }
   if (duration < 4) return { assets: [], duration };
+  // Откуда брать кадр момента t окна i: из целого файла — как есть; из куска —
+  // по локальному времени (кусок начинается ровно с начала окна).
+  const frameSrc = (t: number, i: number): { file: string; t: number } => {
+    if (typeof source === "string") return { file: source, t };
+    const sec = source.sections.find((x) => x.index === i);
+    if (!sec) throw new Error(`окно ${i} не скачано`);
+    return { file: sec.file, t: Math.max(0, t - sec.start) };
+  };
 
-  const samples = Math.min(wanted, Math.max(3, Math.floor(duration / 8)));
+  const { samples, windows } = planWindows(duration, wanted);
   const out: Omit<PackAsset, "compatibleBeatIds" | "relatedFactIds" | "role">[] = [];
   const seenDesc: string[] = [];
   const failures: string[] = [];
@@ -455,10 +479,10 @@ export async function cutSegments(
   const WINDOW = SEGMENT_WINDOW;
   const OFFSETS = WINDOW_OFFSETS;
   const shots: { at: number; frame: string; buffer: Buffer; hash: bigint | null; sample: number; part: number }[] = [];
-  for (let i = 0; i < samples; i++) {
-    const at = ((i + 0.5) / samples) * Math.max(0, duration - WINDOW);
+  for (const { index: i, at } of windows) {
     for (const [p, frac] of OFFSETS.entries()) {
       const t = Math.min(at + WINDOW * frac, Math.max(0, duration - 0.05));
+      const src = frameSrc(t, i);
       const frame = path.join(dir, `probe-${videoId}-${i}-${p}.jpg`);
       try {
         // Кадр для контроля качества нужен модели только чтобы понять, что на нём.
@@ -466,7 +490,7 @@ export async function cutSegments(
         // «SUBSCRIBE» и заставка одинаково видны на уменьшенной копии.
         await runFfmpeg(
           [
-            "-ss", t.toFixed(2), "-i", path.basename(file), "-frames:v", "1",
+            "-ss", src.t.toFixed(2), "-i", path.basename(src.file), "-frames:v", "1",
             "-vf", `scale=${QC_FRAME_WIDTH}:-2`, "-q:v", "6", path.basename(frame),
           ],
           { cwd: dir },
@@ -536,13 +560,14 @@ export async function cutSegments(
     // резались под 1080×1920, и в карточке они выглядели узкой полоской.
     const still = path.join(dir, `still-${videoId}-${i}.jpg`);
     try {
-      const sourceInfo = await probe(file);
+      const src = frameSrc(frameAt, i);
+      const sourceInfo = await probe(src.file);
       if (!sourceBigEnough(sourceInfo.width, sourceInfo.height)) {
         countQcReason(`исходник ${sourceInfo.width}×${sourceInfo.height} меньше карточки`);
         continue;
       }
       await runFfmpeg(
-        ["-ss", frameAt.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", path.basename(still)],
+        ["-ss", src.t.toFixed(2), "-i", path.basename(src.file), "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", path.basename(still)],
         { cwd: dir },
       );
       // чёрные полосы внутри кадра обрезкой не лечатся — такой стоп-кадр не берём
@@ -789,11 +814,72 @@ export async function buildAssetPack(
       `(лучший балл ${shortlist[0]?.[1].score ?? 0}, худший ${shortlist[shortlist.length - 1]?.[1].score ?? 0})`,
   );
 
-  let coreSegments = 0;
-  for (const [vid, { v, score }] of shortlist) {
-    if (coreSegments >= 12) break;
-    seenVideo.add(vid);
+  /** Сколько видео обрабатывается одновременно: загрузка и зрение — ожидание сети, не процессор. */
+  const PARALLEL = 3;
+  type VideoCand = { url: string; directUrl?: string };
+  /**
+   * Получить стоп-кадры из ролика: скачиваются только окна (--download-sections),
+   * а не весь файл; если куски не отдались — целиком, как раньше. Временные файлы
+   * удаляются в любом случае.
+   */
+  const acquire = async (
+    vid: string,
+    v: VideoCand,
+    durationSec: number | undefined,
+    wanted: number,
+  ): Promise<{ cut: Awaited<ReturnType<typeof cutSegments>>; method: string } | { error: string }> => {
+    const prefix = path.join(mediaDir, `src-${vid}`);
     const yt = isYoutube(v.url);
+    stages.downloadAttempted++;
+    if (yt) stages.ytDownloadAttempted++;
+    if (!v.directUrl && durationSec && durationSec >= 4) {
+      const { windows } = planWindows(durationSec, wanted);
+      const got = await fetchVideoSections(
+        v.url,
+        windows.map((w) => ({ index: w.index, start: w.at, end: Math.min(durationSec, w.at + SEGMENT_WINDOW + 0.3) })),
+        prefix,
+      );
+      if (got.ok) {
+        stages.downloadOk++;
+        if (yt) stages.ytDownloadOk++;
+        try {
+          const cut = await cutSegments(
+            { duration: durationSec, sections: got.files.map((f) => ({ index: f.index, start: f.start, file: f.file })) },
+            mediaDir,
+            vid,
+            wanted,
+            needs,
+          );
+          return { cut, method: got.method };
+        } finally {
+          for (const f of got.files) {
+            try {
+              fs.rmSync(f.file, { force: true });
+            } catch {}
+          }
+        }
+      }
+      console.log(`  окна не скачались (${got.reason}) — качаю целиком`);
+    }
+    const raw = `${prefix}.mp4`;
+    const got = await fetchVideo(v.directUrl, v.url, raw);
+    if (!got.ok) return { error: got.reason ?? "не скачалось" };
+    stages.downloadOk++;
+    if (yt) stages.ytDownloadOk++;
+    try {
+      const cut = await cutSegments(raw, mediaDir, vid, wanted, needs);
+      return { cut, method: got.method ?? "extractor" };
+    } finally {
+      try {
+        fs.rmSync(raw, { force: true });
+      } catch {}
+    }
+  };
+
+  let coreSegments = 0;
+  const coreOne = async (vid: string, v: VideoCand, score: number) => {
+    seenVideo.add(vid);
+    let durationSec: number | undefined;
 
     // разведка: доступен ли поток и какой длины ролик — до скачивания
     if (!v.directUrl) {
@@ -803,47 +889,57 @@ export async function buildAssetPack(
       console.log(
         `  [${score}] probe ${pr.platform} ${pr.ok ? `OK ${pr.durationSec ?? "?"}с (${pr.extractor})` : `— ${pr.reason}`}`,
       );
-      if (!pr.ok) continue;
+      if (!pr.ok) return null;
       // многочасовые трансляции и полные матчи для перебивок бесполезны
       if (pr.durationSec && pr.durationSec > MAX_SOURCE_SEC) {
         console.log(`  пропуск: длительность ${Math.round(pr.durationSec / 60)} мин — это не новостной сюжет`);
-        continue;
+        return null;
       }
+      durationSec = pr.durationSec;
     }
-    const raw = path.join(mediaDir, `src-${vid}.mp4`);
-    stages.downloadAttempted++;
-    if (yt) stages.ytDownloadAttempted++;
-    const got = await fetchVideo(v.directUrl, v.url, raw);
-    if (!got.ok) {
-      console.log(`  скачивание ${v.url.slice(0, 55)} → ${got.reason}`);
-      continue;
+    const r = await acquire(vid, v, durationSec, T0.segments_per_source_video);
+    if ("error" in r) {
+      console.log(`  скачивание ${v.url.slice(0, 55)} → ${r.error}`);
+      return null;
     }
-    stages.downloadOk++;
-    if (yt) stages.ytDownloadOk++;
-
-    const cut = await cutSegments(raw, mediaDir, vid, T0.segments_per_source_video, needs);
-    try {
-      fs.rmSync(raw, { force: true });
-    } catch {}
-    if (!cut.assets.length) continue;
-    stages.sourceVideosAccepted++;
-    if (yt) {
-      stages.ytSourceVideosAccepted++;
-      stages.ytSegments += cut.assets.length;
+    return { vid, v, cut: r.cut, method: r.method };
+  };
+  // Партиями по PARALLEL, в порядке шорт-листа; результаты применяются по порядку,
+  // чтобы состав медиатеки не зависел от того, чья загрузка закончилась раньше.
+  const shortlistEntries = [...shortlist];
+  for (let b = 0; b < shortlistEntries.length && coreSegments < 12; b += PARALLEL) {
+    const batch = shortlistEntries.slice(b, b + PARALLEL);
+    const results = await Promise.all(
+      batch.map(([vid, { v, score }]) =>
+        coreOne(vid, v, score).catch((e) => {
+          console.log(`  ${domainOf(v.url)}: ${String(e?.message ?? e).slice(0, 100)}`);
+          return null;
+        }),
+      ),
+    );
+    for (const r of results) {
+      if (!r || !r.cut.assets.length || coreSegments >= 12) continue;
+      const { vid, v, cut, method } = r;
+      const yt = isYoutube(v.url);
+      stages.sourceVideosAccepted++;
+      if (yt) {
+        stages.ytSourceVideosAccepted++;
+        stages.ytSegments += cut.assets.length;
+      }
+      sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method });
+      console.log(`  ПРИНЯТО ${domainOf(v.url)} ${cut.duration.toFixed(0)}с → ${cut.assets.length} сегментов`);
+      for (const a of cut.assets) {
+        assets.push({
+          ...a,
+          sourceUrl: v.url,
+          sourceDomain: domainOf(v.url),
+          compatibleBeatIds: [],
+          relatedFactIds: [],
+          role: "CONTEXT",
+        });
+      }
+      coreSegments += cut.assets.length;
     }
-    sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
-    console.log(`  ПРИНЯТО ${domainOf(v.url)} ${cut.duration.toFixed(0)}с → ${cut.assets.length} сегментов`);
-    for (const a of cut.assets) {
-      assets.push({
-        ...a,
-        sourceUrl: v.url,
-        sourceDomain: domainOf(v.url),
-        compatibleBeatIds: [],
-        relatedFactIds: [],
-        role: "CONTEXT",
-      });
-    }
-    coreSegments += cut.assets.length;
   }
 
   // ---------- BEAT: добор под блоки. VIDEO-FIRST: видео ищется раньше картинок ----------
@@ -851,8 +947,8 @@ export async function buildAssetPack(
   const ordered = [...needs].sort((a, b) => rank(a.importance) - rank(b.importance));
   const seenImage = new Set<string>();
 
-  for (const need of ordered) {
-    if (assets.length >= T.max_total_assets) break;
+  const processNeed = async (need: MediaResearchNeed): Promise<void> => {
+    if (assets.length >= T.max_total_assets) return;
     const covered = () => assets.some((a) => a.compatibleBeatIds.includes(need.beatId));
     const queries = beatQueries(research, need);
 
@@ -884,25 +980,19 @@ export async function buildAssetPack(
           seenVideo.add(vid);
 
           stages.sourceVerifyPass++;
+          let durationSec: number | undefined;
           if (!v.directUrl) {
             stages.probeAttempted++;
             const pr = await probeVideo(v.url);
             if (pr.ok) stages.probeOk++;
             if (!pr.ok) continue;
             if (pr.durationSec && pr.durationSec > MAX_SOURCE_SEC) continue;
+            durationSec = pr.durationSec;
           }
-          const raw = path.join(mediaDir, `src-${vid}.mp4`);
           const ytB = isYoutube(v.url);
-          stages.downloadAttempted++;
-          if (ytB) stages.ytDownloadAttempted++;
-          const got = await fetchVideo(v.directUrl, v.url, raw);
-          if (!got.ok) continue;
-          stages.downloadOk++;
-          if (ytB) stages.ytDownloadOk++;
-          const cut = await cutSegments(raw, mediaDir, vid, 4, needs);
-          try {
-            fs.rmSync(raw, { force: true });
-          } catch {}
+          const r = await acquire(vid, v, durationSec, 4);
+          if ("error" in r) continue;
+          const { cut, method } = r;
           if (!cut.assets.length) continue;
           stages.sourceVideosAccepted++;
           if (ytB) {
@@ -910,7 +1000,7 @@ export async function buildAssetPack(
             stages.ytSegments += cut.assets.length;
           }
           console.log(`  ПРИНЯТО ${domainOf(v.url)} ${cut.duration.toFixed(0)}с → ${cut.assets.length} сегментов`);
-          sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
+          sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method });
           for (const a of cut.assets) {
             assets.push({
               ...a,
@@ -1009,6 +1099,16 @@ export async function buildAssetPack(
       await searchVideo();
       await searchImages();
     }
+  };
+  // Блоки — партиями по PARALLEL в порядке важности. Одно и то же видео два блока
+  // не скачают: пометка в seenVideo ставится синхронно до первого await.
+  for (let b = 0; b < ordered.length; b += PARALLEL) {
+    if (assets.length >= T.max_total_assets) break;
+    await Promise.all(
+      ordered.slice(b, b + PARALLEL).map((need) =>
+        processNeed(need).catch((e) => console.log(`  блок ${need.beatId}: ${String(e?.message ?? e).slice(0, 100)}`)),
+      ),
+    );
   }
 
   // ---------- сопоставление с блоками ----------

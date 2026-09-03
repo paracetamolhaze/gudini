@@ -29,7 +29,7 @@
   "min_beat_coverage": 0.7,
   "core_download_shortlist": 10,
   "_pacing": "жёсткие пределы валидатора берутся отсюда же, чтобы числа не расходились",
-  "first_visual_by": 5.0,
+  "first_visual_by": 3.0,
   "first_visual_after": 1.8,
   "min_external_coverage": 0.5,
   "max_total_assets": 48

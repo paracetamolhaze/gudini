@@ -258,6 +258,12 @@ export async function directMontage(
   // до конца ролика. Пустых промежутков после первой карточки быть не должно;
   // продлить проверенную картинку честнее, чем показать пустой верх.
   events.sort((a, b) => a.start - b.start);
+  // Первая карточка появляется сразу после вступительной фразы. Если модель
+  // поставила её позже допустимого, начало сдвигается детерминированно: зрителю
+  // важно, что картинка есть, а не что она совпала с конкретным словом.
+  if (events.length && events[0].start > T.first_visual_by) {
+    events[0].start = Number(Math.max(T.first_visual_after, T.first_visual_by).toFixed(3));
+  }
   for (let i = 0; i < events.length; i++) {
     const next = events[i + 1];
     events[i].end = Number((next ? next.start - 1 / 30 : duration).toFixed(3));

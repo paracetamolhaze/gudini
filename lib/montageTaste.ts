@@ -73,7 +73,7 @@ const DEFAULTS: MontageTaste = {
   min_usable_video_segments: 0,
   min_total_assets: 12,
   min_beat_coverage: 0.7,
-  first_visual_by: 5.0,
+  first_visual_by: 3.0,
   first_visual_after: 1.8,
   min_external_coverage: 0.5,
 };

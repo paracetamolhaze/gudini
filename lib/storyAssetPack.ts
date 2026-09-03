@@ -13,6 +13,7 @@ import { probe, runFfmpeg } from "./ffmpeg";
 import { taste } from "./montageTaste";
 import { frameHash, groupScenes } from "./sceneHash";
 import { CARD_FILTER, sourceBigEnough, GOOD_SOURCE } from "./topInset";
+import { hasBlackBars } from "./blackBars";
 
 const rank = (i: string) => (i === "HIGH" ? 0 : i === "MEDIUM" ? 1 : 2);
 /**
@@ -122,6 +123,7 @@ function countQcReason(reason: string): void {
   if (/текст/.test(reason)) stages.qcRejectedLargeText++;
   else if (/реакц|призыв|интерфейс|заставка/.test(reason)) stages.qcRejectedReaction++;
   else if (/постановка|скетч|объяснялка/.test(reason)) stages.qcRejectedExplainerSkit++;
+  else if (/полосы/.test(reason)) stages.qcRejectedOther++;
   else stages.qcRejectedOther++;
 }
 
@@ -505,6 +507,12 @@ async function cutSegments(
         ["-ss", at.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", path.basename(still)],
         { cwd: dir },
       );
+      // чёрные полосы внутри кадра обрезкой не лечатся — такой стоп-кадр не берём
+      if (await hasBlackBars(still, dir)) {
+        countQcReason("чёрные полосы внутри кадра");
+        fs.rmSync(still, { force: true });
+        continue;
+      }
       out.push({
         id: sid(`${videoId}:${i}`),
         kind: "IMAGE",
@@ -930,6 +938,11 @@ export async function buildAssetPack(
             // единая геометрия карточки — та же, что у стоп-кадров и у рендера
             await runFfmpeg(["-i", rawFile, "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", file]);
             fs.rmSync(rawFile, { force: true });
+            if (await hasBlackBars(file, mediaDir)) {
+              countQcReason("чёрные полосы внутри кадра");
+              fs.rmSync(file, { force: true });
+              continue;
+            }
             stages.imagesAccepted++;
             gotImage = true;
             assets.push({

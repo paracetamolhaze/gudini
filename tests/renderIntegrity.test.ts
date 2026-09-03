@@ -11,6 +11,7 @@ import { CARD, CARD_FILTER, CARD_CROP, AUTHOR_CROP, INTRO_ZOOM } from "../lib/to
 import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
 import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS } from "../lib/storyAssetPack";
 import { packDistribution, montagePreflight } from "../lib/montageValidator";
+import { blackBarReport } from "../lib/blackBars";
 
 /**
  * Регрессия на НАСТОЯЩЕМ рендере, покадрово, без единого API-вызова.
@@ -253,4 +254,19 @@ test("5: неравномерный визуал не пускает к опла
   assert.equal(pre.status, "NEEDS_MORE_MEDIA");
   const even: any = { coverage: beats.map((b, i) => ({ beatId: b.id, bestScore: i % 2 === 0 ? 3 : 2 })), assets: [] };
   assert.equal(montagePreflight(even, beats, 60).status, "READY");
+});
+
+test("6: чёрные полосы внутри картинки распознаются, обычный кадр — нет", { timeout: 120_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-bars-"));
+  try {
+    // вертикальная картинка в чёрной рамке 16:9 — ровно то, что выкладывают с телефона
+    await runFfmpeg(["-f", "lavfi", "-i", "testsrc2=s=506x900", "-frames:v", "1", "-vf", "pad=1600:900:(ow-iw)/2:0:black", path.join(dir, "pillar.png")]);
+    await runFfmpeg(["-f", "lavfi", "-i", "testsrc2=s=1600x900", "-frames:v", "1", path.join(dir, "plain.png")]);
+    const p = await blackBarReport(path.join(dir, "pillar.png"), dir);
+    const q = await blackBarReport(path.join(dir, "plain.png"), dir);
+    assert.equal(p.hasBars, true, `полосы не распознаны: ${JSON.stringify(p)}`);
+    assert.equal(q.hasBars, false, `ложное срабатывание: ${JSON.stringify(q)}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

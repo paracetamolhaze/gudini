@@ -97,7 +97,9 @@ async function withOneRetry<T>(fn: (isRetry: boolean) => Promise<T>): Promise<T>
     // Код ошибки может стоять и перед двоеточием, и перед телом ответа («500 {…}»):
     // разовый 500 от провайдера однажды уронил сопоставление после полностью
     // собранной медиатеки, потому что регулярка ждала только «500:».
-    if (!/пустой ответ|(?:429|5\d\d)|timeout|ECONNRESET|fetch failed|overloaded|api_error/i.test(msg)) throw e;
+    // обрезанный ответ повторять бессмысленно — тот же лимит даст тот же обрыв
+    if (/обрезан по лимиту/.test(msg)) throw e;
+    if (!/пустой ответ|\b(?:429|5\d\d)\b|timeout|ECONNRESET|fetch failed|overloaded|api_error/i.test(msg)) throw e;
     return await fn(true);
   }
 }
@@ -131,7 +133,18 @@ async function completeOnce(
     .map((b) => b.text)
     .join("\n")
     .trim();
-  if (!text) throw new Error("Anthropic вернул пустой ответ");
+  // Обрезанный по лимиту ответ — не «пустой»: повторять тот же запрос бессмысленно,
+  // а сообщение должно называть причину. Режиссёр на 24 блока упёрся в 8000 токенов,
+  // и код дважды оплатил один и тот же обрезанный ответ.
+  if (response.stop_reason === "max_tokens") {
+    throw new Error(
+      `Anthropic: ответ обрезан по лимиту ${maxTokens} токенов (стадия «${stage}», блоков контента ${response.content.length}, текста ${text.length} символов) — увеличьте maxTokens или сократите запрос`,
+    );
+  }
+  if (!text) {
+    const kinds = response.content.map((b) => b.type).join(",") || "нет";
+    throw new Error(`Anthropic вернул пустой ответ (stop_reason=${response.stop_reason}, блоки: ${kinds})`);
+  }
   return text;
 }
 

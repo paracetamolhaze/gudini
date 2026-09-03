@@ -246,7 +246,8 @@ export async function directMontage(
 
   const raw = await mediaComplete({
     system: systemPrompt(),
-    maxTokens: 8000,
+    // 24 блока × вставка с цитатой не помещались в 8000: ответ обрезался, деньги уходили
+    maxTokens: 16000,
     stage: "Creative Director",
     user:
       `История: ${research.canonicalEvent}\n\n` +

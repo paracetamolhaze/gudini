@@ -164,3 +164,94 @@ export function packReady(pack: StoryAssetPackV2): { ok: boolean; reasons: strin
 
   return { ok: reasons.length === 0, reasons, status: reasons.length === 0 ? "READY" : "NEEDS_MORE_MEDIA" };
 }
+
+/**
+ * Как визуал РАСПРЕДЕЛЁН по ролику, а не только сколько его всего.
+ *
+ * Доля 36% может означать «все 36% в середине»: именно так и вышло — двадцать
+ * четыре секунды одного лица в начале, весь материал комом посередине и пустой
+ * финал. Общая цифра этого не показывает, поэтому её недостаточно для решения
+ * о готовности.
+ *
+ * Времени блоков до режиссёра ещё нет, поэтому оно оценивается по их порядку:
+ * блоки идут подряд и примерно равны по длине. Для решения «хватит ли материала»
+ * такой оценки достаточно.
+ */
+export type PackDistribution = {
+  firstExternalVisualAt: number;
+  maxContinuousARoll: number;
+  externalCoverageFirstThird: number;
+  externalCoverageMiddleThird: number;
+  externalCoverageLastThird: number;
+  coveredBeats: number;
+  visualBeats: number;
+};
+
+export function packDistribution(
+  pack: StoryAssetPackV2,
+  beats: { id: string; visualNeed: string }[],
+  duration: number,
+): PackDistribution {
+  const visual = beats.filter((b) => b.visualNeed !== "NONE");
+  const per = duration / Math.max(1, visual.length);
+  // честным считаем блок с оценкой 2 и выше: «сойдёт как обстановка» провалов не закрывает
+  const covered = visual.map((b) => (pack.coverage.find((c) => c.beatId === b.id)?.bestScore ?? 0) >= 2);
+
+  const firstIdx = covered.indexOf(true);
+  const firstExternalVisualAt = firstIdx < 0 ? duration : Number((firstIdx * per).toFixed(2));
+
+  let run = 0;
+  let maxRun = 0;
+  for (const c of covered) {
+    run = c ? 0 : run + 1;
+    maxRun = Math.max(maxRun, run);
+  }
+
+  const share = (from: number, to: number) => {
+    const slice = covered.slice(from, to);
+    return slice.length ? Number((slice.filter(Boolean).length / slice.length).toFixed(2)) : 0;
+  };
+  const t = Math.ceil(covered.length / 3);
+
+  return {
+    firstExternalVisualAt,
+    maxContinuousARoll: Number((maxRun * per).toFixed(2)),
+    externalCoverageFirstThird: share(0, t),
+    externalCoverageMiddleThird: share(t, 2 * t),
+    externalCoverageLastThird: share(2 * t, covered.length),
+    coveredBeats: covered.filter(Boolean).length,
+    visualBeats: visual.length,
+  };
+}
+
+/**
+ * Предполётная проверка перед платным вызовом режиссёра.
+ *
+ * Если материала не хватает на приемлемый темп, режиссёр всё равно не сможет
+ * его создать — он выбирает из того, что есть. Платить за подтверждение
+ * очевидного не нужно: возвращаем NEEDS_MORE_MEDIA и идём доискивать материал.
+ */
+export function montagePreflight(
+  pack: StoryAssetPackV2,
+  beats: { id: string; visualNeed: string }[],
+  duration: number,
+): { ok: boolean; status: "READY" | "NEEDS_MORE_MEDIA"; reasons: string[]; distribution: PackDistribution } {
+  const d = packDistribution(pack, beats, duration);
+  const reasons: string[] = [];
+  if (d.firstExternalVisualAt > PACING.firstVisualBy) {
+    reasons.push(
+      `первый визуал только на ${d.firstExternalVisualAt.toFixed(1)}с — начало ролика будет статичным (предел ${PACING.firstVisualBy}с)`,
+    );
+  }
+  if (d.maxContinuousARoll > PACING.maxARollGap) {
+    reasons.push(`подряд ${d.maxContinuousARoll.toFixed(1)}с без материала — предел ${PACING.maxARollGap}с`);
+  }
+  for (const [name, v] of [
+    ["начале", d.externalCoverageFirstThird],
+    ["середине", d.externalCoverageMiddleThird],
+    ["конце", d.externalCoverageLastThird],
+  ] as const) {
+    if (v < 0.34) reasons.push(`в ${name} ролика закрыто лишь ${(v * 100).toFixed(0)}% блоков`);
+  }
+  return { ok: reasons.length === 0, status: reasons.length === 0 ? "READY" : "NEEDS_MORE_MEDIA", reasons, distribution: d };
+}

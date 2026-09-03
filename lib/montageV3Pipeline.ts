@@ -4,7 +4,7 @@ import { StoryResearchPack } from "./storyResearch";
 import { buildScriptBeats, ScriptBeat } from "./scriptBeats";
 import { buildAssetPack, StoryAssetPackV2 } from "./storyAssetPack";
 import { directMontage, MontagePlan } from "./creativeDirector";
-import { validateMontage, packReady } from "./montageValidator";
+import { validateMontage, packReady, montagePreflight, PackDistribution } from "./montageValidator";
 import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE } from "./editPlan";
 import { Word } from "./transcribe";
 
@@ -29,6 +29,8 @@ export type MontageV3Result = {
   beatsReused: boolean;
   /** медиатека взята готовой, деньги на поиск и зрение не потрачены */
   packReused: boolean;
+  /** как визуал распределён по ролику: одной цифры покрытия недостаточно */
+  distribution: PackDistribution;
   warnings: string[];
 };
 
@@ -80,6 +82,21 @@ export async function runMontageV3(args: {
   const ready = packReady(pack);
   if (!ready.ok) warnings.push(...ready.reasons);
 
+  // Режиссёр не создаёт материал, он выбирает из имеющегося. Если распределение
+  // заведомо даёт статичное начало или долгий провал, платить за подтверждение
+  // очевидного не нужно — сначала доискиваем материал.
+  const pre = montagePreflight(pack, beats, duration);
+  if (!pre.ok) {
+    const err: any = new Error(
+      `Медиатеки не хватает на приемлемый темп: ${pre.reasons.join("; ")}. ` +
+        "Режиссёр не запускался, деньги не потрачены.",
+    );
+    err.status = "NEEDS_MORE_MEDIA";
+    err.distribution = pre.distribution;
+    err.uncoveredBeats = pack.coverage.filter((c) => c.bestScore < 2).map((c) => c.beatId);
+    throw err;
+  }
+
   const montage = await directMontage(research, beats, pack, words, duration, speechCuts);
   if (!montage) throw new Error("Режиссёр монтажа не вернул план");
 
@@ -97,5 +114,5 @@ export async function runMontageV3(args: {
     captionStyle: { ...DEFAULT_CAPTION_STYLE },
   };
 
-  return { plan, montage, pack, beats, beatsReused: Boolean(beatsReused), packReused, warnings };
+  return { plan, montage, pack, beats, beatsReused: Boolean(beatsReused), packReused, distribution: pre.distribution, warnings };
 }

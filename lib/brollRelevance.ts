@@ -320,6 +320,14 @@ export function qcReject(an: AssetAnalysis, opts: QcOptions = {}): string | null
   return null;
 }
 
+/**
+ * Модель для разбора кадров. Это простая классификация — «что на кадре и нет ли
+ * на нём чужой заставки», — а не рассуждение о смысле истории. На известном
+ * случае с карточкой SUBSCRIBE младшая модель дала тот же ответ, что старшая,
+ * и обошлась втрое дешевле. Переопределяется через MEDIA_WINDOW_QC_MODEL.
+ */
+export const WINDOW_QC_MODEL = "claude-haiku-4-5-20251001";
+
 const BATCH_SYSTEM = `You inspect frames sampled from ONE source video for use as b-roll.
 The frames are given in order. Judge EACH frame independently.
 Reply with STRICT JSON only:
@@ -355,6 +363,9 @@ export async function analyzeFrames(
   const raw = (
     await mediaVision({
       system: BATCH_SYSTEM,
+      // Разбор кадра — простая классификация, а не рассуждение о смысле истории.
+      // Держать её на той же дорогой модели, что и режиссёра, незачем.
+      model: process.env.MEDIA_WINDOW_QC_MODEL || WINDOW_QC_MODEL,
       user: `Describe these ${todo.length} frames.`,
       images: todo.map((i) => ({
         base64: buffers[i].toString("base64"),

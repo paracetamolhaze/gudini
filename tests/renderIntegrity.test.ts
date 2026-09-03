@@ -9,6 +9,7 @@ import { checkRenderConformance, checkPointsFor } from "../lib/renderConformance
 import { frameHash, hamming } from "../lib/sceneHash";
 import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
 import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS } from "../lib/storyAssetPack";
+import { packDistribution, montagePreflight } from "../lib/montageValidator";
 
 /**
  * Регрессия на НАСТОЯЩЕМ рендере, покадрово. Неподвижная картинка обязана быть
@@ -154,4 +155,30 @@ test("4: решение по окну — отказ, если грязь ряд
   // неописанный кадр — не повод считать окно чистым
   const unknown = segmentWindowDecision([null, clean, clean, clean, clean] as any);
   assert.equal(unknown.decision, "REJECT");
+});
+
+test("5: неравномерный визуал не пускает к оплате режиссёра", () => {
+  const beats = Array.from({ length: 12 }, (_, i) => ({ id: `b${i}`, visualNeed: "EXACT_EVENT" }));
+  // ровно текущий случай: закрыта только середина, начало и конец пустые
+  const middleOnly: any = {
+    coverage: beats.map((b, i) => ({ beatId: b.id, bestScore: i >= 4 && i <= 7 ? 3 : 0 })),
+    assets: [],
+  };
+  const d = packDistribution(middleOnly, beats, 60);
+  assert.equal(d.firstExternalVisualAt, 20, "первый визуал только на двадцатой секунде");
+  assert.equal(d.maxContinuousARoll, 20, "двадцать секунд подряд без материала в конце");
+  assert.equal(d.externalCoverageFirstThird, 0);
+  assert.equal(d.externalCoverageLastThird, 0);
+
+  const pre = montagePreflight(middleOnly, beats, 60);
+  assert.equal(pre.ok, false);
+  assert.equal(pre.status, "NEEDS_MORE_MEDIA");
+  assert.match(pre.reasons.join(" "), /первый визуал/);
+  assert.match(pre.reasons.join(" "), /подряд/);
+
+  // равномерно закрытый пакет проходит
+  const even: any = { coverage: beats.map((b, i) => ({ beatId: b.id, bestScore: i % 2 === 0 ? 3 : 2 })), assets: [] };
+  const ok = montagePreflight(even, beats, 60);
+  assert.equal(ok.ok, true, ok.reasons.join("; "));
+  assert.equal(ok.status, "READY");
 });

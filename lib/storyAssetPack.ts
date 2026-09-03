@@ -301,6 +301,8 @@ function beatQueries(r: StoryResearchPack, need: MediaResearchNeed): string[] {
 
 /** Длина окна сегмента и точки его проверки: начало, четверти, конец. */
 export const SEGMENT_WINDOW = 3.2;
+/** Ширина кадра, отправляемого на контроль качества. Классификации хватает. */
+export const QC_FRAME_WIDTH = 384;
 export const WINDOW_OFFSETS = [0.05, 0.25, 0.5, 0.75, 0.95];
 /** Короче полутора секунд вставка бессмысленна. */
 export const MIN_CLEAN_SEC = 1.5;
@@ -407,8 +409,14 @@ async function cutSegments(
       const t = Math.min(at + WINDOW * frac, Math.max(0, duration - 0.05));
       const frame = path.join(dir, `probe-${videoId}-${i}-${p}.jpg`);
       try {
+        // Кадр для контроля качества нужен модели только чтобы понять, что на нём.
+        // Полное разрешение здесь — деньги на ветер: токенов в разы больше, а
+        // «SUBSCRIBE» и заставка одинаково видны на уменьшенной копии.
         await runFfmpeg(
-          ["-ss", t.toFixed(2), "-i", path.basename(file), "-frames:v", "1", "-q:v", "4", path.basename(frame)],
+          [
+            "-ss", t.toFixed(2), "-i", path.basename(file), "-frames:v", "1",
+            "-vf", `scale=${QC_FRAME_WIDTH}:-2`, "-q:v", "6", path.basename(frame),
+          ],
           { cwd: dir },
         );
         stages.framesSampled++;

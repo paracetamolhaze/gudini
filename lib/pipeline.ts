@@ -325,6 +325,7 @@ export async function processProject(id: string): Promise<void> {
     // и печатается в лог воркера. Старые счётчики не видели вызовов через mediaLlm и
     // показывали «LLM 0» при реально оплаченной чистке речи.
     writeLedger(dir);
+    keepRunLedger(dir, "done");
     console.log(formatCostReport({ title: "COST OF THIS RUN", includeHistoricalCover: true, dataDir: path.resolve(dir, "..", "..") }));
     console.log(`Стоимость прогона (переменные API): $${summarize().totals.variableApiCost.toFixed(4)}`);
 
@@ -341,9 +342,13 @@ export async function processProject(id: string): Promise<void> {
     updateProject(id, {
       processing: { state: "error", step: "Ошибка", progress: 0, error: String(e?.message ?? e) },
     });
-    // неудачный прогон тоже стоил денег — леджер сохраняется и печатается
+    // Неудачный прогон тоже стоил денег — леджер сохраняется, копия остаётся
+    // навсегда, и печатается полный отчёт по стадиям, а не одна цифра: после
+    // провала на $1.55 разбор по стадиям пришлось восстанавливать по памяти.
     try {
       writeLedger(projectDir(id));
+      keepRunLedger(projectDir(id), "failed");
+      console.log(formatCostReport({ title: "COST OF THIS (FAILED) RUN", includeHistoricalCover: false, dataDir: path.resolve(projectDir(id), "..", "..") }));
       console.log(`Стоимость неудачного прогона (переменные API): $${summarize().totals.variableApiCost.toFixed(4)}`);
     } catch {}
   } finally {
@@ -426,6 +431,16 @@ export async function makeCover(
 }
 
 /** Склейка сегментов речи в чистый исходник; на каждой границе — аудиофейды 15 мс (без щелчков). */
+/** Копия леджера каждого прогона: pipeline-cost.json перезаписывается, история — нет. */
+function keepRunLedger(dir: string, status: "done" | "failed"): void {
+  try {
+    const runs = path.join(dir, "cost-runs");
+    fs.mkdirSync(runs, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.copyFileSync(path.join(dir, "pipeline-cost.json"), path.join(runs, `${stamp}-${status}.json`));
+  } catch {}
+}
+
 /** Геометрия чистого файла: та же, что у выхода; для 1080p-исходника — без изменений. */
 const CLEAN_SCALE = "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920";
 

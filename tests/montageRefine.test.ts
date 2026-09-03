@@ -124,3 +124,43 @@ test("Refine: выбор режиссёра закрепляется за бло
   const spoken = words.filter((w) => w.end > cast.start && w.start < cast.end).map((w) => w.word.toLowerCase());
   assert.ok(spoken.some((w) => /гипсе/.test(w)), `под гипсом говорят: ${spoken.join(" ")}`);
 });
+
+test("Refine: короткий блок-событие занимает время у соседа, а не исчезает", () => {
+  // «на носилках» длится 1.5 с между двумя длинными блоками
+  const w: Word[] = [];
+  let tt = 0.5;
+  const add = (sentence: string, gapAfter: number) => {
+    for (const x of sentence.split(/\s+/)) {
+      w.push({ word: x, start: tt, end: tt + 0.3 });
+      tt += 0.4;
+    }
+    tt += gapAfter;
+  };
+  add("Спотыкается и неудачно падает на руку и потом долго лежит на газоне", 0.2); // ~5.4 с
+  add("уносят с поля на носилках", 0.2); // ~1.9 с
+  add("Тренер подтвердил что всё серьёзно и чемпионат для него закончился", 0.2); // ~5 с
+  const dur = tt + 0.5;
+  const bts = [
+    { id: "x8", text: "Спотыкается и неудачно падает на руку.", visualNeed: "EXACT_EVENT" },
+    { id: "x9", text: "В итоге его уносят с поля на носилках.", visualNeed: "EXACT_EVENT" },
+    { id: "x10", text: "Тренер подтвердил, что всё серьёзно.", visualNeed: "CONTEXT" },
+  ];
+  const nds = bts.map((b) => ({ beatId: b.id, intent: "EXACT_EVENT", entities: [], visualDescription: b.text }));
+  const pk: any = {
+    ...pack,
+    assets: [
+      asset("ground", "Player lies on the ground after a fall", { x8: 3 }),
+      asset("stretcher", "Medical staff carrying player on a stretcher", { x9: 3 }),
+      asset("coach", "Coach at press conference", { x10: 2 }),
+    ],
+  };
+  const plan: MontagePlan = { ...director, duration: dur, events: [] };
+  const { plan: out, slots } = refineMontage({ montage: plan, pack: pk, beats: bts, needs: nds, words: w, duration: dur });
+  const T = taste();
+  const s9 = slots.find((s) => s.beatId === "x9");
+  assert.ok(s9, "блок с носилками не исчез");
+  assert.ok(s9!.end - s9!.start >= T.min_visual_duration - 0.01, `отрезок носилок ${(s9!.end - s9!.start).toFixed(2)}с`);
+  const stretcher = out.events.find((e) => e.assetId === "stretcher")!;
+  assert.ok(stretcher, "носилки в плане");
+  assert.ok(/носилках/.test(stretcher.quote), `цитата под носилками: ${stretcher.quote}`);
+});

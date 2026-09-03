@@ -119,11 +119,32 @@ export function refineMontage(args: {
   if (!slots.length) return { plan: montage, slots, notes: [...notes, "ни один блок не найден в речи — план режиссёра оставлен как есть"] };
   for (let i = 0; i < slots.length; i++) slots[i].end = i + 1 < slots.length ? slots[i + 1].start : duration;
   slots[0].start = FIRST_BY; // первая карточка — ровно к концу вступительного наезда
+  // Короткий отрезок (после чистки речи «с поля на носилках» длится 1.5 с) не
+  // исчезает, а занимает недостающее у соседа, если тот остаётся не короче минимума:
+  // сначала у предыдущего (картинка встаёт чуть раньше слов — это естественно),
+  // потом у следующего. Только если занять не у кого — сливается с предыдущим.
   for (let i = 1; i < slots.length; ) {
-    if (slots[i].end - slots[i].start < MIN) {
-      slots[i - 1].end = slots[i].end;
+    const len = slots[i].end - slots[i].start;
+    if (len >= MIN) {
+      i++;
+      continue;
+    }
+    const need = MIN - len + 0.05;
+    const prev = slots[i - 1];
+    const next = slots[i + 1];
+    if (prev.end - prev.start - need >= MIN) {
+      prev.end -= need;
+      slots[i].start = prev.end;
+      i++;
+    } else if (next && next.end - next.start - need >= MIN) {
+      next.start += need;
+      slots[i].end = next.start;
+      i++;
+    } else {
+      notes.push(`блок ${slots[i].beatId}: ${len.toFixed(1)}с — слит с предыдущим, занять не у кого`);
+      prev.end = slots[i].end;
       slots.splice(i, 1);
-    } else i++;
+    }
   }
 
   // 2) кандидаты блока: свои (по оценке) и материалы блоков о том же человеке (оценка 1)

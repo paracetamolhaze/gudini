@@ -84,6 +84,8 @@ export function beatsFingerprint(script: string, research: StoryResearchPack): s
   const payload = JSON.stringify({
     script: script.trim(),
     story: research.storyId,
+    // тип истории меняет формулировку потребностей: блоки, разобранные «как для новостей», пересобираются
+    kind: research.kind ?? "NEWS_EVENT",
     event: research.canonicalEvent,
     facts: research.facts.map((f) => f.id).sort(),
     entities: research.entities.map((e) => e.name).sort(),

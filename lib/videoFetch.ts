@@ -31,12 +31,22 @@ const UA = "Gudini/1.0 (short-video editor)";
 const JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node";
 /**
  * Только видеодорожка: звук внешнего материала в ролик не попадает никогда.
- * Потолок 720p — не экономия, а необходимость: при 1080p сюжет на несколько минут
- * весит больше лимита в 90 МБ, скачивание обрывается на середине и материал теряется.
- * Из 720p вертикальный кадр 1080×1920 всё равно режется по центру.
+ * Потолок 1080p: карточка 900×506 из 720p-кадра заметно мягче фото. Сюжет на
+ * несколько минут в 1080p весит сотни мегабайт, а оборванное скачивание — потерянный
+ * материал, поэтому 1080p берётся только когда размер известен и укладывается в
+ * лимит; иначе — 720p, как раньше. Лимит файла и таймаут подняты под 1080p.
  */
-const VIDEO_ONLY = "bv*[height<=720][ext=mp4]/bv*[height<=720]/bv*[ext=mp4]/bv*/best";
-const MAX_BYTES = 90_000_000;
+const MAX_BYTES = 220_000_000;
+const MAX_FILESIZE_ARG = "220M";
+const VIDEO_ONLY = [
+  "bv*[height<=1080][ext=mp4][filesize<200M]",
+  "bv*[height<=1080][ext=mp4][filesize_approx<200M]",
+  "bv*[height<=720][ext=mp4]",
+  "bv*[height<=720]",
+  "bv*[ext=mp4]",
+  "bv*",
+  "best",
+].join("/");
 
 /**
  * Есть ли экстрактор. Разовый сбой этой проверки на старте контейнера однажды
@@ -95,7 +105,7 @@ async function viaExtractor(pageUrl: string, out: string): Promise<FetchResult> 
         "--no-playlist",
         "--no-warnings",
         "--no-progress",
-        "--max-filesize", "90M",
+        "--max-filesize", MAX_FILESIZE_ARG,
         "--socket-timeout", "20",
         "--js-runtimes", JS_RUNTIME,
         // Звук внешнего материала нам не нужен вообще, поэтому берём ТОЛЬКО видеодорожку.
@@ -106,7 +116,7 @@ async function viaExtractor(pageUrl: string, out: string): Promise<FetchResult> 
         "-o", out,
         pageUrl,
       ],
-      { timeout: 150_000, maxBuffer: 8 * 1024 * 1024 },
+      { timeout: 360_000, maxBuffer: 8 * 1024 * 1024 },
     );
     if (!fs.existsSync(out) || fs.statSync(out).size < 20_000) return { ok: false, reason: "экстрактор ничего не отдал" };
     return { ok: true, file: out, method: "extractor" };

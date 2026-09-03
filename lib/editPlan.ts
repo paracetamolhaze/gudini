@@ -38,8 +38,21 @@ export type VisualSourceIntent =
  */
 export type FactualSpecificity = "EXACT" | "ENTITY" | "GENERAL";
 
+/**
+ * Как показывается внешний материал.
+ * top_inset — прямоугольник в верхней части поверх автора; автор виден.
+ * fullscreen — старая полноэкранная перебивка, в новом монтаже не используется.
+ */
+export type EventLayout = "top_inset" | "fullscreen";
+
 export type EditEvent = {
   type: EditEventType;
+  /**
+   * Раскладка вставки. У старых сохранённых планов поля нет — тогда берётся
+   * top_inset: автор в кадре остаётся при любом раскладе, и это безопаснее,
+   * чем неожиданно перекрыть его на весь экран.
+   */
+  layout?: EventLayout;
   start: number; // сек на чистом (после вырезки пауз) таймлайне
   end: number;
   // B_ROLL
@@ -69,12 +82,17 @@ export type CaptionStyle = {
 };
 
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
-  maxWords: 1, // одно слово на экране
+  // Короткая смысловая фраза, а не отдельное слово: по одному слову читать
+  // тяжело, а взгляд всё время дёргается вслед за сменой текста.
+  maxWords: 6,
   uppercase: true,
   highlightKeyword: false,
   position: "lower",
-  fontSize: 84,
+  fontSize: 58,
 };
+
+/** Раскладка вставки с безопасным значением для старых планов. */
+export const eventLayout = (e: EditEvent): EventLayout => e.layout ?? "top_inset";
 
 export type EditPlan = {
   version: 1;

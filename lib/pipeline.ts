@@ -15,6 +15,8 @@ import { planSpeechCleanup } from "./speechCleanupPlanner";
 import { runMontageV3 } from "./montageV3Pipeline";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { buildAss } from "./subtitles";
+import { insetBox, insetScaleFilter, InsetBox, INSET } from "./topInset";
+import { eventLayout } from "./editPlan";
 import { applyScriptFormatting } from "./scriptFormat";
 import { generateMeta } from "./ai";
 import { buildStoryAssetPack } from "./storyAssets";
@@ -431,14 +433,33 @@ export async function renderPlan(
   // подаются с -loop 1 и собственной длительностью.
   const isStill = (f: string) => /\.(jpe?g|png|webp|bmp|gif)$/i.test(f);
 
-  // б-роллы поверх (голос не прерывается)
+  // Размеры каждого материала нужны заранее: вставка вписывается в верхнюю
+  // область С СОХРАНЕНИЕМ ПРОПОРЦИЙ, а не растягивается на весь кадр.
+  const boxes: InsetBox[] = [];
+  for (const b of brolls) {
+    try {
+      const info = await probe(b.file!);
+      boxes.push(insetBox(info.width, info.height));
+    } catch {
+      boxes.push(insetBox(INSET.maxW, INSET.maxH));
+    }
+  }
+
+  // Внешний материал ложится ПОВЕРХ автора отдельным прямоугольником сверху.
+  // Автор остаётся фоном и виден всё время: перекрывать его целиком нельзя.
   brolls.forEach((b, k) => {
     const inputIdx = (music ? 2 : 1) + k;
     const clipDur = (b.end - b.start).toFixed(3);
+    const box = boxes[k];
+    const full = eventLayout(b) === "fullscreen";
+    const geom = full
+      ? `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920`
+      : insetScaleFilter(box);
+    const place = full ? "0:0" : `${box.x}:${box.y}`;
     chain +=
-      `;[${inputIdx}:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,` +
+      `;[${inputIdx}:v]${geom},fps=30,` +
       `trim=duration=${clipDur},setpts=PTS-STARTPTS+${b.start.toFixed(3)}/TB[bv${k}]` +
-      `;[${current}][bv${k}]overlay=eof_action=pass:enable='between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})'[vo${k}]`;
+      `;[${current}][bv${k}]overlay=${place}:eof_action=pass:enable='between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})'[vo${k}]`;
     current = `vo${k}`;
   });
 

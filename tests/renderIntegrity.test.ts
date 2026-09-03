@@ -7,6 +7,8 @@ import { runFfmpeg } from "../lib/ffmpeg";
 import { renderPlan } from "../lib/pipeline";
 import { checkRenderConformance, checkPointsFor } from "../lib/renderConformance";
 import { frameHash, hamming } from "../lib/sceneHash";
+import { insetBox, insetScaleFilter, insetCropFilter, INSET, AUTHOR_SAFE_TOP } from "../lib/topInset";
+import { probe } from "../lib/ffmpeg";
 import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
 import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS } from "../lib/storyAssetPack";
 import { packDistribution, montagePreflight } from "../lib/montageValidator";
@@ -29,7 +31,7 @@ async function fixture(dir: string) {
     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
     path.join(dir, "aroll.mp4"),
   ]);
-  await runFfmpeg(["-f", "lavfi", "-i", "smptebars=s=1080x1920", "-frames:v", "1", path.join(dir, "still.png")]);
+  await runFfmpeg(["-f", "lavfi", "-i", "smptebars=s=1600x900", "-frames:v", "1", path.join(dir, "still.png")]);
   fs.writeFileSync(
     path.join(dir, "subs.ass"),
     "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
@@ -45,33 +47,104 @@ async function outHash(dir: string, at: number): Promise<bigint> {
   return h!;
 }
 
-test("1: изображение видно всю вставку, а вне её — A-roll", { timeout: 240_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-img-"));
+test("1: вставка сверху, автор снизу виден, вне вставки её нет", { timeout: 300_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-inset-"));
   try {
     await fixture(dir);
     const plan: EditPlan = {
       version: 1,
       duration: 5,
       captionStyle: { ...DEFAULT_CAPTION_STYLE },
-      events: [{ type: "B_ROLL", start: 1, end: 4, file: path.join(dir, "still.png") }],
+      events: [{ type: "B_ROLL", layout: "top_inset", start: 1, end: 4, file: path.join(dir, "still.png") }],
     };
     await renderPlan(dir, path.join(dir, "aroll.mp4"), plan, 5, () => {});
+    const out = path.join(dir, "out.mp4");
 
-    // эталоны: сама картинка и кадр исходного A-roll
-    const refImg = path.join(dir, "ref-img.jpg");
-    await runFfmpeg(["-i", path.join(dir, "still.png"), "-frames:v", "1", "-vf", LAYOUT, refImg]);
-    const imgHash = (await frameHash(refImg, dir))!;
+    const box = insetBox(1600, 900); // горизонтальный исходник фикстуры
+    assert.ok(box.w <= INSET.maxW && box.h <= INSET.maxH, "вставка не выходит за область");
+    assert.equal(box.y, INSET.top, "верхняя координата фиксирована");
+    assert.equal(box.x, Math.round((INSET.frameW - box.w) / 2), "по горизонтали по центру");
 
-    // 1.1 / 2.5 / 3.9 — внутри вставки: должна быть картинка
-    for (const at of [1.1, 2.5, 3.9]) {
-      const d = hamming(imgHash, await outHash(dir, at));
-      assert.ok(d <= 18, `на ${at}с должна быть картинка (расстояние ${d})`);
+    // эталон вставки и эталон A-roll
+    const refIns = path.join(dir, "ref-ins.jpg");
+    await runFfmpeg(["-i", path.join(dir, "still.png"), "-frames:v", "1", "-vf", insetScaleFilter(box), refIns]);
+    const insHash = (await frameHash(refIns, dir))!;
+
+    const crop = insetCropFilter(box);
+    const authorCrop = `crop=${INSET.frameW}:${INSET.frameH - AUTHOR_SAFE_TOP}:0:${AUTHOR_SAFE_TOP}`;
+
+    // внутри вставки: сверху картинка, снизу автор
+    for (const at of [1.2, 2.5, 3.8]) {
+      const top = path.join(dir, `top-${at}.jpg`);
+      await runFfmpeg(["-ss", String(at), "-i", out, "-frames:v", "1", "-vf", crop, top]);
+      assert.ok(hamming(insHash, (await frameHash(top, dir))!) <= 18, `на ${at}с вставки нет сверху`);
+
+      const bottom = path.join(dir, `bot-${at}.jpg`);
+      await runFfmpeg(["-ss", String(at), "-i", out, "-frames:v", "1", "-vf", authorCrop, bottom]);
+      const bh = (await frameHash(bottom, dir))!;
+      assert.ok(hamming(insHash, bh) > 18, `на ${at}с вставка залезла в зону автора`);
     }
-    // 0.5 и 4.2 — вне вставки: картинки быть не должно
-    for (const at of [0.5, 4.2]) {
-      const d = hamming(imgHash, await outHash(dir, at));
-      assert.ok(d > 18, `на ${at}с картинки быть не должно (расстояние ${d})`);
+
+    // вне вставки её быть не должно
+    for (const at of [0.5, 4.5]) {
+      const top = path.join(dir, `off-${at}.jpg`);
+      await runFfmpeg(["-ss", String(at), "-i", out, "-frames:v", "1", "-vf", crop, top]);
+      assert.ok(hamming(insHash, (await frameHash(top, dir))!) > 18, `на ${at}с вставка не должна быть видна`);
     }
+
+    // чёрных кадров быть не должно
+    for (const at of [0.9, 1.05, 3.95, 4.1]) {
+      const f = path.join(dir, `blk-${at}.jpg`);
+      await runFfmpeg(["-ss", String(at), "-i", out, "-frames:v", "1", "-vf", "scale=8:8,format=gray", "-f", "rawvideo", "-pix_fmt", "gray", f]);
+      const px = fs.readFileSync(f);
+      const mean = px.reduce((n, v) => n + v, 0) / px.length;
+      assert.ok(mean > 8, `чёрный кадр на ${at}с (яркость ${mean.toFixed(1)})`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("1b: пропорции сохраняются для горизонтали, квадрата и вертикали", () => {
+  const cases: [number, number][] = [[1600, 900], [1000, 1000], [720, 1280]];
+  for (const [w, h] of cases) {
+    const box = insetBox(w, h);
+    assert.ok(box.w <= INSET.maxW && box.h <= INSET.maxH, `${w}x${h} вышел за область`);
+    const srcAr = w / h;
+    const boxAr = box.w / box.h;
+    assert.ok(Math.abs(srcAr - boxAr) / srcAr < 0.02, `${w}x${h} растянут: ${srcAr.toFixed(2)} → ${boxAr.toFixed(2)}`);
+    assert.equal(box.w % 2, 0);
+    assert.equal(box.h % 2, 0);
+  }
+  // вертикальный упирается в высоту и становится уже — это нормально
+  assert.equal(insetBox(720, 1280).h, INSET.maxH);
+  assert.equal(insetBox(1600, 900).w, INSET.maxW);
+});
+
+test("1c: звук внешнего материала не попадает в результат", { timeout: 300_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-audio-"));
+  try {
+    await fixture(dir);
+    // вставка со СВОИМ звуком на другой частоте
+    await runFfmpeg([
+      "-f", "lavfi", "-i", "smptebars=s=1600x900:d=3:r=30",
+      "-f", "lavfi", "-i", "sine=frequency=1600:duration=3",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+      path.join(dir, "insert.mp4"),
+    ]);
+    const plan: EditPlan = {
+      version: 1,
+      duration: 5,
+      captionStyle: { ...DEFAULT_CAPTION_STYLE },
+      events: [{ type: "B_ROLL", layout: "top_inset", start: 1, end: 4, file: path.join(dir, "insert.mp4") }],
+    };
+    await renderPlan(dir, path.join(dir, "aroll.mp4"), plan, 5, () => {});
+    const info = await probe(path.join(dir, "out.mp4"));
+    assert.ok(info.hasAudio, "голос автора остался");
+    // в готовом файле ровно одна аудиодорожка — авторская
+    const chain = fs.readFileSync("lib/pipeline.ts", "utf8");
+    const render = chain.slice(chain.indexOf("export async function renderPlan"));
+    assert.ok(!/\[\d+:a\]/.test(render.slice(0, render.indexOf("audioChain"))), "дорожки вставок не подмешиваются");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

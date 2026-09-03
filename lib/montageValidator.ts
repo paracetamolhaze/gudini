@@ -23,16 +23,23 @@ export type ValidationResult = {
   };
 };
 
-/** Ориентиры темпа для вертикального короткого ролика. */
+/**
+ * Пределы темпа. Значения берутся из профиля монтажа: держать их ещё и здесь
+ * означало бы два источника правды, которые рано или поздно разойдутся.
+ */
 export const PACING = {
-  /** первая вставка должна появиться не позже этой секунды */
-  firstVisualBy: 5,
-  /** и не раньше: начало ролика — лицо автора */
-  firstVisualAfter: 1.8,
-  /** максимальный непрерывный участок без вставок */
-  maxARollGap: 8,
-  /** нижняя граница доли экранного времени под внешним визуалом */
-  minExternalCoverage: 0.5,
+  get firstVisualBy() {
+    return taste().first_visual_by;
+  },
+  get firstVisualAfter() {
+    return taste().first_visual_after;
+  },
+  get maxARollGap() {
+    return taste().max_aroll_gap;
+  },
+  get minExternalCoverage() {
+    return taste().min_external_coverage;
+  },
 };
 
 export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): ValidationResult {
@@ -148,7 +155,12 @@ export function packReady(pack: StoryAssetPackV2): { ok: boolean; reasons: strin
   const T = taste();
   const videos = pack.assets.filter((a) => a.kind === "VIDEO_SEGMENT").length;
   const reasons: string[] = [];
-  if (videos < T.min_usable_video_segments) reasons.push(`видео-сегментов ${videos} < ${T.min_usable_video_segments}`);
+  // Видео больше не обязательно само по себе: стиль иллюстративный, и пакет из
+  // хороших проверенных фотографий с честным покрытием и разными сценами —
+  // полноценная медиатека. Порог остаётся настраиваемым и по умолчанию нулевой.
+  if (T.min_usable_video_segments > 0 && videos < T.min_usable_video_segments) {
+    reasons.push(`видео-сегментов ${videos} < ${T.min_usable_video_segments}`);
+  }
   if (pack.assets.length < T.min_total_assets) reasons.push(`материалов ${pack.assets.length} < ${T.min_total_assets}`);
 
   const hard = pack.hardCoverageRatio ?? 0;

@@ -2,7 +2,9 @@ import fs from "fs";
 import path from "path";
 import { runFfmpeg } from "./ffmpeg";
 import { frameHash, hamming } from "./sceneHash";
-import { EditPlan, EditEvent } from "./editPlan";
+import { EditPlan, EditEvent, eventLayout } from "./editPlan";
+import { insetBox, insetCropFilter, insetScaleFilter, AUTHOR_SAFE_TOP, INSET } from "./topInset";
+import { probe } from "./ffmpeg";
 
 /**
  * Сверка отрендеренного ролика с планом.
@@ -22,8 +24,8 @@ import { EditPlan, EditEvent } from "./editPlan";
 /** Расстояние между хэшами, ниже которого считаем «на экране тот самый материал». */
 export const MATCH_DISTANCE = 18;
 
-/** Кадр приводится к тому же виду, в каком он попадает в ролик. */
-const LAYOUT = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920";
+/** Полноэкранная раскладка — только для старых планов. */
+const FULLSCREEN = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920";
 
 export type CheckStatus = "PASS" | "FAIL" | "ERROR";
 
@@ -57,10 +59,10 @@ const isStill = (f: string) => /\.(jpe?g|png|webp|bmp|gif)$/i.test(f);
  * пределы: ffmpeg отдаёт «frame=0» и пустой файл. Поэтому для картинок
  * перемотки нет — это та же причина, по которой фото пропадало из ролика.
  */
-async function grab(file: string, at: number, out: string, still: boolean): Promise<string | null> {
+async function grab(file: string, at: number, out: string, still: boolean, vf = FULLSCREEN): Promise<string | null> {
   try {
     const seek = still ? [] : ["-ss", at.toFixed(3)];
-    await runFfmpeg([...seek, "-i", file, "-frames:v", "1", "-vf", LAYOUT, "-q:v", "4", out]);
+    await runFfmpeg([...seek, "-i", file, "-frames:v", "1", "-vf", vf, "-q:v", "4", out]);
     if (!fs.existsSync(out) || fs.statSync(out).size === 0) return "ffmpeg не создал кадр";
     return null;
   } catch (e: any) {
@@ -101,6 +103,19 @@ export async function checkRenderConformance(
       const kind = still ? "EXTERNAL_IMAGE" : "EXTERNAL_VIDEO";
       const assetId = path.basename(file).replace(/\.[a-z0-9]+$/i, "");
 
+      // Геометрия вставки та же, что у рендерера: общий helper, а не своя копия.
+      const inset = eventLayout(ev) !== "fullscreen";
+      let box = insetBox(INSET.maxW, INSET.maxH);
+      if (inset && fs.existsSync(file)) {
+        try {
+          const info = await probe(file);
+          box = insetBox(info.width, info.height);
+        } catch {}
+      }
+      // эталон приводится к размеру вставки, а кадр ролика — вырезается по её области
+      const refVf = inset ? insetScaleFilter(box) : FULLSCREEN;
+      const outVf = inset ? insetCropFilter(box) : FULLSCREEN;
+
       // Для картинки эталон один — она сама, приведённая к монтажному виду.
       // Для видео эталон свой на каждую точку: сегмент движется, и кадр на 0.3с
       // не похож на кадр на 2.5с даже внутри одной вставки.
@@ -108,7 +123,7 @@ export async function checkRenderConformance(
       let stillRefError: string | null = null;
       if (still) {
         const refFile = path.join(tmp, `ref-${i}.jpg`);
-        const err = await grab(file, 0, refFile, true);
+        const err = await grab(file, 0, refFile, true, refVf);
         if (err) stillRefError = `эталон изображения не снят: ${err}`;
         else {
           stillRefHash = await frameHash(refFile, tmp);
@@ -135,7 +150,7 @@ export async function checkRenderConformance(
         if (!still) {
           const offset = Math.max(0, at - ev.start);
           const refFile = path.join(tmp, `ref-${i}-${offset.toFixed(2)}.jpg`);
-          const err = await grab(file, offset, refFile, false);
+          const err = await grab(file, offset, refFile, false, refVf);
           if (err) {
             points.push(fail(base, `эталонный кадр материала не снят: ${err}`));
             continue;
@@ -151,7 +166,7 @@ export async function checkRenderConformance(
         }
 
         const shot = path.join(tmp, `out-${i}-${at.toFixed(2)}.jpg`);
-        const outErr = await grab(renderedFile, at, shot, false);
+        const outErr = await grab(renderedFile, at, shot, false, outVf);
         if (outErr) {
           points.push(fail(base, `кадр готового ролика не снят: ${outErr}`));
           continue;
@@ -163,12 +178,37 @@ export async function checkRenderConformance(
         }
 
         const distance = hamming(refHash!, outHash);
-        points.push({
-          ...base,
-          distance,
-          status: distance <= MATCH_DISTANCE ? "PASS" : "FAIL",
-          reason: distance <= MATCH_DISTANCE ? undefined : "на экране не запланированный материал",
-        });
+        if (distance > MATCH_DISTANCE) {
+          points.push({ ...base, distance, status: "FAIL", reason: "на экране не запланированный материал" });
+          continue;
+        }
+
+        // Автор — главный слой: под вставкой он обязан оставаться виден.
+        // Полноэкранная перебивка в новом стиле — ошибка, а не «просто иначе».
+        if (inset) {
+          const authorShot = path.join(tmp, `author-${i}-${at.toFixed(2)}.jpg`);
+          const authorVf = `crop=${INSET.frameW}:${INSET.frameH - AUTHOR_SAFE_TOP}:0:${AUTHOR_SAFE_TOP}`;
+          const aErr = await grab(renderedFile, at, authorShot, false, authorVf);
+          if (aErr) {
+            points.push(fail(base, `не удалось проверить зону автора: ${aErr}`));
+            continue;
+          }
+          const authorHash = await frameHash(authorShot, tmp);
+          try {
+            fs.rmSync(authorShot, { force: true });
+          } catch {}
+          if (authorHash === null) {
+            points.push(fail(base, "зона автора не поддалась разбору"));
+            continue;
+          }
+          // вставка не должна оказаться и внизу тоже: это признак растяжения на весь кадр
+          if (hamming(refHash!, authorHash) <= MATCH_DISTANCE) {
+            points.push({ ...base, distance, status: "FAIL", reason: "вставка занимает и нижнюю часть кадра — автор перекрыт" });
+            continue;
+          }
+        }
+
+        points.push({ ...base, distance, status: "PASS" });
       }
     }
   } finally {

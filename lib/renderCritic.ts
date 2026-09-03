@@ -19,6 +19,12 @@ import { EditPlan } from "./editPlan";
  */
 
 export type CriticIssueType =
+  | "FULLSCREEN_BROLL"
+  | "AUTHOR_COVERED"
+  | "INSET_OUT_OF_SAFE_AREA"
+  | "STRETCHED_IMAGE"
+  | "CAPTION_OVERLAP"
+  | "ONE_WORD_CAPTIONS"
   | "LONG_AROLL_GAP"
   | "BROLL_CLUSTERING"
   | "SUBSCRIBE_OR_OUTRO"
@@ -47,8 +53,20 @@ const CRITIC_SYSTEM = `You are reviewing a FINISHED vertical short-form video (T
 You are given contact sheets: frames sampled from the final render, each labelled with its timecode in seconds.
 You also get the planned timeline and the spoken transcript.
 
+The intended style: the presenter fills the frame and stays visible the whole time;
+external photos and videos appear as a RECTANGULAR ILLUSTRATION IN THE TOP PART of
+the frame, roughly 900x520 px at y=130, centred, never covering the presenter's face
+and never touching the captions at the bottom. Captions are short phrases, white,
+1-3 lines, in the lower third.
+
 Judge the ACTUAL RESULT, not the intention. Report problems a viewer would notice:
 
+- FULLSCREEN_BROLL: external footage fills the whole frame instead of sitting in the top area.
+- AUTHOR_COVERED: the presenter's face is hidden behind an insert.
+- INSET_OUT_OF_SAFE_AREA: the insert sits too low, off-centre, or overlaps the bottom half.
+- STRETCHED_IMAGE: the insert is squashed or stretched, aspect ratio broken.
+- CAPTION_OVERLAP: an insert covers the subtitles.
+- ONE_WORD_CAPTIONS: captions show a single word at a time, or jump between lines.
 - LONG_AROLL_GAP: a long stretch where only the presenter's face is on screen. Anything above ~8 seconds is a problem.
 - BROLL_CLUSTERING: all the external footage bunched into one part of the video while the rest has none.
 - SUBSCRIBE_OR_OUTRO: someone else's end card, SUBSCRIBE/LIKE/THANKS FOR WATCHING, channel branding.

@@ -52,6 +52,14 @@ export const PACK_VERSION = 2;
  */
 export const QC_RULES_VERSION = 3;
 
+/**
+ * Версия стратегии поиска. Порядок «видео или фото сначала» определяет, ЧТО
+ * окажется в пакете, поэтому смена порядка делает уже собранный пакет собранным
+ * по другим правилам. Профиль монтажа сюда не входит: он влияет на расстановку,
+ * а не на пригодность материала.
+ */
+export const RETRIEVAL_VERSION = 2;
+
 /** Счётчики по стадиям: видно, на каком шаге кандидаты исчезают. */
 export type StageCounts = {
   videoResults: number;
@@ -203,6 +211,7 @@ export function packFingerprint(
     // версии проверок: их ужесточение делает уже собранный пакет невалидным
     verificationVersion: PACK_VERSION,
     qcRulesVersion: QC_RULES_VERSION,
+    retrievalVersion: RETRIEVAL_VERSION,
   });
   return crypto.createHash("sha1").update(payload).digest("hex").slice(0, 16);
 }
@@ -744,114 +753,137 @@ export async function buildAssetPack(
     const covered = () => assets.some((a) => a.compatibleBeatIds.includes(need.beatId));
     const queries = beatQueries(research, need);
 
-    // 1) ВИДЕО под конкретный блок
-    const videoBudget = need.importance === "HIGH" ? T.beat_video_queries : Math.max(1, T.beat_video_queries - 1);
+    // Порядок поиска задаёт сам блок сценария. Для человека, портрета или
+    // статичного факта хорошее проверенное фото лучше, чем целый видеосюжет:
+    // качать ролик ради неподвижного кадра незачем. Для реального действия
+    // наоборот — нужна съёмка.
+    const imageFirst = need.preferredMedia === "IMAGE";
+    // Совместимость с блоками проставляется позже, поэтому «закрыт ли блок»
+    // здесь определяется тем, что нашли под него прямо сейчас.
     let gotVideo = false;
-    for (const q of queries.slice(0, videoBudget)) {
-      if (gotVideo || assets.length >= 30) break;
-      for (const v of (await braveVideos(q)).slice(0, 6)) {
+    let gotImage = false;
+
+    const searchVideo = async (): Promise<void> => {
+      const videoBudget = need.importance === "HIGH" ? T.beat_video_queries : Math.max(1, T.beat_video_queries - 1);
+      for (const q of queries.slice(0, videoBudget)) {
         if (gotVideo || assets.length >= 30) break;
-        stages.videoResults++;
-        if (isYoutube(v.url)) stages.ytUrlsDiscovered++;
-        const vid = sid(v.url);
-        if (seenVideo.has(vid)) continue;
-        const src = verifySource({ title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher }, research);
-        if (!src.ok) {
-          if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
-          continue;
-        }
-        seenVideo.add(vid);
-
-        stages.sourceVerifyPass++;
-        if (!v.directUrl) {
-          stages.probeAttempted++;
-          const pr = await probeVideo(v.url);
-          if (pr.ok) stages.probeOk++;
-          if (!pr.ok) continue;
-          if (pr.durationSec && pr.durationSec > MAX_SOURCE_SEC) continue;
-        }
-        const raw = path.join(mediaDir, `src-${vid}.mp4`);
-        const ytB = isYoutube(v.url);
-        stages.downloadAttempted++;
-        if (ytB) stages.ytDownloadAttempted++;
-        const got = await fetchVideo(v.directUrl, v.url, raw);
-        if (!got.ok) continue;
-        stages.downloadOk++;
-        if (ytB) stages.ytDownloadOk++;
-        const cut = await cutSegments(raw, mediaDir, vid, 4);
-        try {
-          fs.rmSync(raw, { force: true });
-        } catch {}
-        if (!cut.assets.length) continue;
-        stages.sourceVideosAccepted++;
-        if (ytB) {
-          stages.ytSourceVideosAccepted++;
-          stages.ytSegments += cut.assets.length;
-        }
-        console.log(`  ПРИНЯТО ${domainOf(v.url)} ${cut.duration.toFixed(0)}с → ${cut.assets.length} сегментов`);
-        sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
-        for (const a of cut.assets) {
-          assets.push({
-            ...a,
-            sourceUrl: v.url,
-            sourceDomain: domainOf(v.url),
-            compatibleBeatIds: [],
-            relatedFactIds: [],
-            role: "CONTEXT",
-          });
-        }
-        gotVideo = true;
-      }
-    }
-
-    // 2) ИЗОБРАЖЕНИЯ — только если видео под этот блок не нашлось
-    if (gotVideo) continue;
-    for (const q of queries.slice(0, T.beat_image_queries)) {
-      for (const im of (await braveImages(q)).slice(0, 6)) {
-        if (assets.length >= 30) break;
-        stages.imageResults++;
-        const key = im.imageUrl.split("?")[0];
-        if (seenImage.has(key)) continue;
-        const src = verifySource({ title: im.title, description: im.description, sourceUrl: im.url }, research);
-        if (!src.ok) {
-          if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
-          continue;
-        }
-        stages.imageVerifyPass++;
-        seenImage.add(key);
-
-        const id = sid(key);
-        const file = path.join(mediaDir, `img-${id}.jpg`);
-        try {
-          const res = await fetch(im.imageUrl, { headers: { "User-Agent": "Gudini/1.0" } });
-          if (!res.ok) continue;
-          const buf = Buffer.from(await res.arrayBuffer());
-          if (buf.length < 10_000) continue;
-          const an = await analyzeAsset(`img:${id}`, "", buf);
-          addCost({ visionCalls: 1 });
-          if (!an) continue;
-          // блок излагает факт — постановке и объяснялке здесь не место
-          const bad = qcReject(an, { factualBeat: need.intent === "EXACT_EVENT" || need.intent === "ENTITY" });
-          if (bad) {
-            countQcReason(bad);
+        for (const v of (await braveVideos(q)).slice(0, 6)) {
+          if (gotVideo || assets.length >= 30) break;
+          stages.videoResults++;
+          if (isYoutube(v.url)) stages.ytUrlsDiscovered++;
+          const vid = sid(v.url);
+          if (seenVideo.has(vid)) continue;
+          const src = verifySource({ title: v.title, description: v.description, sourceUrl: v.url, publisher: v.publisher }, research);
+          if (!src.ok) {
+            if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
             continue;
           }
-          fs.writeFileSync(file, buf);
-          stages.imagesAccepted++;
-          assets.push({
-            id,
-            kind: "IMAGE",
-            file: path.basename(file),
-            sourceUrl: im.url,
-            sourceDomain: domainOf(im.url),
-            description: an.description,
-            role: "CONTEXT",
-            compatibleBeatIds: [],
-            relatedFactIds: [],
-            verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
-          });
-        } catch {}
+          seenVideo.add(vid);
+
+          stages.sourceVerifyPass++;
+          if (!v.directUrl) {
+            stages.probeAttempted++;
+            const pr = await probeVideo(v.url);
+            if (pr.ok) stages.probeOk++;
+            if (!pr.ok) continue;
+            if (pr.durationSec && pr.durationSec > MAX_SOURCE_SEC) continue;
+          }
+          const raw = path.join(mediaDir, `src-${vid}.mp4`);
+          const ytB = isYoutube(v.url);
+          stages.downloadAttempted++;
+          if (ytB) stages.ytDownloadAttempted++;
+          const got = await fetchVideo(v.directUrl, v.url, raw);
+          if (!got.ok) continue;
+          stages.downloadOk++;
+          if (ytB) stages.ytDownloadOk++;
+          const cut = await cutSegments(raw, mediaDir, vid, 4);
+          try {
+            fs.rmSync(raw, { force: true });
+          } catch {}
+          if (!cut.assets.length) continue;
+          stages.sourceVideosAccepted++;
+          if (ytB) {
+            stages.ytSourceVideosAccepted++;
+            stages.ytSegments += cut.assets.length;
+          }
+          console.log(`  ПРИНЯТО ${domainOf(v.url)} ${cut.duration.toFixed(0)}с → ${cut.assets.length} сегментов`);
+          sourceVideos.push({ id: vid, url: v.url, durationSec: cut.duration, segments: cut.assets.length, method: got.method });
+          for (const a of cut.assets) {
+            assets.push({
+              ...a,
+              sourceUrl: v.url,
+              sourceDomain: domainOf(v.url),
+              compatibleBeatIds: [],
+              relatedFactIds: [],
+              role: "CONTEXT",
+            });
+          }
+          gotVideo = true;
+        }
       }
+
+    };
+
+    const searchImages = async (): Promise<void> => {
+      // Если блок уже закрыт видео и фото ему не предпочтительнее — картинки не ищем.
+      if (gotVideo && !imageFirst) return;
+      for (const q of queries.slice(0, T.beat_image_queries)) {
+        for (const im of (await braveImages(q)).slice(0, 6)) {
+          if (assets.length >= 30) break;
+          stages.imageResults++;
+          const key = im.imageUrl.split("?")[0];
+          if (seenImage.has(key)) continue;
+          const src = verifySource({ title: im.title, description: im.description, sourceUrl: im.url }, research);
+          if (!src.ok) {
+            if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
+            continue;
+          }
+          stages.imageVerifyPass++;
+          seenImage.add(key);
+
+          const id = sid(key);
+          const file = path.join(mediaDir, `img-${id}.jpg`);
+          try {
+            const res = await fetch(im.imageUrl, { headers: { "User-Agent": "Gudini/1.0" } });
+            if (!res.ok) continue;
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (buf.length < 10_000) continue;
+            const an = await analyzeAsset(`img:${id}`, "", buf);
+            addCost({ visionCalls: 1 });
+            if (!an) continue;
+            // блок излагает факт — постановке и объяснялке здесь не место
+            const bad = qcReject(an, { factualBeat: need.intent === "EXACT_EVENT" || need.intent === "ENTITY" });
+            if (bad) {
+              countQcReason(bad);
+              continue;
+            }
+            fs.writeFileSync(file, buf);
+            stages.imagesAccepted++;
+            gotImage = true;
+            assets.push({
+              id,
+              kind: "IMAGE",
+              file: path.basename(file),
+              sourceUrl: im.url,
+              sourceDomain: domainOf(im.url),
+              description: an.description,
+              role: "CONTEXT",
+              compatibleBeatIds: [],
+              relatedFactIds: [],
+              verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
+            });
+          } catch {}
+        }
+      }
+    };
+
+    // Порядок определяется блоком сценария, а не общей квотой на видео.
+    if (imageFirst) {
+      await searchImages();
+      if (!gotImage) await searchVideo();
+    } else {
+      await searchVideo();
+      await searchImages();
     }
   }
 

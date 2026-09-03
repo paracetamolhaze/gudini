@@ -30,13 +30,19 @@ const ev = (over: Partial<MontageEvent> = {}): MontageEvent => ({
   start: 5, end: 7.5, layout: "smart_crop", role: "CONTEXT", ...over,
 });
 
-test("1: поиск блока идёт VIDEO раньше IMAGE", () => {
+test("1: порядок поиска задаёт сам блок сценария, а не квота на видео", () => {
   const src = fs.readFileSync("lib/storyAssetPack.ts", "utf8");
   const beat = src.slice(src.indexOf("BEAT: добор под блоки"), src.indexOf("сопоставление с блоками"));
-  const v = beat.indexOf("braveVideos(q)");
-  const i = beat.indexOf("braveImages(q)");
-  assert.ok(v > 0 && i > v, "видео ищется раньше картинок");
-  assert.ok(beat.includes("if (gotVideo) continue;"), "картинки только если видео не нашлось");
+  // фраза про человека или статичный факт не должна тянуть целый видеосюжет
+  assert.ok(beat.includes('need.preferredMedia === "IMAGE"'), "учитывается предпочтение блока");
+  assert.ok(beat.includes("await searchImages();"), "поиск картинок вынесен отдельно");
+  assert.ok(beat.includes("await searchVideo();"), "поиск видео вынесен отдельно");
+  const order = beat.slice(beat.indexOf("if (imageFirst) {"));
+  const imgFirst = order.indexOf("await searchImages();");
+  const vidFallback = order.indexOf("if (!gotImage) await searchVideo();");
+  assert.ok(imgFirst >= 0 && vidFallback > imgFirst, "для IMAGE картинки идут первыми, видео — запасной вариант");
+  // CORE-поиск главного видео истории сохранён
+  assert.ok(src.includes("coreVideoQueries"), "CORE-поиск видео на месте");
 });
 
 test("2: одно исходное видео даёт несколько разных сегментов", () => {

@@ -22,7 +22,7 @@ function makeWords(list: [string, number, number][]): Word[] {
   return list.map(([word, start, end]) => ({ word, start, end }));
 }
 
-test("Test 1: одно слово на экране, события никогда не пересекаются", () => {
+test("Test 1: короткая фраза на экране, события никогда не пересекаются", () => {
   // слова впритык друг к другу — худший случай для наложений
   const words: Word[] = Array.from({ length: 60 }, (_, i) => ({
     word: `слово${i}`,
@@ -30,9 +30,12 @@ test("Test 1: одно слово на экране, события никогд
     end: i * 0.3 + 0.29,
   }));
   const events = parseDialogues(buildAss(words));
-  assert.equal(events.length, words.length, "каждое слово — отдельное событие");
+  assert.ok(events.length < words.length, "слова сгруппированы во фразы, а не по одному");
   for (const e of events) {
-    assert.equal(e.text.split(/\s+/).length, 1, `на экране больше одного слова: «${e.text}»`);
+    const plain = e.text.replace(/\N/g, " ");
+    const n = plain.split(/\s+/).filter(Boolean).length;
+    assert.ok(n >= 1 && n <= 9, `во фразе ${n} слов — вне 1–9: «${plain}»`);
+    assert.ok(e.text.split("\N").length <= 3, `больше трёх строк: «${e.text}»`);
   }
   for (let i = 1; i < events.length; i++) {
     assert.ok(
@@ -61,7 +64,11 @@ test("Test 2: смысловая пунктуация сохраняется —
     ["финала,", 0.95, 1.4],
   ]);
   const events = parseDialogues(buildAss(words));
-  assert.deepEqual(events.map((e) => e.text), ["МИРА", "1/8", "ФИНАЛА"]);
+  // слова теперь в одной фразе, но записи внутри неё не повреждены
+  const text = events.map((e) => e.text.replace(/\N/g, " ")).join(" ");
+  assert.match(text, /МИРА/);
+  assert.match(text, /1\/8/, "дробь цела");
+  assert.match(text, /ФИНАЛА/);
   // остальные смысловые записи тоже целы, а висячая пунктуация убрана
   assert.equal(displayWord("$5000"), "$5000");
   assert.equal(displayWord("50%"), "50%");
@@ -84,4 +91,47 @@ test("Test 3: каллаут, повторяющий речь, не рендер
   const kept = dropDuplicateCallouts(events, words);
   assert.equal(kept.length, 1, "дубликат речи убран, полезная цифра осталась");
   assert.equal(kept[0].text, "$5000");
+});
+
+test("Test 4: фраза заканчивается на паузе и на конце предложения", () => {
+  const words = makeWords([
+    ["англия", 0, 0.4],
+    ["побеждает.", 0.45, 1.0],
+    // длинная пауза: следующая мысль — отдельная фраза
+    ["все", 2.2, 2.5],
+    ["бегут", 2.55, 2.9],
+    ["праздновать", 2.95, 3.6],
+  ]);
+  const events = parseDialogues(buildAss(words));
+  assert.equal(events.length, 2, "конец предложения и пауза разделили фразы");
+  assert.match(events[0].text, /АНГЛИЯ ПОБЕЖДАЕТ/);
+  assert.match(events[1].text.replace(/\N/g, " "), /ВСЕ БЕГУТ ПРАЗДНОВАТЬ/);
+  assert.ok(events[0].end <= events[1].start, "события не пересекаются");
+});
+
+test("Test 5: maxWords реально ограничивает длину фразы", () => {
+  const words: Word[] = Array.from({ length: 12 }, (_, i) => ({
+    word: `слово${i}`,
+    start: i * 0.3,
+    end: i * 0.3 + 0.28,
+  }));
+  const short = parseDialogues(buildAss(words, { maxWords: 3 }));
+  for (const e of short) {
+    const n = e.text.replace(/\N/g, " ").split(/\s+/).filter(Boolean).length;
+    assert.ok(n <= 3, `maxWords=3 нарушен: ${n} слов`);
+  }
+  const long = parseDialogues(buildAss(words, { maxWords: 8 }));
+  assert.ok(long.length < short.length, "больший предел даёт меньше событий");
+});
+
+test("Test 6: субтитры в нижней трети и не под интерфейсом", () => {
+  const ass = buildAss(makeWords([["привет", 0, 0.5]]));
+  const style = ass.split(/\r?\n/).find((l) => l.startsWith("Style: Caption"))!;
+  const parts = style.split(",");
+  const fontSize = Number(parts[2]);
+  const marginV = Number(parts[parts.length - 2]);
+  assert.ok(fontSize >= 54 && fontSize <= 60, `кегль ${fontSize} вне 54–60`);
+  const baseline = 1920 - marginV;
+  assert.ok(baseline >= 1450 && baseline <= 1560, `текст на ${baseline}px вне 1450–1560`);
+  assert.equal(parts[3], "&H00FFFFFF", "белый основной цвет");
 });

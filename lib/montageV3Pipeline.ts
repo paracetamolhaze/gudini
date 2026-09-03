@@ -45,6 +45,9 @@ export function toEditEvents(montage: MontagePlan, pack: StoryAssetPackV2, media
     if (!fs.existsSync(file)) continue;
     out.push({
       type: "B_ROLL",
+      // Раскладка доходит до рендерера явным полем: раньше она терялась здесь,
+      // и любой материал всё равно растягивался на весь кадр.
+      layout: "top_inset",
       start: e.start,
       end: e.end,
       file,

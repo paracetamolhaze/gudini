@@ -13,6 +13,40 @@ function safeExt(name: string): string {
   return ALLOWED.includes(ext) ? ext : ".mp4";
 }
 
+/** Свободное место на диске с данными сайта (байты); -1 — узнать не удалось. */
+function freeBytes(dir: string): number {
+  try {
+    const st = fs.statfsSync(dir);
+    return Number(st.bavail) * Number(st.bsize);
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * Места должно хватить на весь файл с запасом — иначе загрузка оборвётся на середине
+ * с «ENOSPC: no space left on device» после сотен мегабайт трафика. Ошибка сразу
+ * говорит, сколько свободно и что делать.
+ */
+function noSpaceResponse(dir: string, expected: number): NextResponse | null {
+  if (!expected) return null;
+  const free = freeBytes(dir);
+  if (free < 0) return null;
+  const margin = 50 * 1024 * 1024;
+  if (free >= expected + margin) return null;
+  const mb = (n: number) => Math.round(n / 1048576);
+  return NextResponse.json(
+    {
+      error:
+        `На диске сайта свободно ${mb(free)} МБ, файл ${mb(expected)} МБ. ` +
+        "Увеличьте том в Railway (Settings → Volume) или удалите старые проекты. Состояние диска: /api/disk",
+      freeBytes: free,
+      needBytes: expected + margin,
+    },
+    { status: 507 },
+  );
+}
+
 function finalize(id: string, filename: string) {
   return updateProject(id, {
     rawVideo: filename,
@@ -34,7 +68,13 @@ async function receiveChunk(req: NextRequest, dir: string, finalName: string): P
   const part = path.join(dir, `${finalName}.part`);
   const current = fs.existsSync(part) ? fs.statSync(part).size : 0;
 
-  if (offset === 0) fs.writeFileSync(part, buf);
+  if (offset === 0) {
+    // новая загрузка: брошенный кусок прошлой попытки освобождает место, потом проверка
+    fs.rmSync(part, { force: true });
+    const full = noSpaceResponse(dir, total);
+    if (full) return full;
+    fs.writeFileSync(part, buf);
+  }
   else if (current === offset) fs.appendFileSync(part, buf);
   else if (current === offset + buf.length) {
     // дубль после ретрая — уже записан
@@ -72,6 +112,9 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     }
 
     const filePath = path.join(projectDir(id), filename);
+    const declared = Number(req.headers.get("x-file-size") ?? req.headers.get("content-length") ?? 0);
+    const full = noSpaceResponse(projectDir(id), declared);
+    if (full) return full;
 
     const nodeStream = Readable.fromWeb(req.body as any);
     await new Promise<void>((resolve, reject) => {

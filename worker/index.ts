@@ -10,6 +10,8 @@
  */
 
 import fs from "fs";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 import path from "path";
 import { getProject, upsertProject, projectDir, Project } from "../lib/store";
 import { processProject } from "../lib/pipeline";
@@ -60,13 +62,27 @@ async function syncFace(): Promise<void> {
 
 async function downloadRaw(project: Project): Promise<void> {
   const dir = projectDir(project.id);
-  const res = await fetch(`${SITE}/api/projects/${project.id}/video?which=raw`, {
-    headers: { Authorization: AUTH },
-  });
-  if (!res.ok || !res.body) throw new Error(`Скачивание исходника: ${res.status}`);
-  const buffer = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(path.join(dir, project.rawVideo!), buffer);
-  console.log(`  исходник скачан: ${(buffer.length / 1e6).toFixed(1)} МБ`);
+  const target = path.join(dir, project.rawVideo!);
+  const url = `${SITE}/api/projects/${project.id}/video?which=raw`;
+  // Исходник на гигабайт нельзя держать в памяти целиком: пишем потоком на диск.
+  // Если файл того же размера уже есть (повторная обработка), не качаем заново.
+  const head = await fetch(url, { method: "HEAD", headers: { Authorization: AUTH } });
+  const expected = Number(head.headers.get("content-length") ?? 0);
+  if (head.ok && expected > 0 && fs.existsSync(target) && fs.statSync(target).size === expected) {
+    console.log(`  исходник уже есть локально: ${(expected / 1e6).toFixed(1)} МБ`);
+    return;
+  }
+  const res = await fetch(url, { headers: { Authorization: AUTH } });
+  if (!res.ok || !res.body) throw new Error(`исходник недоступен: ${res.status}`);
+  const tmp = target + ".part";
+  await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(tmp));
+  const size = fs.statSync(tmp).size;
+  if (expected > 0 && size !== expected) {
+    fs.rmSync(tmp, { force: true });
+    throw new Error(`исходник скачался не целиком: ${size} из ${expected} байт`);
+  }
+  fs.renameSync(tmp, target);
+  console.log(`  исходник получен: ${(size / 1e6).toFixed(1)} МБ`);
 }
 
 async function uploadResult(id: string, file: string, which: "out" | "cover"): Promise<void> {

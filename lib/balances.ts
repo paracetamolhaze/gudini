@@ -159,30 +159,16 @@ async function brave(): Promise<ProviderBalance> {
   const base = { id: "brave" as const, name: "Brave Search", role: "поиск источников", consoleUrl: "https://api-dashboard.search.brave.com/app/dashboard" };
   const key = process.env.BRAVE_API_KEY || process.env.BRAVE || "";
   if (!key) return { ...base, level: "missing", value: "ключ не задан", note: "поиск источников не работает" };
-  try {
-    // API баланс не отдаёт; лимиты приходят в заголовках любого ответа — один запрос
-    // на минимальную выдачу, результат кэшируется в маршруте
-    const res = await fetch("https://api.search.brave.com/res/v1/web/search?q=gudini&count=1", {
-      headers: { Accept: "application/json", "X-Subscription-Token": key },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      cache: "no-store",
-    });
-    await res.arrayBuffer().catch(() => undefined);
-    if (res.status === 401 || res.status === 403) return { ...base, level: "error", value: "ключ не принят", note: `ответ ${res.status}` };
-    if (res.status === 429) return { ...base, level: "empty", value: "лимит исчерпан", note: "ответ 429" };
-    if (res.status !== 200) return { ...base, level: "error", value: `ошибка ${res.status}`, note: "" };
-    // формат: "50, 0" — в секунду и в месяц; 0 в месяц = лимита нет (оплата за запросы)
-    const limits = (res.headers.get("x-ratelimit-limit") ?? "").split(",").map((x) => Number(x.trim()));
-    const remaining = (res.headers.get("x-ratelimit-remaining") ?? "").split(",").map((x) => Number(x.trim()));
-    const monthLimit = limits[1] ?? 0;
-    const monthLeft = remaining[1] ?? 0;
-    if (!monthLimit) {
-      return { ...base, level: "ok", value: "без месячного лимита", note: `оплата за запросы · до ${limits[0] || "?"} в секунду · расход в консоли` };
-    }
-    return { ...base, level: levelByShare(monthLeft, monthLimit), value: `${int(monthLeft)} из ${int(monthLimit)} запросов`, note: "в этом месяце" };
-  } catch (e) {
-    return { ...base, level: "error", value: "нет ответа", note: errText(e) };
-  }
+  // Brave не отдаёт ни остаток, ни расход: любой запрос к нему платный ($0.005), а в
+  // заголовках ответа лимит в месяц — 0 (оплата по факту, без квоты). Проверять ключ
+  // запросом — значит платить за каждое «Обновить»; остаток считается по журналу от
+  // введённого из консоли месячного кредита.
+  return {
+    ...base,
+    level: "unknown",
+    value: "квоты нет, оплата по факту",
+    note: "$0.005 за запрос · API не отдаёт ни остаток, ни расход · введите остаток месячного кредита из консоли",
+  };
 }
 
 /** Все провайдеры параллельно; порядок — по доле в цене ролика. */

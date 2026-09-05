@@ -571,7 +571,7 @@ npx tsx _refine.ts            # уплотнение плана режиссёр
 
 | Провайдер | Что показывается | Откуда |
 |---|---|---|
-| Anthropic | ключ принят; с `ANTHROPIC_ADMIN_KEY` — расход за сегодня и с 1-го числа | `/v1/models`; Admin API `cost_report` (суммы в центах). Нужен ключ со страницы Console → Settings → Admin keys (`sk-ant-admin01-…`) или Personal без привязки к workspace; ключ workspace даёт 401, и строка так и говорит |
+| Anthropic | ключ принят; с `ANTHROPIC_ADMIN_KEY` — расход за сегодня и с 1-го числа | `/v1/models`; Admin API `cost_report` (суммы в центах). Нужен ключ со страницы Console → Settings → Admin keys (`sk-ant-admin01-…`) или Personal без привязки к workspace; ключ workspace даёт 401, ключ без прав — 403; строка называет, что исправить (Scope без workspace, право «Workspace Analytics: Access») |
 | OpenRouter | остаток лимита ключа, расход за месяц | `/api/v1/key` (`limit`, `limit_remaining`, `usage_monthly`); остаток кредитов аккаунта отдаёт только management-ключ |
 | ElevenLabs | кредиты тарифа, дата сброса | `/v1/user/subscription`; ключу нужно право User: Read, иначе строка объясняет, что включить |
 | Brave | месячный лимит из заголовков `x-ratelimit-*` («в секунду, в месяц»; 0 в месяц = без лимита, оплата за запросы) | один запрос `count=1`, платный по тарифу |

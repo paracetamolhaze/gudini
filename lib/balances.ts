@@ -80,8 +80,10 @@ async function anthropic(): Promise<ProviderBalance> {
       }
       const msg = String(json?.error?.message ?? "");
       adminNote = /Admin API key|organization-scoped/i.test(msg)
-        ? "ANTHROPIC_ADMIN_KEY не подходит: нужен ключ со страницы Admin keys (sk-ant-admin01-…), а не Personal"
-        : `ANTHROPIC_ADMIN_KEY не принят (${status}${msg ? `: ${errText(msg)}` : ""})`;
+        ? "ANTHROPIC_ADMIN_KEY привязан к workspace — нужен Personal-ключ без workspace (Scope не «gudini»)"
+        : status === 403
+          ? "у ANTHROPIC_ADMIN_KEY выключены права: включите «Workspace Analytics: Access» в правах ключа"
+          : `ANTHROPIC_ADMIN_KEY не принят (${status}${msg ? `: ${errText(msg)}` : ""})`;
     }
     const { status, json } = await getJson("https://api.anthropic.com/v1/models?limit=1", { "x-api-key": key, "anthropic-version": "2023-06-01" });
     if (status === 401) return { ...base, level: "error", value: "ключ не принят", note: "ответ 401" };

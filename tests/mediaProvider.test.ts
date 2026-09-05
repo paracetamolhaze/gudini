@@ -12,7 +12,7 @@ const pack = fs.readFileSync("lib/storyAssetPack.ts", "utf8");
 const director = fs.readFileSync("lib/creativeDirector.ts", "utf8");
 const llm = fs.readFileSync("lib/mediaLlm.ts", "utf8");
 
-test("1: все три стадии ходят через общий транспорт, и он только Anthropic", () => {
+test("1: все три стадии ходят через общий транспорт, и модели в нём только Anthropic", () => {
   for (const [name, src] of [["scriptBeats", beats], ["storyAssetPack", pack], ["creativeDirector", director]] as const) {
     assert.ok(src.includes("mediaComplete("), `${name} использует общий транспорт`);
     assert.ok(!src.includes("new Anthropic("), `${name} не создаёт клиента Anthropic напрямую`);
@@ -23,9 +23,11 @@ test("1: все три стадии ходят через общий транс�
     .split(/\r?\n/)
     .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l))
     .join("\n");
-  assert.ok(!/openrouter/i.test(code), "OpenRouter в медиа-конвейере отсутствует физически");
-  assert.ok(!code.includes("openrouter.ai"), "к OpenRouter из медиа-конвейера не ходят");
+  // Claude через OpenRouter — тот же провайдер моделей другим транспортом, и только по настройке
+  assert.ok(code.includes("MEDIA_LLM_TRANSPORT"), "транспорт задаётся через env");
+  assert.ok(/provider: "anthropic"/.test(code) && !/provider: "openrouter"/.test(code), "в учёте вызовы Claude всегда провайдер anthropic");
   assert.ok(llm.includes("anthropicKeyOrFail"), "без ключа Anthropic стадия падает, а не идёт к другому провайдеру");
+  assert.ok(llm.includes("openrouterClaudeKeyOrFail"), "без ключа OpenRouter стадия падает, а не идёт на прямой Anthropic");
 });
 
 test("2: обязательная стадия падает, а не возвращает пустоту", () => {

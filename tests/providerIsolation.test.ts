@@ -23,12 +23,14 @@ test("1: OpenRouter достижим только из модулей облож
   const offenders = libFiles
     .filter((f) => /openrouter\.ai|openrouterKey/i.test(codeOf(f.src)))
     .map((f) => f.name)
-    // balances.ts — только чтение остатка лимита ключа для дашборда, генераций там нет
-    .filter((n) => !/^cover/i.test(n) && n !== "store.ts" && n !== "pipeline.ts" && n !== "balances.ts");
+    // balances.ts — только чтение остатка лимита ключа для дашборда, генераций там нет;
+    // mediaLlm.ts — единственный транспорт конвейера: Claude через OpenRouter включается
+    // явно настройкой MEDIA_LLM_TRANSPORT, а не обстоятельствами
+    .filter((n) => !/^cover/i.test(n) && n !== "store.ts" && n !== "pipeline.ts" && n !== "balances.ts" && n !== "mediaLlm.ts");
   assert.deepEqual(offenders, [], `OpenRouter вне обложек: ${offenders.join(", ")}`);
 
   // ни один медиа-модуль не должен даже знать адрес OpenRouter
-  for (const n of ["mediaLlm.ts", "storyAssetPack.ts", "brollRelevance.ts", "creativeDirector.ts", "scriptBeats.ts", "storyResearch.ts", "ai.ts"]) {
+  for (const n of ["storyAssetPack.ts", "brollRelevance.ts", "creativeDirector.ts", "scriptBeats.ts", "storyResearch.ts", "ai.ts"]) {
     const f = libFiles.find((x) => x.name === n);
     if (!f) continue;
     assert.ok(!/openrouter/i.test(codeOf(f.src)), `${n} не должен упоминать OpenRouter`);
@@ -68,7 +70,9 @@ test("3: политика проверяется ДО сетевого запр�
   check("braveSearch.ts", "await fetch(url");
   check("coverProvider.ts", "await fetch(\"https://openrouter.ai");
 
-  // автоматических переходов между провайдерами нет
+  // автоматических переходов между провайдерами и транспортами нет: транспорт — из настройки
   const llm = libFiles.find((f) => f.name === "mediaLlm.ts")!.src;
   assert.ok(!/fallback|иначе.*openrouter/i.test(codeOf(llm)), "нет логики перехода на другого провайдера");
+  assert.ok(codeOf(llm).includes('process.env.MEDIA_LLM_TRANSPORT'), "транспорт выбирается настройкой");
+  assert.ok(!/catch[\s\S]{0,200}openrouterChat/.test(codeOf(llm)), "OpenRouter не вызывается из обработчика ошибок Anthropic");
 });

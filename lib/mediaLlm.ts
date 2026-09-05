@@ -6,22 +6,37 @@ import { assertProvider, ProviderPolicyError } from "./providerPolicy";
 /**
  * Транспорт для текстовых и зрительных вызовов основного видео-конвейера.
  *
- * Провайдер здесь ровно один — Anthropic. OpenRouter сюда не подключается даже
- * при недоступности Anthropic: подмена провайдера молча меняет качество разбора
- * истории и цену ролика, а понять постфактум, чем собран конкретный ролик,
- * становится невозможно. Кончился доступ — задача останавливается с внятной
- * ошибкой, и решение о смене провайдера принимает человек.
+ * Модели здесь ровно одного провайдера — Anthropic (Claude). Подмена модели молча
+ * меняет качество разбора истории и цену ролика, а понять постфактум, чем собран
+ * конкретный ролик, становится невозможно. Кончился доступ — задача останавливается
+ * с внятной ошибкой, и решение принимает человек.
  *
- * OpenRouter в проекте остаётся, но только внутри конвейера обложек.
+ * Транспорт выбирается явно настройкой, а не обстоятельствами:
+ * MEDIA_LLM_TRANSPORT=anthropic (по умолчанию) — прямой API Anthropic ключом ANTHROPIC_API_KEY;
+ * MEDIA_LLM_TRANSPORT=openrouter — те же модели Claude через OpenRouter ключом
+ * OPENROUTER_CLAUDE_KEY (отдельный от ключа обложек). Для этого аккаунта так дешевле:
+ * Anthropic добавляет к пополнению 16 % налога, OpenRouter — 5,5 % комиссии, тарифы на
+ * токены одинаковые; вдобавок OpenRouter называет точную цену каждого вызова, а остаток
+ * ключа виден на странице балансов. Автоматического перехода между транспортами нет:
+ * нет ключа выбранного транспорта — стадия падает.
  *
  * MEDIA_LLM_MODEL — модель Anthropic для стадий конвейера.
  * MEDIA_VISION_MODEL — отдельная модель для разбора кадров, если нужна другая.
  */
 
-/** У медиа-конвейера провайдер один и не выбирается. */
+/** У медиа-конвейера провайдер моделей один и не выбирается. */
 export const MEDIA_PROVIDER = "anthropic" as const;
 
+export type MediaTransport = "anthropic" | "openrouter";
+
 const DEFAULT_MODEL = "claude-sonnet-5";
+
+/** Идентификаторы тех же моделей на OpenRouter. */
+const OPENROUTER_MODELS: Record<string, string> = {
+  "claude-sonnet-5": "anthropic/claude-sonnet-5",
+  "claude-opus-5": "anthropic/claude-opus-5",
+  "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
+};
 
 export function mediaProvider(): typeof MEDIA_PROVIDER {
   const requested = String(process.env.MEDIA_LLM_PROVIDER ?? "").toLowerCase();
@@ -33,12 +48,24 @@ export function mediaProvider(): typeof MEDIA_PROVIDER {
   return MEDIA_PROVIDER;
 }
 
+export function mediaTransport(): MediaTransport {
+  const t = String(process.env.MEDIA_LLM_TRANSPORT ?? "anthropic").toLowerCase();
+  if (t === "anthropic" || t === "openrouter") return t;
+  throw new Error(`MEDIA_LLM_TRANSPORT=${t}: допустимы только anthropic и openrouter`);
+}
+
 export function mediaModel(): string {
   return process.env.MEDIA_LLM_MODEL || DEFAULT_MODEL;
 }
 
+/** Имя модели для выбранного транспорта: у OpenRouter — с префиксом anthropic/. */
+export function transportModelId(model: string): string {
+  if (mediaTransport() !== "openrouter" || model.includes("/")) return model;
+  return OPENROUTER_MODELS[model] ?? `anthropic/${model}`;
+}
+
 export function mediaLlmAvailable(): boolean {
-  return Boolean(getSettings().anthropicKey);
+  return mediaTransport() === "openrouter" ? Boolean(openrouterClaudeKey()) : Boolean(getSettings().anthropicKey);
 }
 
 /** Ключ Anthropic или внятный отказ. Никакого перехода на другого провайдера. */
@@ -47,7 +74,23 @@ function anthropicKeyOrFail(stage: CostStage): string {
   if (!key) {
     throw new Error(
       `Стадия «${stage}» не выполнена: нет ключа Anthropic. ` +
-        "Медиа-конвейер работает только через Anthropic, автоматический переход на другого провайдера запрещён.",
+        "Медиа-конвейер работает только на моделях Anthropic, автоматический переход на другого провайдера запрещён.",
+    );
+  }
+  return key;
+}
+
+export function openrouterClaudeKey(): string {
+  return process.env.OPENROUTER_CLAUDE_KEY || "";
+}
+
+/** Ключ OpenRouter для Claude или внятный отказ: на прямой Anthropic не переходим. */
+function openrouterClaudeKeyOrFail(stage: CostStage): string {
+  const key = openrouterClaudeKey();
+  if (!key) {
+    throw new Error(
+      `Стадия «${stage}» не выполнена: MEDIA_LLM_TRANSPORT=openrouter, а ключ OPENROUTER_CLAUDE_KEY не задан. ` +
+        "Автоматического перехода на прямой API Anthropic нет — задайте ключ или смените транспорт.",
     );
   }
   return key;
@@ -70,6 +113,81 @@ function recordAnthropic(stage: CostStage, model: string, response: any, failed 
     failed,
     retry,
   });
+}
+
+/**
+ * Списание вызова Claude через OpenRouter. Провайдер в учёте — Anthropic (деньги
+ * уходят за его токены), модель — с префиксом anthropic/, цена — та, что назвал
+ * OpenRouter в usage.cost, а не расчёт по тарифу.
+ */
+function recordOpenRouterClaude(stage: CostStage, model: string, usage: any, failed = false, retry = false): void {
+  assertProvider(stage, "anthropic");
+  const u = usage ?? {};
+  const cost = Number(u.cost);
+  recordTokens({
+    stage,
+    provider: "anthropic",
+    model,
+    inputTokens: Number(u.prompt_tokens ?? 0),
+    outputTokens: Number(u.completion_tokens ?? 0),
+    cacheCreationTokens: Number(u.prompt_tokens_details?.cache_write_tokens ?? 0),
+    cacheReadTokens: Number(u.prompt_tokens_details?.cached_tokens ?? 0),
+    providerReportedCost: Number.isFinite(cost) ? cost : undefined,
+    failed,
+    retry,
+  });
+}
+
+type OpenRouterPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
+/** Один запрос к OpenRouter (совместимый с OpenAI chat API). Ошибки — наружу, с кодом. */
+async function openrouterChat(
+  stage: CostStage,
+  model: string,
+  maxTokens: number,
+  system: string,
+  user: string | OpenRouterPart[],
+): Promise<{ text: string; truncated: boolean; finish: string; usage: any }> {
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${openrouterClaudeKeyOrFail(stage)}`,
+      "Content-Type": "application/json",
+      "X-Title": "Gudini",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      // точная цена вызова в ответе — для учёта денег
+      usage: { include: true },
+    }),
+    signal: AbortSignal.timeout(10 * 60 * 1000),
+  });
+  const json: any = await res.json().catch(() => ({}));
+  if (!res.ok || json?.error) {
+    const code = json?.error?.code ?? res.status;
+    const msg = String(json?.error?.message ?? res.statusText ?? "").replace(/\s+/g, " ").slice(0, 300);
+    throw new Error(`OpenRouter ${code}: ${msg || "ошибка без описания"}`);
+  }
+  const choice = json?.choices?.[0] ?? {};
+  const content = choice?.message?.content;
+  const text = (
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .filter((p: any) => p?.type === "text")
+            .map((p: any) => String(p.text ?? ""))
+            .join("\n")
+        : ""
+  ).trim();
+  const finish = String(choice?.finish_reason ?? "");
+  const truncated = finish === "length" || String(choice?.native_finish_reason ?? "") === "max_tokens";
+  return { text, truncated, finish, usage: json?.usage ?? {} };
 }
 
 export type CompleteArgs = {
@@ -113,12 +231,25 @@ async function completeOnce(
   { system, user, maxTokens = 8000, stage = "Media Research", model: modelOverride }: CompleteArgs,
   isRetry = false,
 ): Promise<string> {
-  const model = modelOverride || mediaModel();
+  const transport = mediaTransport();
+  const model = transportModelId(modelOverride || mediaModel());
   mediaProvider(); // чужой провайдер в настройке — ошибка конфигурации
   // Политика проверяется ДО обращения к API: запрещённая пара не должна
   // успеть потратить деньги, а потом быть замеченной при учёте.
   assertProvider(stage, "anthropic");
   assertBudget(stage, projectRequestCost({ model, promptChars: system.length + user.length, maxTokens }));
+
+  if (transport === "openrouter") {
+    const r = await openrouterChat(stage, model, maxTokens, system, user);
+    recordOpenRouterClaude(stage, model, r.usage, false, isRetry);
+    if (r.truncated) {
+      throw new Error(
+        `Claude через OpenRouter: ответ обрезан по лимиту ${maxTokens} токенов (стадия «${stage}», текста ${r.text.length} символов) — увеличьте maxTokens или сократите запрос`,
+      );
+    }
+    if (!r.text) throw new Error(`Claude через OpenRouter вернул пустой ответ (finish_reason=${r.finish || "нет"})`);
+    return r.text;
+  }
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({
@@ -165,7 +296,7 @@ export type VisionArgs = {
 };
 
 /**
- * Запрос со зрением через тот же провайдер.
+ * Запрос со зрением через тот же транспорт.
  * Описание кадров — обязательная часть сборки медиатеки: без него ни один
  * видео-сегмент не проходит дальше, поэтому оно не должно зависеть от отдельного счёта.
  */
@@ -179,13 +310,28 @@ async function visionOnce(
 ): Promise<string> {
   const frames = images ?? (image ? [image] : []);
   if (!frames.length) throw new Error("зрению не передан ни один кадр");
-  const model = modelOverride || process.env.MEDIA_VISION_MODEL || mediaModel();
+  const transport = mediaTransport();
+  const model = transportModelId(modelOverride || process.env.MEDIA_VISION_MODEL || mediaModel());
   mediaProvider();
   assertProvider(stage, "anthropic");
   assertBudget(
     stage,
     projectRequestCost({ model, promptChars: system.length + user.length, images: frames.length, imageTokensEach, maxTokens }),
   );
+
+  if (transport === "openrouter") {
+    const parts: OpenRouterPart[] = [
+      ...frames.map((f): OpenRouterPart => ({
+        type: "image_url",
+        image_url: { url: "url" in f ? f.url : `data:${f.mediaType};base64,${f.base64}` },
+      })),
+      { type: "text", text: user },
+    ];
+    const r = await openrouterChat(stage, model, maxTokens, system, parts);
+    recordOpenRouterClaude(stage, model, r.usage, false, isRetry);
+    if (!r.text) throw new Error(`Claude vision через OpenRouter вернул пустой ответ (finish_reason=${r.finish || "нет"})`);
+    return r.text;
+  }
 
   const client = new Anthropic({ apiKey: anthropicKeyOrFail(stage) });
   const response = await client.messages.create({

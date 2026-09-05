@@ -62,6 +62,9 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   "claude-opus-5": { inputPerMTok: 5, outputPerMTok: 25, cacheWritePerMTok: 6.25, cacheReadPerMTok: 0.5 },
   "claude-sonnet-5": { inputPerMTok: 3, outputPerMTok: 15, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.3 },
   "claude-haiku-4-5-20251001": { inputPerMTok: 1, outputPerMTok: 5, cacheWritePerMTok: 1.25, cacheReadPerMTok: 0.1 },
+  // те же модели через OpenRouter (MEDIA_LLM_TRANSPORT=openrouter): тарифы Anthropic без наценки
+  "anthropic/claude-opus-5": { inputPerMTok: 5, outputPerMTok: 25, cacheWritePerMTok: 6.25, cacheReadPerMTok: 0.5 },
+  "anthropic/claude-sonnet-5": { inputPerMTok: 3, outputPerMTok: 15, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.3 },
   "anthropic/claude-sonnet-4.5": { inputPerMTok: 3, outputPerMTok: 15, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.3 },
   "anthropic/claude-haiku-4.5": { inputPerMTok: 1, outputPerMTok: 5 },
   "google/gemini-3.1-flash-image": { inputPerMTok: 0.3, outputPerMTok: 2.5 },

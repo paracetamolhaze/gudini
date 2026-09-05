@@ -1,4 +1,5 @@
 import { getSettings } from "./store";
+import { mediaTransport, openrouterClaudeKey } from "./mediaLlm";
 
 /**
  * Балансы внешних API для дашборда.
@@ -25,6 +26,8 @@ export type ProviderBalance = {
   /** пояснение: тариф, дата сброса, что включить */
   note: string;
   consoleUrl: string;
+  /** остаток по API недоступен — вводится из консоли и считается по журналу */
+  manualAllowed: boolean;
 };
 
 const TIMEOUT_MS = 8000;
@@ -48,7 +51,14 @@ function levelByShare(remaining: number, total: number): BalanceLevel {
 
 // ---------------------------------------------------------------- Anthropic: весь текст, рассуждение и зрение
 async function anthropic(): Promise<ProviderBalance> {
-  const base = { id: "anthropic" as const, name: "Anthropic", role: "сценарий, исследование, монтаж, чистка речи", consoleUrl: "https://platform.claude.com/settings/billing" };
+  if (mediaTransport() === "openrouter") return claudeViaOpenRouter();
+  const base = {
+    id: "anthropic" as const,
+    name: "Anthropic",
+    role: "сценарий, исследование, монтаж, чистка речи",
+    consoleUrl: "https://platform.claude.com/settings/billing",
+    manualAllowed: true,
+  };
   const key = getSettings().anthropicKey;
   if (!key) return { ...base, level: "missing", value: "ключ не задан", note: "конвейер не запустится" };
   const admin = process.env.ANTHROPIC_ADMIN_KEY || "";
@@ -94,39 +104,65 @@ async function anthropic(): Promise<ProviderBalance> {
   }
 }
 
-// ---------------------------------------------------------------- OpenRouter: генерация картинки обложки
-async function openrouter(): Promise<ProviderBalance> {
-  const base = { id: "openrouter" as const, name: "OpenRouter", role: "картинка обложки (Gemini)", consoleUrl: "https://openrouter.ai/settings/credits" };
-  const key = getSettings().openrouterKey;
-  if (!key) return { ...base, level: "missing", value: "ключ не задан", note: "обложки генерироваться не будут" };
+// ---------------------------------------------------------------- Claude через OpenRouter: остаток лимита ключа «gudini claude»
+async function claudeViaOpenRouter(): Promise<ProviderBalance> {
+  const base = {
+    id: "anthropic" as const,
+    name: "Claude",
+    role: "через OpenRouter: сценарий, исследование, монтаж, чистка речи",
+    consoleUrl: "https://openrouter.ai/settings/keys",
+    manualAllowed: false,
+  };
+  const key = openrouterClaudeKey();
+  if (!key) return { ...base, level: "missing", value: "ключ не задан", note: "MEDIA_LLM_TRANSPORT=openrouter, а OPENROUTER_CLAUDE_KEY пуст — конвейер не запустится" };
+  const r = await openrouterKeyBalance(key);
+  return { ...base, ...r };
+}
+
+/** Остаток лимита ключа OpenRouter и расход: /api/v1/key принимает обычный ключ. */
+async function openrouterKeyBalance(key: string): Promise<Pick<ProviderBalance, "level" | "value" | "note">> {
   try {
     const { status, json } = await getJson("https://openrouter.ai/api/v1/key", { Authorization: `Bearer ${key}` });
-    if (status === 401 || status === 403) return { ...base, level: "error", value: "ключ не принят", note: `ответ ${status}` };
-    if (status !== 200) return { ...base, level: "error", value: `ошибка ${status}`, note: errText(json?.error?.message ?? "") };
+    if (status === 401 || status === 403) return { level: "error", value: "ключ не принят", note: `ответ ${status}` };
+    if (status !== 200) return { level: "error", value: `ошибка ${status}`, note: errText(json?.error?.message ?? "") };
     const d = json.data ?? {};
     const usage = Number(d.usage ?? 0);
     const monthly = Number(d.usage_monthly ?? 0);
     if (d.limit === null || d.limit === undefined) {
-      return { ...base, level: "unknown", value: `потрачено ${money(usage)}`, note: `лимит на ключ не задан · за месяц ${money(monthly)} · остаток в консоли` };
+      return { level: "unknown", value: `потрачено ${money(usage)}`, note: `лимит на ключ не задан · за месяц ${money(monthly)} · остаток кредитов в консоли` };
     }
     const limit = Number(d.limit);
     const remaining = Number(d.limit_remaining ?? Math.max(0, limit - usage));
     return {
-      ...base,
       level: levelByShare(remaining, limit),
       value: `${money(remaining)} из ${money(limit)}`,
-      note: `лимит ключа · за месяц ${money(monthly)}`,
+      note: `лимит ключа · за месяц ${money(monthly)}, всего ${money(usage)}`,
     };
   } catch (e) {
-    return { ...base, level: "error", value: "нет ответа", note: errText(e) };
+    return { level: "error", value: "нет ответа", note: errText(e) };
   }
+}
+
+// ---------------------------------------------------------------- OpenRouter: генерация картинки обложки
+async function openrouter(): Promise<ProviderBalance> {
+  const base = {
+    id: "openrouter" as const,
+    name: "OpenRouter",
+    role: "картинка обложки (Gemini)",
+    consoleUrl: "https://openrouter.ai/settings/credits",
+    manualAllowed: false,
+  };
+  const key = getSettings().openrouterKey;
+  if (!key) return { ...base, level: "missing", value: "ключ не задан", note: "обложки генерироваться не будут" };
+  const r = await openrouterKeyBalance(key);
+  return { ...base, ...r };
 }
 
 // ---------------------------------------------------------------- ElevenLabs: расшифровка речи (Scribe)
 const TIERS: Record<string, string> = { payg: "оплата по факту", free: "бесплатный", starter: "Starter", creator: "Creator", pro: "Pro", scale: "Scale", business: "Business" };
 
 async function elevenlabs(): Promise<ProviderBalance> {
-  const base = { id: "elevenlabs" as const, name: "ElevenLabs", role: "расшифровка речи (Scribe)", consoleUrl: "https://elevenlabs.io/app/subscription" };
+  const base = { id: "elevenlabs" as const, name: "ElevenLabs", role: "расшифровка речи (Scribe)", consoleUrl: "https://elevenlabs.io/app/subscription", manualAllowed: false };
   const key = getSettings().elevenLabsKey;
   if (!key) return { ...base, level: "missing", value: "ключ не задан", note: "расшифровка речи не работает" };
   try {
@@ -156,7 +192,7 @@ async function elevenlabs(): Promise<ProviderBalance> {
 
 // ---------------------------------------------------------------- Brave: поиск источников
 async function brave(): Promise<ProviderBalance> {
-  const base = { id: "brave" as const, name: "Brave Search", role: "поиск источников", consoleUrl: "https://api-dashboard.search.brave.com/app/dashboard" };
+  const base = { id: "brave" as const, name: "Brave Search", role: "поиск источников", consoleUrl: "https://api-dashboard.search.brave.com/app/dashboard", manualAllowed: true };
   const key = process.env.BRAVE_API_KEY || process.env.BRAVE || "";
   if (!key) return { ...base, level: "missing", value: "ключ не задан", note: "поиск источников не работает" };
   // Brave не отдаёт ни остаток, ни расход: любой запрос к нему платный ($0.005), а в

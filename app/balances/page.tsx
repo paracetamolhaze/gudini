@@ -23,6 +23,7 @@ type Balance = {
   value: string;
   note: string;
   consoleUrl: string;
+  manualAllowed: boolean;
 };
 type Payload = { balances: Balance[]; checkedAt: string; spend: SpendRun[]; manual: ManualBalances };
 
@@ -34,9 +35,6 @@ const LEVEL_TITLE: Record<BalanceLevel, string> = {
   missing: "ключ не задан",
   error: "ошибка",
 };
-
-/** Провайдеры, у которых остаток по API недоступен: он вводится из консоли и дальше считается по журналу. */
-const MANUAL_PROVIDERS = new Set(["anthropic", "brave"]);
 
 const PROVIDER_NAMES: Record<string, string> = {
   anthropic: "Anthropic",
@@ -55,7 +53,8 @@ function BalanceRow({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun[
 
   const today = spentSince(runs, b.id, startOfToday());
   const month = spentSince(runs, b.id, startOfMonth());
-  const m = manual[b.id];
+  // введённое вручную число действует только там, где остаток по API недоступен
+  const m = b.manualAllowed ? manual[b.id] : undefined;
   let level = b.level;
   let value = b.value;
   let note = `${b.note} · по журналу: сегодня ${money(today)} · за месяц ${money(month)}`;
@@ -101,7 +100,7 @@ function BalanceRow({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun[
       <span className="balance-value">{value}</span>
       <span className="balance-note">
         {note}
-        {MANUAL_PROVIDERS.has(b.id) && !editing && (
+        {b.manualAllowed && !editing && (
           <button
             className="balance-edit"
             onClick={() => {
@@ -178,7 +177,7 @@ export default function BalancesPage() {
   const manual = data?.manual ?? {};
   const problems = data
     ? data.balances.filter((b) => {
-        const m = manual[b.id];
+        const m = b.manualAllowed ? manual[b.id] : undefined;
         if (m) return manualRemaining(m, runs, b.id).level !== "ok";
         return b.level === "low" || b.level === "empty" || b.level === "error";
       }).length
@@ -206,8 +205,8 @@ export default function BalancesPage() {
           </button>
         </div>
         <p className="hint" style={{ marginBottom: 8 }}>
-          OpenRouter и ElevenLabs отдают остаток сами. Anthropic и Brave — нет: введите число из их консоли, дальше остаток считается
-          по журналу расходов Gudini. После пополнения введите новое число.
+          OpenRouter и ElevenLabs отдают остаток сами. Где остатка по API нет (Brave, прямой Anthropic), введите число из консоли —
+          дальше остаток считается по журналу расходов Gudini. После пополнения введите новое число.
         </p>
         {failed && <div className="error-box">{failed}</div>}
         {!data && loading && <p className="hint">Опрашиваю провайдеров…</p>}

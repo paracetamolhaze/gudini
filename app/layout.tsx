@@ -21,6 +21,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link className="nav-link" href="/">
                 Проекты
               </Link>
+              <Link className="nav-link" href="/balances">
+                💳 Балансы
+              </Link>
               <Link className="nav-link" href="/settings">
                 ⚙ Настройки
               </Link>

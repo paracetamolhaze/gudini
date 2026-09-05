@@ -619,3 +619,42 @@ a.balance-row:hover {
   color: var(--error);
   font-size: 12px;
 }
+
+/* ===== Журнал расходов (страница балансов) ===== */
+.runs {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+}
+.run-row {
+  display: grid;
+  grid-template-columns: 120px minmax(160px, 1.4fr) minmax(150px, 1fr) 80px minmax(160px, 1.4fr);
+  gap: 12px;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.run-row-head {
+  border-top: none;
+  padding: 4px 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.run-topic a {
+  text-decoration: underline dotted;
+}
+.run-total {
+  font-weight: 600;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .run-row {
+    grid-template-columns: 1fr auto;
+  }
+  .run-row-head {
+    display: none;
+  }
+}

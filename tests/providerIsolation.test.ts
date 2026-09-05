@@ -23,7 +23,8 @@ test("1: OpenRouter достижим только из модулей облож
   const offenders = libFiles
     .filter((f) => /openrouter\.ai|openrouterKey/i.test(codeOf(f.src)))
     .map((f) => f.name)
-    .filter((n) => !/^cover/i.test(n) && n !== "store.ts" && n !== "pipeline.ts");
+    // balances.ts — только чтение остатка лимита ключа для дашборда, генераций там нет
+    .filter((n) => !/^cover/i.test(n) && n !== "store.ts" && n !== "pipeline.ts" && n !== "balances.ts");
   assert.deepEqual(offenders, [], `OpenRouter вне обложек: ${offenders.join(", ")}`);
 
   // ни один медиа-модуль не должен даже знать адрес OpenRouter
@@ -40,7 +41,8 @@ test("2: клиент Anthropic создаётся ровно в одном тр
 
   // Brave вызывается только из поискового модуля
   // Brave вызывается только из поисковых модулей, и каждый такой вызов проходит политику
-  const braveCallers = libFiles.filter((f) => codeOf(f.src).includes("api.search.brave.com"));
+  // balances.ts делает один запрос ради заголовков с лимитами — это чтение остатка, не поиск
+  const braveCallers = libFiles.filter((f) => codeOf(f.src).includes("api.search.brave.com") && f.name !== "balances.ts");
   for (const f of braveCallers) {
     assert.ok(/^broll(Web)?\.ts$|^braveSearch\.ts$/.test(f.name), `Brave вне поиска: ${f.name}`);
     assert.ok(codeOf(f.src).includes('assertProvider("Media Research", "brave")'), `${f.name}: вызов Brave без политики`);

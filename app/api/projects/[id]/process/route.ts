@@ -23,6 +23,15 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
     return NextResponse.json(getProject(id));
   }
 
+  // В докер-сборке монтаж только на воркере: серверный запуск здесь означал бы
+  // второй конвейер в контейнере сайта (без yt-dlp и с двойной оплатой запросов)
+  if (process.env.WORKER_ONLY === "1") {
+    return NextResponse.json(
+      { error: "Воркер монтажа не в сети — на этом сервере монтаж отключён. Запустите контейнер gudini-worker и нажмите ещё раз" },
+      { status: 503 },
+    );
+  }
+
   updateProject(id, { processing: { state: "running", step: "Запуск", progress: 1 } });
   // запускаем монтаж на сервере в фоне; клиент опрашивает статус
   processProject(id);

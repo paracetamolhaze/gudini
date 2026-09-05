@@ -136,8 +136,12 @@ function ScriptStep({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ script }),
       });
-      setProject(await res.json());
+      const p = await res.json();
+      if (!res.ok) throw new Error(p.error ?? "Не удалось сохранить сценарий");
+      setProject(p);
       onNext();
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
     } finally {
       setBusy(false);
     }
@@ -204,7 +208,8 @@ function RecordStep({
           const res = await fetch(`/api/projects/${project.id}/upload`, {
             method: "PUT",
             headers: {
-              "x-filename": name,
+              // кириллица в имени файла роняла fetch: заголовки только latin-1
+              "x-filename": encodeURIComponent(name),
               "x-file-size": String(file.size),
               "x-offset": String(offset),
             },
@@ -686,7 +691,14 @@ function PublishStep({
         meta: { title, description, hashtags: hashtags.split(/\s+/).filter(Boolean) },
       }),
     });
-    setProject(await res.json());
+    // ответ с ошибкой раньше записывался в проект как есть, и страница ломалась
+    const p = await res.json();
+    if (!res.ok) {
+      setError(p.error ?? "Не удалось сохранить описание");
+      return false;
+    }
+    setProject(p);
+    return true;
   }
 
   async function regenMeta() {
@@ -731,7 +743,7 @@ function PublishStep({
     setBusy(platform);
     setError("");
     try {
-      await saveMeta();
+      if (!(await saveMeta())) return;
       const res = await fetch(`/api/projects/${project.id}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

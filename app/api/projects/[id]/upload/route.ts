@@ -93,7 +93,12 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
 
   try {
     if (!req.body) return NextResponse.json({ error: "Пустое тело запроса" }, { status: 400 });
-    const filename = `raw${safeExt(req.headers.get("x-filename") ?? "")}`;
+    const headerName = req.headers.get("x-filename") ?? "";
+    let clientName = headerName;
+    try {
+      clientName = decodeURIComponent(headerName); // клиент кодирует имя: кириллица в заголовке недопустима
+    } catch {}
+    const filename = `raw${safeExt(clientName)}`;
 
     if (req.headers.get("x-offset") !== null) {
       const res = await receiveChunk(req, projectDir(id), filename);

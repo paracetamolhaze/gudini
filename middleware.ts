@@ -30,7 +30,11 @@ export async function middleware(req: NextRequest) {
   if (!password) return NextResponse.next();
 
   if (PUBLIC_PATHS.has(pathname)) return NextResponse.next();
-  if (/^\/api\/projects\/[^/]+\/video$/.test(pathname)) return NextResponse.next();
+  // Готовый ролик и обложка открыты (их тянут Instagram/TikTok при публикации),
+  // исходник (?which=raw) — только со входом: раньше он отдавался всем
+  if (/^\/api\/projects\/[^/]+\/video$/.test(pathname) && req.nextUrl.searchParams.get("which") !== "raw") {
+    return NextResponse.next();
+  }
 
   const expected = await authCookieValue(password);
   if (req.cookies.get("gudini_auth")?.value === expected) return NextResponse.next();

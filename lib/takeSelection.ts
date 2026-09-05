@@ -63,7 +63,13 @@ function sameStem(a: string, b: string): boolean {
 const isCutoff = (w: string) => /--$/.test(w.trim().replace(/[,.!?…]+$/, ""));
 const isFiller = (w: string) => /^(э+|эм+|м+|а+|(э|а)(э|а)+|иии+)$/.test(skeleton(w));
 /** Слова, которыми автор говорит с монтажёром, а не со зрителем. */
-const CHATTER = /^(заново|сорри|сорян|нарежеш\w*|нарежь|вырежеш\w*|вырежь|перезапиш\w*|перепиш\w*|стоп|бля|блядь|блин|чё|че|сначала|погоди|секунду|ладно|ок)$/;
+// Слова монтажёру, которых в речи для зрителя не бывает: срабатывают в куске любой длины.
+const CHATTER_STRONG = /^(заново|сорри|сорян|нарежеш\w*|нарежь|вырежеш\w*|вырежь|перезапиш\w*|перепиш\w*)$/;
+// Обычные слова, которые бывают и командой монтажёру («стоп», «сначала», «ладно»):
+// болтовня только в коротком куске. Длинная импровизация с «ок» внутри остаётся.
+const CHATTER_WEAK = /^(стоп|бля|блядь|блин|чё|че|сначала|погоди|секунду|ладно|ок)$/;
+const CHATTER_WEAK_MAX_WORDS = 5;
+const CHATTER_WEAK_MAX_SEC = 3;
 
 /** Предложения сценария: по знакам конца предложения; абзац — тоже граница. */
 export function splitSentences(script: string): string[] {
@@ -291,7 +297,9 @@ export function selectTakes(script: string | null, words: Word[]): TakeSelection
       parts.forEach((p, idx) => {
         if (marked.has(idx)) return;
         const ws = words.slice(p.from, p.to + 1);
-        const keyword = ws.some((x) => CHATTER.test(skeleton(x.word)));
+        const short = ws.length <= CHATTER_WEAK_MAX_WORDS || words[p.to].end - words[p.from].start <= CHATTER_WEAK_MAX_SEC;
+        const keyword =
+          ws.some((x) => CHATTER_STRONG.test(skeleton(x.word))) || (short && ws.some((x) => CHATTER_WEAK.test(skeleton(x.word))));
         let hit = keyword;
         if (!hit && between && !isKeptWord(p.from) && words[p.to].end - words[p.from].start <= CHATTER_MAX_SEC) {
           const l = sideLeft(idx);

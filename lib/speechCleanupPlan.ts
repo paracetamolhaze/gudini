@@ -52,6 +52,16 @@ const MIN_RETAKE_CONFIDENCE = 0.8;
 const HOOK_GUARD_SEC = 2.0; // начало ролика не трогаем вслепую
 /** Сколько оставить от лишней паузы: естественный зазор между фразами. */
 const PAUSE_KEEP_DEFAULT = 0.35;
+
+/**
+ * Вырезка внутри паузы с сохранением keep секунд (чуть больше в начале, чтобы не
+ * съесть выдох). Одна формула для первого прогона и для восстановления плана из
+ * файла: раньше неклассифицированные паузы резались с запасом 0.25/0.2, а из
+ * сохранённого плана восстанавливались как 0.35 — повторный монтаж звучал иначе.
+ */
+export function pauseCut(start: number, end: number, keep: number): { start: number; end: number } {
+  return { start: start + keep * 0.55, end: end - keep * 0.45 };
+}
 /**
  * Паузы короче — обычный ритм речи. Раньше порог был 0.8 с, и вдох на 0.77 с
  * между «футболист.» и «Весь» оставался в ролике как провал.
@@ -147,7 +157,7 @@ export function validateCleanupActions(
         reason: "UNNECESSARY_PAUSE",
         confidence,
       });
-      cuts.push({ start: sil.start + keep * 0.55, end: sil.end - keep * 0.45 });
+      cuts.push(pauseCut(sil.start, sil.end, keep));
     }
   }
 
@@ -164,7 +174,7 @@ export function validateCleanupActions(
         reason: "UNNECESSARY_PAUSE",
         confidence: 1,
       });
-      cuts.push({ start: sil.start + 0.25, end: sil.end - 0.2 });
+      cuts.push(pauseCut(sil.start, sil.end, PAUSE_KEEP_DEFAULT));
     }
   });
 
@@ -241,14 +251,14 @@ export function rawToClean(t: number, segments: { start: number; end: number }[]
   return cum;
 }
 
-/** Механическая логика пауз (фолбэк без LLM): внутренние >1.2с ужимаются до ~0.45с. */
+/** Механическая логика пауз (фолбэк без LLM): внутренние >1.2с ужимаются до PAUSE_KEEP_DEFAULT. */
 export function mechanicalCuts(silences: SilenceEvent[], edges: CutRegionEdges): CutRegion[] {
   const cuts: CutRegion[] = [];
   for (const sil of silences) {
     const s = Math.max(sil.start, edges.start);
     const e = Math.min(sil.end, edges.end);
     if (e - s > 1.2 && s > edges.start + 0.5 && e < edges.end - 0.5) {
-      cuts.push({ start: s + 0.25, end: e - 0.2 });
+      cuts.push(pauseCut(s, e, PAUSE_KEEP_DEFAULT));
     }
   }
   return cuts;

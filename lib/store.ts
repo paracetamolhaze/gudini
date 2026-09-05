@@ -135,7 +135,14 @@ function ensureDirs() {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
+/** Формат id проекта: только буквы и цифры — никаких «..» и разделителей пути. */
+const ID_RE = /^[a-z0-9_-]{1,64}$/i;
+export function isProjectId(id: string): boolean {
+  return ID_RE.test(id);
+}
+
 export function projectDir(id: string): string {
+  if (!ID_RE.test(id)) throw new Error(`Недопустимый id проекта: ${JSON.stringify(id).slice(0, 80)}`);
   const dir = path.join(UPLOADS_DIR, id);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -143,18 +150,42 @@ export function projectDir(id: string): string {
 
 type Db = { projects: Project[] };
 
+const DB_BACKUP = DB_FILE + ".bak";
+
+function parseDb(file: string): Db {
+  const db = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!db || !Array.isArray(db.projects)) throw new Error("нет списка проектов");
+  return db;
+}
+
 function readDb(): Db {
   ensureDirs();
+  if (!fs.existsSync(DB_FILE)) return { projects: [] };
   try {
-    return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-  } catch {
-    return { projects: [] };
+    return parseDb(DB_FILE);
+  } catch (e: any) {
+    // Битый db.json раньше читался как пустой, и следующая же запись стирала все
+    // проекты. Теперь на место битого файла встаёт резервная копия, а без неё
+    // запись запрещена — файл остаётся для ручного восстановления.
+    const why = String(e?.message ?? e).slice(0, 120);
+    try {
+      const db = parseDb(DB_BACKUP);
+      fs.copyFileSync(DB_FILE, DB_FILE + ".corrupt");
+      fs.copyFileSync(DB_BACKUP, DB_FILE);
+      console.warn(`db.json повреждён (${why}) — восстановлен из db.json.bak, битая копия в db.json.corrupt`);
+      return db;
+    } catch {}
+    throw new Error(`db.json повреждён: ${why}. Файл не перезаписывается — восстановите его вручную`);
   }
 }
 
 function writeDb(db: Db) {
   ensureDirs();
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf8");
+  // атомарно: во временный файл и переименование; прежняя версия остаётся в db.json.bak
+  const tmp = DB_FILE + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(db, null, 2), "utf8");
+  if (fs.existsSync(DB_FILE)) fs.copyFileSync(DB_FILE, DB_BACKUP);
+  fs.renameSync(tmp, DB_FILE);
 }
 
 export function listProjects(): Project[] {
@@ -202,15 +233,22 @@ export function upsertProject(project: Project) {
 }
 
 export function deleteProject(id: string): boolean {
+  // id проверяется по формату, и папка удаляется только у существующего проекта:
+  // раньше любой id вроде «../..» уходил в rmSync без проверки — на открытом сайте
+  // один запрос мог снести всю папку данных.
+  if (!ID_RE.test(id)) return false;
   const db = readDb();
   const before = db.projects.length;
   db.projects = db.projects.filter((p) => p.id !== id);
+  if (db.projects.length === before) return false;
   writeDb(db);
-  const dir = path.join(UPLOADS_DIR, id);
-  try {
-    fs.rmSync(dir, { recursive: true, force: true });
-  } catch {}
-  return db.projects.length < before;
+  const dir = path.resolve(UPLOADS_DIR, id);
+  if (dir.startsWith(path.resolve(UPLOADS_DIR) + path.sep)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  }
+  return true;
 }
 
 /** Приводит URL к виду https://домен (без завершающего слэша). */

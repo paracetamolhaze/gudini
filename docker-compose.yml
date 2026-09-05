@@ -19,6 +19,8 @@ services:
       PORT: "3000"
       # пусто — сайт открыт без пароля; GUDINI_PASSWORD воркера при этом просто не проверяется
       SITE_PASSWORD: ${SITE_PASSWORD:-}
+      # монтаж только на воркере: сайт не запускает конвейер у себя, если воркер молчит
+      WORKER_ONLY: "1"
       # адрес, по которому сайт виден снаружи: нужен OAuth-коллбэкам и Instagram Reels
       PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
     ports:

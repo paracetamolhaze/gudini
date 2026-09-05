@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, projectDir } from "@/lib/store";
+import { fileFingerprint } from "@/lib/fileFingerprint";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -40,6 +41,8 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const stat = fs.statSync(filePath);
   const mime = MIME[path.extname(filename)] ?? "video/mp4";
   const range = req.headers.get("range");
+  // отпечаток исходника: воркер сверяет по нему локальную копию, а не по одному размеру
+  const etag: Record<string, string> = which === "raw" ? { ETag: `"${fileFingerprint(filePath)}"` } : {};
 
   if (range) {
     const match = range.match(/bytes=(\d+)-(\d*)/);
@@ -54,6 +57,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
           "Accept-Ranges": "bytes",
           "Content-Length": String(end - start + 1),
           "Content-Type": mime,
+          ...etag,
         },
       });
     }
@@ -66,6 +70,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       "Content-Type": mime,
       "Accept-Ranges": "bytes",
       "Content-Disposition": `inline; filename="gudini-${which}.mp4"`,
+      ...etag,
     },
   });
 }

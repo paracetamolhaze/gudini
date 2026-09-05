@@ -15,6 +15,7 @@ import { pipeline } from "stream/promises";
 import path from "path";
 import { getProject, upsertProject, projectDir, Project } from "../lib/store";
 import { processProject } from "../lib/pipeline";
+import { fileFingerprint } from "../lib/fileFingerprint";
 
 // --- .env ---
 try {
@@ -68,9 +69,16 @@ async function downloadRaw(project: Project): Promise<void> {
   // Если файл того же размера уже есть (повторная обработка), не качаем заново.
   const head = await fetch(url, { method: "HEAD", headers: { Authorization: AUTH } });
   const expected = Number(head.headers.get("content-length") ?? 0);
+  // Совпадение по размеру было единственной проверкой: новый исходник той же длины
+  // считался старым. Сайт присылает отпечаток содержимого (ETag) — сверяем по нему.
+  const remoteTag = (head.headers.get("etag") ?? "").replace(/"/g, "");
   if (head.ok && expected > 0 && fs.existsSync(target) && fs.statSync(target).size === expected) {
-    console.log(`  исходник уже есть локально: ${(expected / 1e6).toFixed(1)} МБ`);
-    return;
+    const localTag = remoteTag ? fileFingerprint(target) : "";
+    if (!remoteTag || localTag === remoteTag) {
+      console.log(`  исходник уже есть локально: ${(expected / 1e6).toFixed(1)} МБ`);
+      return;
+    }
+    console.log("  исходник на сайте другой (тот же размер, иной отпечаток) — качаю заново");
   }
   const res = await fetch(url, { headers: { Authorization: AUTH } });
   if (!res.ok || !res.body) throw new Error(`исходник недоступен: ${res.status}`);
@@ -140,47 +148,51 @@ async function runJob(id: string): Promise<void> {
     processedVideo: null,
     processing: { state: "idle", step: "", progress: 0 },
   });
-  await downloadRaw(project);
-  await syncFace();
-
-  // трансляция прогресса на сайт
-  const forwarder = setInterval(async () => {
-    const local = getProject(id);
-    if (!local || local.processing.state !== "running") return;
+  // Пульс на сайт от начала до конца задачи. Сайт считает воркер выключенным после
+  // 90 секунд тишины и запускает монтаж у себя; скачивание исходника и отправка
+  // результата раньше шли без сигналов — на большом файле это давало второй,
+  // серверный монтаж и двойную оплату. Пока конвейер работает, идёт его прогресс.
+  let phase = { step: "Скачивание исходника", progress: 2 };
+  const heartbeat = setInterval(async () => {
+    const cur = getProject(id);
+    const running = cur && cur.processing.state === "running";
     api("/api/worker/progress", {
       method: "POST",
-      body: JSON.stringify({ id, step: local.processing.step, progress: local.processing.progress }),
+      body: JSON.stringify(running ? { id, step: cur.processing.step, progress: cur.processing.progress } : { id, ...phase }),
     }).catch(() => {});
   }, 2000);
 
   try {
+    await downloadRaw(project);
+    await syncFace();
     await processProject(id);
-  } finally {
-    clearInterval(forwarder);
-  }
 
-  const done = getProject(id)!;
-  if (done.processing.state === "done") {
-    await uploadResult(id, "out.mp4", "out");
-    await uploadResult(id, "cover.jpg", "cover");
-    await api(`/api/worker/complete/${id}`, {
-      method: "POST",
-      body: JSON.stringify({
-        subtitlesSource: done.subtitlesSource,
-        brollCount: done.brollCount ?? 0,
-        coverOffsetSec: done.coverOffsetSec ?? 1,
-        meta: done.meta,
-        research: done.research,
-      }),
-    });
-    console.log(`✔ Задача ${id} готова`);
-  } else {
-    await api(`/api/worker/complete/${id}`, {
-      method: "POST",
-      // исследование построено и оплачено — сайт получает его и после неудачи
-      body: JSON.stringify({ error: done.processing.error ?? "Неизвестная ошибка воркера", research: done.research }),
-    });
-    console.log(`✖ Задача ${id} упала: ${done.processing.error}`);
+    const done = getProject(id)!;
+    if (done.processing.state === "done") {
+      phase = { step: "Отправка результата", progress: 99 };
+      await uploadResult(id, "out.mp4", "out");
+      await uploadResult(id, "cover.jpg", "cover");
+      await api(`/api/worker/complete/${id}`, {
+        method: "POST",
+        body: JSON.stringify({
+          subtitlesSource: done.subtitlesSource,
+          brollCount: done.brollCount ?? 0,
+          coverOffsetSec: done.coverOffsetSec ?? 1,
+          meta: done.meta,
+          research: done.research,
+        }),
+      });
+      console.log(`✔ Задача ${id} готова`);
+    } else {
+      await api(`/api/worker/complete/${id}`, {
+        method: "POST",
+        // исследование построено и оплачено — сайт получает его и после неудачи
+        body: JSON.stringify({ error: done.processing.error ?? "Неизвестная ошибка воркера", research: done.research }),
+      });
+      console.log(`✖ Задача ${id} упала: ${done.processing.error}`);
+    }
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 

@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, updateProject, projectDir } from "@/lib/store";
 import { makeCover } from "@/lib/pipeline";
@@ -21,6 +23,13 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   } catch {}
 
   const dir = projectDir(id);
+  // Неудачная перегенерация раньше стирала прежнюю обложку из проекта. Прежний файл
+  // откладывается и возвращается на место, если новая не прошла проверку.
+  const coverFile = path.join(dir, "cover.jpg");
+  const backup = path.join(dir, "cover-prev.jpg");
+  const hadCover = !!project.cover && fs.existsSync(coverFile);
+  if (hadCover) fs.copyFileSync(coverFile, backup);
+
   const { cover, coverStatus } = await makeCover(
     dir,
     project.topic,
@@ -29,6 +38,16 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     headline,
     true, // действие пользователя: одна оплаченная генерация
   );
+  if (!cover && hadCover) {
+    fs.copyFileSync(backup, coverFile);
+    fs.rmSync(backup, { force: true });
+    updateProject(id, { cover: project.cover, coverStatus: project.coverStatus ?? "ok" });
+    return NextResponse.json(
+      { error: `Новая обложка не прошла проверку (${coverStatus}) — оставлена прежняя` },
+      { status: 409 },
+    );
+  }
+  fs.rmSync(backup, { force: true });
   const updated = updateProject(id, { cover, coverStatus });
   return NextResponse.json(updated ?? project);
 }

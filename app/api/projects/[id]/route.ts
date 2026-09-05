@@ -32,6 +32,6 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
 export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const { id } = await params;
-  deleteProject(id);
+  if (!deleteProject(id)) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

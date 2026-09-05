@@ -15,6 +15,9 @@ import { planCleanupCuts } from "./speechCleanupRun";
 import { recordFlat, AUDIO_PRICES } from "./costLedger";
 import { runMontageV3 } from "./montageV3Pipeline";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
+import { fileFingerprint, textHash } from "./fileFingerprint";
+import { checkRenderConformance } from "./renderConformance";
+import { pauseCut } from "./speechCleanupPlan";
 import { buildAss } from "./subtitles";
 import { CARD, CARD_FILTER, introZoomFilter } from "./topInset";
 import { applyScriptFormatting } from "./scriptFormat";
@@ -105,34 +108,63 @@ export async function processProject(id: string): Promise<void> {
     let rawWords: Word[] | null = null;
     let subtitlesSource: "scribe" | "whisper" | "script" = "script";
     // Повторный монтаж того же исходника не платит за распознавание второй раз:
-    // расшифровка привязана к длине звука и размеру файла.
-    const audioKey = `${duration.toFixed(2)}:${fs.statSync(path.join(dir, raw)).size}`;
+    // расшифровка привязана к содержимому файла (длина, размер и отпечаток байтов).
+    // Старый ключ без отпечатка принимается, чтобы уже расшифрованные проекты не
+    // платили заново.
+    const rawPath = path.join(dir, raw);
+    const legacyAudioKey = `${duration.toFixed(2)}:${fs.statSync(rawPath).size}`;
+    const audioKey = `${legacyAudioKey}:${fileFingerprint(rawPath)}`;
     const transcriptFile = path.join(dir, "transcript.json");
     let transcriptReused = false;
     try {
       const saved = fs.existsSync(transcriptFile) ? JSON.parse(fs.readFileSync(transcriptFile, "utf8")) : null;
-      if (saved?.audioKey === audioKey && Array.isArray(saved.words) && saved.words.length) {
+      const keyOk = saved?.audioKey === audioKey || saved?.audioKey === legacyAudioKey;
+      if (keyOk && Array.isArray(saved.words) && saved.words.length) {
         rawWords = saved.words;
         subtitlesSource = saved.source === "whisper" ? "whisper" : "scribe";
         transcriptReused = true;
         console.log(`Расшифровка переиспользована: ${rawWords!.length} слов (${subtitlesSource})`);
       }
     } catch {}
+    const asrErrors: string[] = [];
     if (!rawWords) {
-      try {
-        rawWords = await scribeTranscribe(wav);
-        if (rawWords) subtitlesSource = "scribe";
-      } catch (e) {
-        console.warn("Scribe недоступен:", e);
+      // одна повторная попытка только на сетевой сбой: это копейки, а не оплаченный ответ
+      for (let attempt = 1; attempt <= 2 && !rawWords; attempt++) {
+        try {
+          rawWords = await scribeTranscribe(wav);
+          if (rawWords) subtitlesSource = "scribe";
+          else {
+            asrErrors.push("Scribe: не задан ключ ELEVENLABS_API_KEY");
+            break;
+          }
+        } catch (e: any) {
+          const msg = String(e?.message ?? e);
+          asrErrors.push(`Scribe: ${msg.slice(0, 160)}`);
+          console.warn("Scribe недоступен:", msg);
+          if (attempt === 1 && /\b(?:429|5\d\d)\b|timeout|ECONNRESET|fetch failed|socket/i.test(msg)) {
+            await new Promise((r) => setTimeout(r, 3000));
+          } else break;
+        }
       }
     }
     if (!rawWords) {
       try {
         rawWords = await whisperTranscribe(wav);
         if (rawWords) subtitlesSource = "whisper";
-      } catch (e) {
+        else asrErrors.push("Whisper: не задан ключ OPENAI_API_KEY");
+      } catch (e: any) {
+        asrErrors.push(`Whisper: ${String(e?.message ?? e).slice(0, 160)}`);
         console.warn("Whisper недоступен:", e);
       }
+    }
+    // Без распознавания субтитры раньше молча раскладывались по сценарию «на глаз»,
+    // и оплаченный монтаж выходил с плывущими подписями. Теперь это ошибка стадии;
+    // старое поведение включается явно: SUBTITLES_FROM_SCRIPT=1.
+    if (!rawWords && process.env.SUBTITLES_FROM_SCRIPT !== "1") {
+      throw new Error(
+        `Распознавание речи не удалось: ${asrErrors.join("; ") || "нет ни одного сервиса"}. ` +
+          "Субтитры по сценарию без распознавания отключены (SUBTITLES_FROM_SCRIPT=1 включает их)",
+      );
     }
     if (rawWords && !transcriptReused) {
       // Пословная расшифровка сохраняется: без неё чистку речи нельзя перепланировать,
@@ -160,17 +192,18 @@ export async function processProject(id: string): Promise<void> {
       // План чистки зависит от расшифровки и сценария: если они те же, что в прошлый
       // раз, план берётся из файла — два вызова модели не оплачиваются повторно.
       const planFile = path.join(dir, "speech-cleanup-plan.json");
-      const cleanupKey = `${audioKey}:${(project.script ?? "").length}:${rawWords.length}`;
+      // ключ по тексту сценария, а не по его длине: правка той же длины давала старые вырезки
+      const cleanupKey = `${audioKey}:${textHash(project.script ?? "")}:${rawWords.length}`;
+      const legacyCleanupKey = `${legacyAudioKey}:${(project.script ?? "").length}:${rawWords.length}`;
       let reusedPlan: { actions: any[] } | null = null;
       try {
         const saved = fs.existsSync(planFile) ? JSON.parse(fs.readFileSync(planFile, "utf8")) : null;
-        if (saved?.cleanupKey === cleanupKey && Array.isArray(saved.actions)) reusedPlan = saved;
+        const keyOk = saved?.cleanupKey === cleanupKey || saved?.cleanupKey === legacyCleanupKey;
+        if (keyOk && Array.isArray(saved.actions)) reusedPlan = saved;
       } catch {}
       if (reusedPlan) {
         cuts = reusedPlan.actions.map((a: any) =>
-          a.type === "REMOVE_FRAGMENT"
-            ? { start: a.start, end: a.end }
-            : { start: a.start + a.keepDuration * 0.55, end: a.end - a.keepDuration * 0.45 },
+          a.type === "REMOVE_FRAGMENT" ? { start: a.start, end: a.end } : pauseCut(a.start, a.end, a.keepDuration),
         );
         console.log(`План чистки речи переиспользован: ${reusedPlan.actions.length} действий`);
       } else {
@@ -320,6 +353,29 @@ export async function processProject(id: string): Promise<void> {
       ...segments.slice(1).map((_, i) => segments.slice(0, i + 1).reduce((s, x) => s + (x.end - x.start), 0)),
     ].filter((t) => t > 0.2 && t < effDur - 0.2);
     await selfCheck(dir, effDur, checkPoints);
+
+    // --- Сверка готового файла с планом: в области карточки действительно запланированная
+    // картинка, автор под ней не перекрыт, карточка неподвижна. Раньше проверка жила
+    // только в ручных скриптах, и в продакшене ролик выходил без неё. Всё локально
+    // (ffmpeg и арифметика), ни одного платного вызова. RENDER_CONFORMANCE=off отключает.
+    if (process.env.RENDER_CONFORMANCE !== "off") {
+      setStep(id, "Сверка с планом", 98);
+      const conf = await checkRenderConformance(dir, path.join(dir, "out.mp4"), plan);
+      fs.writeFileSync(path.join(dir, "conformance.json"), JSON.stringify(conf, null, 2), "utf8");
+      console.log(
+        `Сверка с планом: ${conf.passed}/${conf.expected} точек PASS, провалов ${conf.failed}, ошибок ${conf.errored}, секунд без карточки ${conf.gaps.length}`,
+      );
+      // единичные расхождения хэшей терпимы, массовые и ошибки проверки — нет
+      const tolerated = Math.max(2, Math.ceil(conf.expected * 0.15));
+      if (conf.errored > 0 || conf.failed > tolerated) {
+        const reasons = conf.points
+          .filter((pt) => pt.status !== "PASS")
+          .slice(0, 3)
+          .map((pt) => `${pt.at}с ${pt.assetFile}: ${pt.reason ?? "не совпало"}`)
+          .join("; ");
+        throw new Error(`Сверка с планом: провалов ${conf.failed}, ошибок ${conf.errored} из ${conf.expected} точек — ${reasons}`);
+      }
+    }
 
     // Деньги: леджер реальных вызовов (модель, токены, цена) пишется в pipeline-cost.json
     // и печатается в лог воркера. Старые счётчики не видели вызовов через mediaLlm и

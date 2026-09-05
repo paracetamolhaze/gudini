@@ -28,6 +28,8 @@ export type ProviderBalance = {
   consoleUrl: string;
   /** остаток по API недоступен — вводится из консоли и считается по журналу */
   manualAllowed: boolean;
+  /** расход, который назвал сам провайдер (не наш журнал): сегодня, за месяц, всего */
+  reported?: { today: number; month: number; total: number };
 };
 
 const TIMEOUT_MS = 8000;
@@ -120,7 +122,7 @@ async function claudeViaOpenRouter(): Promise<ProviderBalance> {
 }
 
 /** Остаток лимита ключа OpenRouter и расход: /api/v1/key принимает обычный ключ. */
-async function openrouterKeyBalance(key: string): Promise<Pick<ProviderBalance, "level" | "value" | "note">> {
+async function openrouterKeyBalance(key: string): Promise<Pick<ProviderBalance, "level" | "value" | "note" | "reported">> {
   try {
     const { status, json } = await getJson("https://openrouter.ai/api/v1/key", { Authorization: `Bearer ${key}` });
     if (status === 401 || status === 403) return { level: "error", value: "ключ не принят", note: `ответ ${status}` };
@@ -128,15 +130,18 @@ async function openrouterKeyBalance(key: string): Promise<Pick<ProviderBalance, 
     const d = json.data ?? {};
     const usage = Number(d.usage ?? 0);
     const monthly = Number(d.usage_monthly ?? 0);
+    const daily = Number(d.usage_daily ?? 0);
+    const reported = { today: daily, month: monthly, total: usage };
     if (d.limit === null || d.limit === undefined) {
-      return { level: "unknown", value: `потрачено ${money(usage)}`, note: `лимит на ключ не задан · за месяц ${money(monthly)} · остаток кредитов в консоли` };
+      return { level: "unknown", value: `потрачено ${money(usage)}`, note: `лимит на ключ не задан · сегодня ${money(daily)} · за месяц ${money(monthly)} · остаток кредитов в консоли`, reported };
     }
     const limit = Number(d.limit);
     const remaining = Number(d.limit_remaining ?? Math.max(0, limit - usage));
     return {
       level: levelByShare(remaining, limit),
       value: `${money(remaining)} из ${money(limit)}`,
-      note: `лимит ключа · за месяц ${money(monthly)}, всего ${money(usage)}`,
+      note: `по OpenRouter: сегодня ${money(daily)} · за месяц ${money(monthly)} · всего ${money(usage)}`,
+      reported,
     };
   } catch (e) {
     return { level: "error", value: "нет ответа", note: errText(e) };

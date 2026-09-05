@@ -14,7 +14,7 @@ import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import path from "path";
 import { getProject, upsertProject, projectDir, Project, UPLOADS_DIR } from "../lib/store";
-import { runFromLedgerFile, SpendRun } from "../lib/spendLog";
+import { runFromLedgerFile, ledgerStamp, SpendRun } from "../lib/spendLog";
 import { processProject } from "../lib/pipeline";
 import { fileFingerprint } from "../lib/fileFingerprint";
 
@@ -141,11 +141,21 @@ async function sendRunLedgers(projectId?: string): Promise<void> {
   const ids = projectId ? [projectId] : fs.existsSync(UPLOADS_DIR) ? fs.readdirSync(UPLOADS_DIR) : [];
   for (const id of ids) {
     const dir = path.join(UPLOADS_DIR, id, "cost-runs");
-    if (!fs.existsSync(dir)) continue;
-    const topic = getProject(id)?.topic;
-    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".json"))) {
+    const local = getProject(id);
+    const topic = local?.topic;
+    const copies = fs.existsSync(dir) ? fs.readdirSync(dir).filter((x) => x.endsWith(".json")) : [];
+    for (const f of copies) {
       try {
         runs.push(runFromLedgerFile(path.join(dir, f), id, f.endsWith("-failed.json") ? "failed" : "done", topic));
+      } catch {}
+    }
+    // прогоны до появления cost-runs оставили только pipeline-cost.json: он тоже настоящий
+    // леджер, берём его, если копии с тем же временем создания нет
+    const single = path.join(UPLOADS_DIR, id, "pipeline-cost.json");
+    if (fs.existsSync(single)) {
+      try {
+        const run = runFromLedgerFile(single, id, local?.processedVideo ? "done" : "failed", topic);
+        if (!copies.some((f) => f.startsWith(ledgerStamp(run.at)))) runs.push(run);
       } catch {}
     }
   }

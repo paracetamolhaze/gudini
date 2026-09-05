@@ -61,7 +61,16 @@ export function runFromLedgerFile(file: string, projectId: string, status: "done
     (typeof json.createdAt === "string" && !Number.isNaN(Date.parse(json.createdAt)) && json.createdAt) ||
     (stamp ? stamp[1].replace(/^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "$1:$2:$3.$4Z") : null) ||
     new Date(fs.statSync(file).mtimeMs).toISOString();
-  return { runId: `${projectId}:${path.basename(file)}`, projectId, topic, at, status, label: "Монтаж", total, byProvider };
+  // pipeline-cost.json перезаписывается каждым прогоном: его runId — по времени создания,
+  // иначе разные прогоны слились бы в один
+  const base = path.basename(file);
+  const runId = base === "pipeline-cost.json" ? `${projectId}:pipeline-cost@${at}` : `${projectId}:${base}`;
+  return { runId, projectId, topic, at, status, label: "Монтаж", total, byProvider };
+}
+
+/** Имя копии леджера в cost-runs для данного времени создания (как в keepRunLedger). */
+export function ledgerStamp(createdAt: string): string {
+  return createdAt.replace(/[:.]/g, "-");
 }
 
 /** Проверка прогона, пришедшего снаружи (от воркера): только ожидаемые поля и типы. */

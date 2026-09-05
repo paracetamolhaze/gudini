@@ -24,6 +24,7 @@ type Balance = {
   note: string;
   consoleUrl: string;
   manualAllowed: boolean;
+  reported?: { today: number; month: number; total: number };
 };
 type Payload = { balances: Balance[]; checkedAt: string; spend: SpendRun[]; manual: ManualBalances };
 
@@ -235,6 +236,17 @@ export default function BalancesPage() {
             </span>
           )}
         </div>
+        {data && (
+          <p className="hint" style={{ marginBottom: 8 }}>
+            Журнал — это леджер самого Gudini: он видит только прогоны, чьи леджеры сохранились, и всё, что происходит с этого момента.
+            {" "}Настоящие цифры от провайдеров:{" "}
+            {data.balances
+              .filter((b) => b.reported)
+              .map((b) => `${b.name} — сегодня ${money(b.reported!.today)}, за месяц ${money(b.reported!.month)}, всего ${money(b.reported!.total)}`)
+              .join("; ") || "ни один не отдал"}
+            . Brave и ElevenLabs расход по API не отдают — только в их консолях.
+          </p>
+        )}
         {data && !recent.length && <p className="hint">Пока пусто: журнал заполняется после каждого монтажа и платного действия на сайте.</p>}
         {recent.length > 0 && (
           <div className="runs">

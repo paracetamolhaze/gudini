@@ -34,6 +34,18 @@ type Balance = {
   note: string;
   consoleUrl: string;
 };
+type SpendRun = {
+  runId: string;
+  projectId: string | null;
+  topic?: string;
+  at: string;
+  status: "done" | "failed" | "site";
+  label: string;
+  total: number;
+  byProvider: Record<string, number>;
+};
+type ManualBalances = Record<string, { balance: number; at: string }>;
+type BalancesPayload = { balances: Balance[]; checkedAt: string; spend: SpendRun[]; manual: ManualBalances };
 
 const LEVEL_TITLE: Record<Balance["level"], string> = {
   ok: "хватает",
@@ -44,9 +56,132 @@ const LEVEL_TITLE: Record<Balance["level"], string> = {
   error: "ошибка",
 };
 
+/** Провайдеры, у которых остаток по API недоступен: он вводится из консоли и дальше считается по журналу. */
+const MANUAL_PROVIDERS = new Set(["anthropic", "brave"]);
+
+const money = (v: number) => `$${v.toFixed(2)}`;
+const fmtWhen = (iso: string) => new Date(iso).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
+const startOfMonth = () => {
+  const d = new Date();
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
+/** Расход по журналу с момента since: по одному провайдеру или всего. */
+function spentSince(runs: SpendRun[], provider: string | null, since: number): number {
+  let sum = 0;
+  for (const r of runs) if (Date.parse(r.at) >= since) sum += provider ? (r.byProvider[provider] ?? 0) : r.total;
+  return sum;
+}
+
+function BalanceRow({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun[]; manual: ManualBalances; onManual: (m: ManualBalances) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const today = spentSince(runs, b.id, startOfToday());
+  const month = spentSince(runs, b.id, startOfMonth());
+  const ours = `по журналу: сегодня ${money(today)} · за месяц ${money(month)}`;
+  const m = manual[b.id];
+  let level = b.level;
+  let value = b.value;
+  let note = `${b.note} · ${ours}`;
+  if (m) {
+    // остаток = введённое из консоли − всё, что журнал видел после ввода
+    const since = spentSince(runs, b.id, Date.parse(m.at));
+    const remaining = m.balance - since;
+    value = `≈ ${money(Math.max(0, remaining))} осталось`;
+    level = remaining <= 0 ? "empty" : remaining < Math.max(1, m.balance * 0.15) ? "low" : "ok";
+    note = `введено ${money(m.balance)} ${fmtWhen(m.at)} · с тех пор ${money(since)} · сегодня ${money(today)} · за месяц ${money(month)}`;
+  }
+
+  async function save() {
+    const balance = Number(draft.replace(",", "."));
+    if (!Number.isFinite(balance) || balance < 0) {
+      setErr("нужно число, например 0.84");
+      return;
+    }
+    setSaving(true);
+    setErr("");
+    try {
+      const res = await fetch("/api/balances/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: b.id, balance }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? `ответ ${res.status}`);
+      onManual(j.manual ?? {});
+      setEditing(false);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className={`balance-row level-${level}`} title={LEVEL_TITLE[level]}>
+      <span className="balance-dot" />
+      <span className="balance-who">
+        <span className="balance-name">{b.name}</span>
+        <span className="balance-role">{b.role}</span>
+      </span>
+      <span className="balance-value">{value}</span>
+      <span className="balance-note">
+        {note}
+        {MANUAL_PROVIDERS.has(b.id) && !editing && (
+          <button
+            className="balance-edit"
+            onClick={() => {
+              setDraft(m ? String(m.balance) : "");
+              setErr("");
+              setEditing(true);
+            }}
+          >
+            {m ? "изменить остаток" : "ввести остаток из консоли"}
+          </button>
+        )}
+        {editing && (
+          <span className="balance-form">
+            <input
+              type="text"
+              inputMode="decimal"
+              value={draft}
+              placeholder="0.84"
+              autoFocus
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") save();
+                if (e.key === "Escape") setEditing(false);
+              }}
+            />
+            <button className="btn btn-sm" onClick={save} disabled={saving}>
+              {saving ? <span className="spin" /> : "OK"}
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => setEditing(false)} disabled={saving}>
+              ✕
+            </button>
+            {err && <span className="balance-err">{err}</span>}
+          </span>
+        )}
+      </span>
+      <a className="balance-link" href={b.consoleUrl} target="_blank" rel="noreferrer">
+        консоль ↗
+      </a>
+    </div>
+  );
+}
+
 /** Остатки по внешним API — одной таблицей наверху: кто, за что отвечает, сколько осталось. */
-function BalancesBar() {
-  const [data, setData] = useState<{ balances: Balance[]; checkedAt: string } | null>(null);
+function BalancesBar({ onSpend }: { onSpend?: (runs: SpendRun[]) => void }) {
+  const [data, setData] = useState<BalancesPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState("");
 
@@ -57,7 +192,8 @@ function BalancesBar() {
       const res = await fetch(`/api/balances${refresh ? "?refresh=1" : ""}`);
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `ответ ${res.status}`);
-      setData(j);
+      setData({ ...j, spend: j.spend ?? [], manual: j.manual ?? {} });
+      onSpend?.(j.spend ?? []);
     } catch (e: any) {
       setFailed(String(e?.message ?? e));
     } finally {
@@ -67,9 +203,24 @@ function BalancesBar() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const problems = data?.balances.filter((b) => b.level === "low" || b.level === "empty" || b.level === "error").length ?? 0;
+  const runs = data?.spend ?? [];
+  const manual = data?.manual ?? {};
+  const problems = data
+    ? data.balances.filter((b) => {
+        const m = manual[b.id];
+        if (m) {
+          const remaining = m.balance - spentSince(runs, b.id, Date.parse(m.at));
+          return remaining < Math.max(1, m.balance * 0.15);
+        }
+        return b.level === "low" || b.level === "empty" || b.level === "error";
+      }).length
+    : 0;
+  const todayAll = spentSince(runs, null, startOfToday());
+  const monthAll = spentSince(runs, null, startOfMonth());
+  const monthRuns = runs.filter((r) => Date.parse(r.at) >= startOfMonth()).length;
 
   return (
     <div className="card balances">
@@ -78,6 +229,11 @@ function BalancesBar() {
         {data && (
           <span className={`badge ${problems ? "warn" : "success"}`}>
             {problems ? `${problems} требует внимания` : "всё в порядке"}
+          </span>
+        )}
+        {data && (
+          <span className="hint">
+            по журналу: сегодня {money(todayAll)} · за месяц {money(monthAll)} ({monthRuns} {monthRuns === 1 ? "прогон" : monthRuns < 5 ? "прогона" : "прогонов"})
           </span>
         )}
         <span className="spacer" />
@@ -102,16 +258,7 @@ function BalancesBar() {
             <span />
           </div>
           {data.balances.map((b) => (
-            <a key={b.id} className={`balance-row level-${b.level}`} href={b.consoleUrl} target="_blank" rel="noreferrer" title={LEVEL_TITLE[b.level]}>
-              <span className="balance-dot" />
-              <span className="balance-who">
-                <span className="balance-name">{b.name}</span>
-                <span className="balance-role">{b.role}</span>
-              </span>
-              <span className="balance-value">{b.value}</span>
-              <span className="balance-note">{b.note}</span>
-              <span className="balance-link">консоль ↗</span>
-            </a>
+            <BalanceRow key={b.id} b={b} runs={runs} manual={manual} onManual={(m) => setData((d) => (d ? { ...d, manual: m } : d))} />
           ))}
         </div>
       )}
@@ -127,6 +274,7 @@ const PLATFORM_LABELS: { key: string; name: string; icon: string }[] = [
 
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
+  const [spend, setSpend] = useState<SpendRun[]>([]);
   const [connected, setConnected] = useState<Record<string, boolean> | null>(null);
   const [topic, setTopic] = useState("");
   const [creating, setCreating] = useState(false);
@@ -171,7 +319,7 @@ export default function Dashboard() {
 
   return (
     <main>
-      <BalancesBar />
+      <BalancesBar onSpend={setSpend} />
       <div className="row" style={{ marginBottom: 14 }}>
         <span className="hint">Аккаунты публикации:</span>
         {PLATFORM_LABELS.map(({ key, name, icon }) => (
@@ -226,6 +374,14 @@ export default function Dashboard() {
             <div style={{ fontWeight: 600 }}>{p.topic}</div>
             <div className="hint">{new Date(p.createdAt).toLocaleString("ru-RU")}</div>
           </Link>
+          {(() => {
+            const cost = spend.filter((r) => r.projectId === p.id).reduce((sum, r) => sum + r.total, 0);
+            return cost > 0 ? (
+              <span className="hint" title="потрачено на этот проект по журналу">
+                ≈ {money(cost)}
+              </span>
+            ) : null;
+          })()}
           {statusBadge(p)}
           <button className="btn btn-danger btn-sm" onClick={() => remove(p.id)}>
             ✕

@@ -13,7 +13,8 @@ import fs from "fs";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import path from "path";
-import { getProject, upsertProject, projectDir, Project } from "../lib/store";
+import { getProject, upsertProject, projectDir, Project, UPLOADS_DIR } from "../lib/store";
+import { runFromLedgerFile, SpendRun } from "../lib/spendLog";
 import { processProject } from "../lib/pipeline";
 import { fileFingerprint } from "../lib/fileFingerprint";
 
@@ -130,6 +131,29 @@ async function uploadResult(id: string, file: string, which: "out" | "cover"): P
   console.log(`  залит ${file} (${(data.length / 1e6).toFixed(1)} МБ)`);
 }
 
+/**
+ * Сводки прогонов (cost-runs/*.json: сумма и разбивка по провайдерам) уходят на сайт —
+ * там журнал расходов и остатки на дашборде. Без аргумента отправляются все прогоны
+ * всех проектов (при старте): сайт различает их по runId, повтор безопасен.
+ */
+async function sendRunLedgers(projectId?: string): Promise<void> {
+  const runs: SpendRun[] = [];
+  const ids = projectId ? [projectId] : fs.existsSync(UPLOADS_DIR) ? fs.readdirSync(UPLOADS_DIR) : [];
+  for (const id of ids) {
+    const dir = path.join(UPLOADS_DIR, id, "cost-runs");
+    if (!fs.existsSync(dir)) continue;
+    const topic = getProject(id)?.topic;
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".json"))) {
+      try {
+        runs.push(runFromLedgerFile(path.join(dir, f), id, f.endsWith("-failed.json") ? "failed" : "done", topic));
+      } catch {}
+    }
+  }
+  if (!runs.length) return;
+  const res = (await api("/api/worker/spend", { method: "POST", body: JSON.stringify({ runs }) })) as { added?: number };
+  if (res?.added) console.log(`  журнал расходов: отправлено прогонов ${runs.length}, новых ${res.added}`);
+}
+
 async function runJob(id: string): Promise<void> {
   console.log(`▶ Задача ${id}: забираю…`);
   const { project } = (await api("/api/worker/claim", { method: "POST", body: JSON.stringify({ id }) })) as {
@@ -193,6 +217,8 @@ async function runJob(id: string): Promise<void> {
     }
   } finally {
     clearInterval(heartbeat);
+    // сводка прогона — и удачного, и упавшего: деньги потрачены в обоих случаях
+    await sendRunLedgers(id).catch((e) => console.warn("  журнал расходов не отправлен:", e?.message ?? e));
   }
 }
 
@@ -206,6 +232,8 @@ async function main() {
   }
   console.log(`Гудини-воркер запущен → ${SITE}`);
   console.log("Монтаж пойдёт на этом компьютере. Ctrl+C для остановки.\n");
+  // прошлые прогоны — в журнал расходов сайта (старый сайт без маршрута — не ошибка)
+  sendRunLedgers().catch((e) => console.warn("журнал расходов при старте не отправлен:", e?.message ?? e));
 
   let busy = false;
   setInterval(async () => {

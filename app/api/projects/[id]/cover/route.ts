@@ -3,6 +3,7 @@ import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, updateProject, projectDir } from "@/lib/store";
 import { makeCover } from "@/lib/pipeline";
+import { recordSiteSpend } from "@/lib/spendLog";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -30,13 +31,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const hadCover = !!project.cover && fs.existsSync(coverFile);
   if (hadCover) fs.copyFileSync(coverFile, backup);
 
-  const { cover, coverStatus } = await makeCover(
-    dir,
-    project.topic,
-    project.script,
-    project.meta?.title,
-    headline,
-    true, // действие пользователя: одна оплаченная генерация
+  const { cover, coverStatus } = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Обложка (ручная)" }, () =>
+    makeCover(
+      dir,
+      project.topic,
+      project.script,
+      project.meta?.title,
+      headline,
+      true, // действие пользователя: одна оплаченная генерация
+    ),
   );
   if (!cover && hadCover) {
     fs.copyFileSync(backup, coverFile);

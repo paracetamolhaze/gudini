@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getProject, updateProject } from "@/lib/store";
 import { generateMeta, generateScript, generateScriptFromResearch } from "@/lib/ai";
 import { buildStoryResearchPack } from "@/lib/storyResearch";
+import { recordSiteSpend } from "@/lib/spendLog";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -14,21 +15,27 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const { what } = await req.json();
   try {
     if (what === "meta") {
-      const { meta } = await generateMeta(project.topic, project.script ?? "");
+      const { meta } = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Описание" }, () =>
+        generateMeta(project.topic, project.script ?? ""),
+      );
       return NextResponse.json(updateProject(id, { meta }));
     }
     // Новый путь: сначала исследуем историю по источникам, затем пишем сценарий
     // из проверенных фактов. Пакет исследования остаётся в проекте и позже
     // становится основой медиатеки для монтажа.
     if (process.env.STORY_ASSET_PIPELINE === "true") {
-      const research = await buildStoryResearchPack(project.topic, project.sourceUrl);
+      const research = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Исследование" }, () =>
+        buildStoryResearchPack(project.topic, project.sourceUrl),
+      );
       if (!research) {
         return NextResponse.json(
           { error: "Не удалось исследовать историю: нет источников или ключа поиска" },
           { status: 502 },
         );
       }
-      const written = await generateScriptFromResearch(research);
+      const written = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Сценарий" }, () =>
+        generateScriptFromResearch(research),
+      );
       if (!written) {
         return NextResponse.json({ error: "Сценарий по исследованию не сгенерировался" }, { status: 502 });
       }
@@ -42,7 +49,9 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       );
     }
 
-    const { script, demo } = await generateScript(project.topic);
+    const { script, demo } = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Сценарий" }, () =>
+      generateScript(project.topic),
+    );
     return NextResponse.json(updateProject(id, { script, scriptDemo: demo }));
   } catch (e: any) {
     return NextResponse.json({ error: String(e?.message ?? e) }, { status: 500 });

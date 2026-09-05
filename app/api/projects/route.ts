@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { recordSiteSpend } from "@/lib/spendLog";
 import { createProject, listProjects, updateProject } from "@/lib/store";
 import { generateScript } from "@/lib/ai";
 
@@ -13,7 +14,9 @@ export async function POST(req: NextRequest) {
   }
   const project = createProject(topic.trim());
   try {
-    const { script, demo } = await generateScript(project.topic);
+    const { script, demo } = await recordSiteSpend({ projectId: project.id, topic: project.topic, label: "Сценарий" }, () =>
+      generateScript(project.topic),
+    );
     return NextResponse.json(updateProject(project.id, { script, scriptDemo: demo }));
   } catch (e: any) {
     // проект создан, сценарий можно перегенерировать позже

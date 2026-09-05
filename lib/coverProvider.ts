@@ -5,7 +5,7 @@ import { runFfmpeg } from "./ffmpeg";
 import { computeLayout, buildCoverHeadlineAss, resolveCoverFontFile } from "./coverLayout";
 import type { CoverConcept } from "./cover";
 import { assertProvider } from "./providerPolicy";
-import { assertBudget, IMAGE_PRICES } from "./costLedger";
+import { assertBudget, IMAGE_PRICES, recordFlat } from "./costLedger";
 
 /**
  * Провайдер изображений обложек: Gemini Flash через OpenRouter.
@@ -60,7 +60,17 @@ export async function generateCoverImage(prompt: string, outFile: string): Promi
   if (!dataUrl?.startsWith("data:")) throw new Error("IMAGE_PROVIDER_ERROR: изображение не вернулось");
   const buffer = Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64");
   fs.writeFileSync(outFile, buffer);
-  return { file: outFile, cost: Number(json.usage?.cost ?? 0), width: 0, height: 0 };
+  // Цена картинки — в леджер прогона: без этой записи обложка не попадала в журнал
+  // расходов, и полная стоимость ролика оказывалась занижена на $0.03–0.07.
+  const reported = Number(json.usage?.cost);
+  recordFlat({
+    stage: "Cover Generation",
+    provider: "openrouter",
+    model: fullAiCoverModel(),
+    cost: Number.isFinite(reported) && reported > 0 ? reported : (IMAGE_PRICES["google/gemini-3.1-flash-image"] ?? 0.07),
+    estimated: !(Number.isFinite(reported) && reported > 0),
+  });
+  return { file: outFile, cost: Number.isFinite(reported) ? reported : 0, width: 0, height: 0 };
 }
 
 /**

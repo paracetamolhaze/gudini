@@ -469,30 +469,41 @@ label {
 
 /* ===== Балансы API (дашборд) ===== */
 .balances {
-  padding: 18px 20px;
+  padding: 16px 20px 8px;
 }
-.balance-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 10px;
-}
-.balance-tile {
-  display: block;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 12px 14px;
-  min-width: 0;
-  transition: border-color 0.15s;
-}
-.balance-tile:hover {
-  border-color: var(--accent);
-}
-.balance-head {
+.balances-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-bottom: 6px;
+}
+.balances-head .spacer {
+  flex: 1;
+}
+.balance-rows {
+  display: flex;
+  flex-direction: column;
+}
+.balance-row {
+  display: grid;
+  grid-template-columns: 10px minmax(150px, 1.1fr) minmax(150px, 1fr) minmax(180px, 1.8fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.balance-row-head {
+  border-top: none;
+  padding: 6px 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+a.balance-row:hover {
+  background: rgba(139, 92, 246, 0.06);
 }
 .balance-dot {
   width: 9px;
@@ -515,41 +526,63 @@ label {
   background: transparent;
   border: 1px solid var(--text-dim);
 }
+.balance-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .balance-name {
   font-weight: 600;
   font-size: 14px;
 }
-.balance-link {
-  margin-left: auto;
-  font-size: 11px;
+.balance-role {
+  font-size: 12px;
   color: var(--text-dim);
-}
-.balance-headline {
-  font-size: 15px;
-  font-weight: 600;
   line-height: 1.3;
 }
-.level-low .balance-headline {
+.balance-value {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.level-low .balance-value {
   color: var(--warn);
 }
-.level-empty .balance-headline,
-.level-error .balance-headline {
+.level-empty .balance-value,
+.level-error .balance-value {
   color: var(--error);
 }
-.level-missing .balance-headline,
-.level-unknown .balance-headline {
+.level-missing .balance-value,
+.level-unknown .balance-value {
   color: var(--text-dim);
   font-weight: 500;
 }
-.balance-detail {
+.balance-note {
   font-size: 12px;
   color: var(--text-dim);
-  margin-top: 4px;
   line-height: 1.4;
 }
-.balance-role {
+.balance-link {
   font-size: 11px;
   color: var(--text-dim);
-  opacity: 0.75;
-  margin-top: 6px;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .balance-row {
+    grid-template-columns: 10px 1fr auto;
+    gap: 8px 10px;
+  }
+  .balance-row-head {
+    display: none;
+  }
+  .balance-note {
+    grid-column: 2 / 4;
+  }
+  .balance-link {
+    display: none;
+  }
+  .balance-value {
+    white-space: normal;
+    text-align: right;
+  }
 }

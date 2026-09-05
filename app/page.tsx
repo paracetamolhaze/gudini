@@ -30,21 +30,21 @@ type Balance = {
   name: string;
   role: string;
   level: "ok" | "low" | "empty" | "unknown" | "missing" | "error";
-  headline: string;
-  detail: string;
+  value: string;
+  note: string;
   consoleUrl: string;
 };
 
 const LEVEL_TITLE: Record<Balance["level"], string> = {
   ok: "хватает",
-  low: "мало",
+  low: "осталось мало",
   empty: "закончился",
   unknown: "остаток API не отдаёт",
   missing: "ключ не задан",
   error: "ошибка",
 };
 
-/** Остатки по всем внешним API — сверху, до всего остального. */
+/** Остатки по внешним API — одной таблицей наверху: кто, за что отвечает, сколько осталось. */
 function BalancesBar() {
   const [data, setData] = useState<{ balances: Balance[]; checkedAt: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,35 +69,48 @@ function BalancesBar() {
     load();
   }, []);
 
+  const problems = data?.balances.filter((b) => b.level === "low" || b.level === "empty" || b.level === "error").length ?? 0;
+
   return (
     <div className="card balances">
-      <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+      <div className="balances-head">
         <h2 style={{ margin: 0 }}>💳 Балансы API</h2>
-        <span className="row" style={{ gap: 8 }}>
-          {data && (
-            <span className="hint">
-              проверено {new Date(data.checkedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
-          <button className="btn btn-secondary btn-sm" onClick={() => load(true)} disabled={loading}>
-            {loading ? <span className="spin" /> : "Обновить"}
-          </button>
-        </span>
+        {data && (
+          <span className={`badge ${problems ? "warn" : "success"}`}>
+            {problems ? `${problems} требует внимания` : "всё в порядке"}
+          </span>
+        )}
+        <span className="spacer" />
+        {data && (
+          <span className="hint">
+            проверено {new Date(data.checkedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+        <button className="btn btn-secondary btn-sm" onClick={() => load(true)} disabled={loading}>
+          {loading ? <span className="spin" /> : "Обновить"}
+        </button>
       </div>
       {failed && <div className="error-box">{failed}</div>}
       {!data && loading && <p className="hint">Опрашиваю провайдеров…</p>}
       {data && (
-        <div className="balance-grid">
+        <div className="balance-rows">
+          <div className="balance-row balance-row-head">
+            <span />
+            <span>Сервис</span>
+            <span>Остаток</span>
+            <span>Подробности</span>
+            <span />
+          </div>
           {data.balances.map((b) => (
-            <a key={b.id} className={`balance-tile level-${b.level}`} href={b.consoleUrl} target="_blank" rel="noreferrer" title={LEVEL_TITLE[b.level]}>
-              <div className="balance-head">
-                <span className="balance-dot" />
+            <a key={b.id} className={`balance-row level-${b.level}`} href={b.consoleUrl} target="_blank" rel="noreferrer" title={LEVEL_TITLE[b.level]}>
+              <span className="balance-dot" />
+              <span className="balance-who">
                 <span className="balance-name">{b.name}</span>
-                <span className="balance-link">консоль ↗</span>
-              </div>
-              <div className="balance-headline">{b.headline}</div>
-              <div className="balance-detail">{b.detail}</div>
-              <div className="balance-role">{b.role}</div>
+                <span className="balance-role">{b.role}</span>
+              </span>
+              <span className="balance-value">{b.value}</span>
+              <span className="balance-note">{b.note}</span>
+              <span className="balance-link">консоль ↗</span>
             </a>
           ))}
         </div>

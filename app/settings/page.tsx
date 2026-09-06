@@ -123,8 +123,6 @@ function Settings() {
         <input type="password" value={s.anthropicKey} onChange={(e) => field("anthropicKey", e.target.value)} placeholder="sk-ant-…" />
         <label>ElevenLabs API Key — Scribe, точные субтитры по речи (elevenlabs.io → Profile → API Keys)</label>
         <input type="password" value={s.elevenLabsKey} onChange={(e) => field("elevenLabsKey", e.target.value)} placeholder="xi-…" />
-        <label>OpenAI API Key — Whisper, запасной вариант субтитров (platform.openai.com)</label>
-        <input type="password" value={s.openaiKey} onChange={(e) => field("openaiKey", e.target.value)} placeholder="sk-…" />
         <label>Pexels API Key — стоковые видео для б-ролл перебивок, бесплатно (pexels.com/api)</label>
         <input type="password" value={s.pexelsKey} onChange={(e) => field("pexelsKey", e.target.value)} />
         <label>Pixabay API Key — второй источник стока, бесплатно (pixabay.com/api/docs)</label>

@@ -21,7 +21,7 @@ export async function publish(id: string, platform: Platform): Promise<Publicati
   try {
     if (platform === "youtube")
       result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? [], coverPath);
-    else if (platform === "tiktok") result = await publishTikTok(videoPath);
+    else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description, coverMs);
     else result = await publishInstagram(id, title, description, coverMs, Boolean(coverPath && fs.existsSync(coverPath)));
   } catch (e: any) {
     result = { platform, status: "error", message: String(e?.message ?? e) };
@@ -87,8 +87,9 @@ async function publishYouTube(
       tags: tags.map((t) => t.replace(/^#/, "")).slice(0, 30),
       categoryId: "22",
     },
-    // приватно = черновик: ролик виден только владельцу канала, публикует он сам из YouTube Studio
-    status: { privacyStatus: "private", selfDeclaredMadeForKids: false },
+    // YOUTUBE_PRIVACY=public — ролик выходит сразу; по умолчанию private: черновик, который
+    // владелец канала проверяет и публикует из YouTube Studio
+    status: { privacyStatus: youtubePrivacy(), selfDeclaredMadeForKids: false },
   };
 
   const boundary = "gudini" + Date.now();
@@ -117,12 +118,25 @@ async function publishYouTube(
     coverPath && fs.existsSync(coverPath)
       ? await setYoutubeThumbnail(token, json.id, coverPath)
       : "Обложки нет — YouTube подставит кадр из видео.";
+  const privacy = youtubePrivacy();
+  const how =
+    privacy === "public"
+      ? "Опубликовано на канале."
+      : privacy === "unlisted"
+        ? "Залито по ссылке (unlisted) — откройте YouTube Studio и сделайте общедоступным."
+        : "Залито приватным черновиком — откройте YouTube Studio, проверьте и опубликуйте.";
   return {
     platform: "youtube",
     status: "published",
     url: `https://youtube.com/shorts/${json.id}`,
-    message: `Залито приватным черновиком — откройте YouTube Studio, проверьте и опубликуйте. ${coverNote}`,
+    message: `${how} ${coverNote}`,
   };
+}
+
+/** Видимость ролика на YouTube из настройки; неизвестное значение — приватный черновик. */
+function youtubePrivacy(): "private" | "unlisted" | "public" {
+  const v = String(process.env.YOUTUBE_PRIVACY ?? "private").toLowerCase();
+  return v === "public" || v === "unlisted" ? v : "private";
 }
 
 /** Установка обложки. Возвращает человеческую формулировку результата — молча не падаем. */
@@ -189,25 +203,65 @@ async function tiktokAccessToken(): Promise<string | null> {
   return tokens.access_token;
 }
 
-async function publishTikTok(videoPath: string): Promise<PublishResult> {
+/**
+ * Два режима. Черновик (по умолчанию): ролик приезжает в «Уведомления → Загрузки»,
+ * подпись и обложку автор выбирает сам в приложении; аудита не требует.
+ * TIKTOK_DIRECT_POST=1 — прямая публикация с подписью (заголовок, описание, хэштеги)
+ * и обложкой по таймкоду; видимость — TIKTOK_PRIVACY (PUBLIC_TO_EVERYONE по умолчанию).
+ * Пока приложение не прошло аудит Content Posting API, TikTok разрешает только
+ * SELF_ONLY — это видно в ответе, и публикация так и подписывается.
+ */
+async function publishTikTok(videoPath: string, title: string, description: string, coverMs: number): Promise<PublishResult> {
   const token = await tiktokAccessToken();
   if (!token) return demo("tiktok", "аккаунт TikTok не подключён");
 
   const video = fs.readFileSync(videoPath);
-  // inbox = черновик: ролик приезжает в «Уведомления → Загрузки», подпись и обложку
-  // автор выбирает сам в приложении. В отличие от Direct Post не требует аудита
-  // Content Posting API и не упирается в принудительный SELF_ONLY.
-  const initRes = await fetch("https://open.tiktokapis.com/v2/post/publish/inbox/video/init/", {
+  const direct = process.env.TIKTOK_DIRECT_POST === "1";
+  const source_info = { source: "FILE_UPLOAD", video_size: video.length, chunk_size: video.length, total_chunk_count: 1 };
+
+  let privacy = "";
+  let privacyNote = "";
+  let body: Record<string, unknown> = { source_info };
+  if (direct) {
+    // TikTok требует спросить, какие уровни видимости доступны автору: без аудита — только SELF_ONLY
+    const infoRes = await fetch("https://open.tiktokapis.com/v2/post/publish/creator_info/query/", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    });
+    const info: any = await infoRes.json().catch(() => ({}));
+    if (!infoRes.ok || info?.error?.code !== "ok") {
+      throw new Error(`TikTok creator_info: ${infoRes.status} ${String(info?.error?.message ?? "").slice(0, 200)}`);
+    }
+    const options: string[] = Array.isArray(info?.data?.privacy_level_options) ? info.data.privacy_level_options : [];
+    const wanted = String(process.env.TIKTOK_PRIVACY ?? "PUBLIC_TO_EVERYONE").toUpperCase();
+    privacy = options.includes(wanted) ? wanted : (options[0] ?? "SELF_ONLY");
+    if (privacy !== wanted) {
+      privacyNote = ` Видимость ${privacy} вместо ${wanted}: TikTok разрешает только её — приложение ещё не прошло аудит Content Posting API.`;
+    }
+    const maxSec = Number(info?.data?.max_video_post_duration_sec ?? 0);
+    body = {
+      post_info: {
+        // подпись = заголовок + описание + хэштеги, лимит TikTok 2200 символов
+        title: `${title}\n\n${description}`.slice(0, 2200),
+        privacy_level: privacy,
+        disable_duet: false,
+        disable_comment: false,
+        disable_stitch: false,
+        // своей картинки API TikTok не принимает — только кадр из видео по таймкоду
+        video_cover_timestamp_ms: Math.max(0, coverMs),
+      },
+      source_info,
+    };
+    if (maxSec) privacyNote += ` Лимит длительности у аккаунта: ${maxSec} с.`;
+  }
+
+  const initUrl = direct
+    ? "https://open.tiktokapis.com/v2/post/publish/video/init/"
+    : "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/";
+  const initRes = await fetch(initUrl, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      source_info: {
-        source: "FILE_UPLOAD",
-        video_size: video.length,
-        chunk_size: video.length,
-        total_chunk_count: 1,
-      },
-    }),
+    body: JSON.stringify(body),
   });
   if (!initRes.ok) throw new Error(`TikTok init: ${initRes.status} ${(await initRes.text()).slice(0, 300)}`);
 
@@ -225,10 +279,38 @@ async function publishTikTok(videoPath: string): Promise<PublishResult> {
   });
   if (!putRes.ok) throw new Error(`TikTok upload: ${putRes.status}`);
 
+  if (!direct) {
+    return {
+      platform: "tiktok",
+      status: "published",
+      message: "Залито в черновики TikTok — откройте приложение: Уведомления → Загрузки, там подпись и публикация.",
+    };
+  }
+
+  // прямая публикация обрабатывается на стороне TikTok: ждём итог, чтобы не назвать упавшее опубликованным
+  const publishId = String(init?.data?.publish_id ?? "");
+  let status = "PROCESSING_UPLOAD";
+  let failReason = "";
+  for (let i = 0; i < 24 && publishId; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const stRes = await fetch("https://open.tiktokapis.com/v2/post/publish/status/fetch/", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ publish_id: publishId }),
+    });
+    const st: any = await stRes.json().catch(() => ({}));
+    status = String(st?.data?.status ?? status);
+    failReason = String(st?.data?.fail_reason ?? "");
+    if (status === "PUBLISH_COMPLETE" || status === "FAILED") break;
+  }
+  if (status === "FAILED") throw new Error(`TikTok не опубликовал ролик: ${failReason || "причина не названа"}`);
   return {
     platform: "tiktok",
     status: "published",
-    message: "Залито в черновики TikTok — откройте приложение: Уведомления → Загрузки, там подпись и публикация.",
+    message:
+      (status === "PUBLISH_COMPLETE"
+        ? `Опубликовано в TikTok с подписью и обложкой по таймкоду ${(coverMs / 1000).toFixed(1)} с (видимость ${privacy}).`
+        : `Отправлено в TikTok, обработка ещё идёт (статус ${status}) — проверьте профиль через минуту.`) + privacyNote,
   };
 }
 

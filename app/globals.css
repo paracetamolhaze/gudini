@@ -808,10 +808,9 @@ label.check a {
 /* превью — ровно та вертикальная область, которая попадёт в ролик: на телефоне весь экран,
    на компьютере вертикальный кадр по центру, как экран телефона */
 .tp-video {
-  height: 100%;
-  aspect-ratio: 9 / 16;
   max-width: 100%;
-  object-fit: cover;
+  max-height: 100%;
+  object-fit: contain;
   background: #000;
   transform: scaleX(-1);
 }
@@ -906,28 +905,3 @@ label.check a {
   }
 }
 
-/* весь кадр камеры + рамка вертикальной области ролика */
-.tp-stage--all .tp-video {
-  height: auto;
-  width: 100%;
-  max-height: 100%;
-  aspect-ratio: auto;
-  object-fit: contain;
-}
-.tp-guide {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  max-width: 100%;
-  transform: translate(-50%, -50%);
-  border: 2px solid rgba(139, 92, 246, 0.9);
-  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45);
-  pointer-events: none;
-}
-@media (max-width: 640px) {
-  .tp-caminfo {
-    display: inline;
-    font-size: 11px;
-    flex-basis: 100%;
-  }
-}

@@ -346,9 +346,6 @@ function Teleprompter({
   const [camError, setCamError] = useState("");
   const [camInfo, setCamInfo] = useState("");
   const [seconds, setSeconds] = useState(0);
-  // «кадр» — показывается только область ролика (как в записи); «весь» — вся камера с рамкой области
-  const [fit, setFit] = useState<"crop" | "all">("crop");
-  const [stream, setStreamDims] = useState<{ w: number; h: number } | null>(null);
 
   /**
    * Камера: на телефоне просим вертикальный 1080×1920 — это родной формат ролика; на
@@ -417,12 +414,7 @@ function Teleprompter({
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
       const d = dims(stream);
-      if (d) {
-        setStreamDims(d);
-        const portrait = d.h >= d.w;
-        const keptW = Math.round((d.h * 9) / 16);
-        setCamInfo(portrait ? `камера ${d.w}×${d.h}` : `камера ${d.w}×${d.h}, в ролик — центр ${keptW}×${d.h}`);
-      }
+      if (d) setCamInfo(`камера ${d.w}×${d.h}`);
     })();
     return () => {
       cancelled = true;
@@ -490,13 +482,9 @@ function Teleprompter({
 
   return (
     <div className="tp">
-      <div className={`tp-stage ${fit === "all" ? "tp-stage--all" : ""}`}>
-        {/* зеркало — как в селфи-камере; в запись идёт незеркальный кадр */}
+      <div className="tp-stage">
+        {/* весь кадр камеры целиком — как в обычной камере; зеркало для селфи, в запись идёт незеркальный кадр */}
         <video ref={videoRef} className="tp-video" autoPlay muted playsInline />
-        {fit === "all" && stream && stream.w > stream.h && (
-          // рамка области, которая попадёт в вертикальный ролик: центр шириной 9/16 высоты
-          <div className="tp-guide" style={{ aspectRatio: "9 / 16", height: `min(100%, ${((100 * stream.h) / stream.w).toFixed(2)}vw)` }} />
-        )}
         <div className="tp-text">
           <div className="tp-text-inner" ref={textRef}>
             {script || "Сценарий пуст — вернись на шаг 1"}
@@ -517,9 +505,6 @@ function Teleprompter({
         </span>
         {camInfo && <span className="hint tp-caminfo">{camInfo}</span>}
         <span className="spacer" />
-        <button className="btn btn-secondary btn-sm" onClick={() => setFit((f) => (f === "crop" ? "all" : "crop"))} title="Показать всю камеру с рамкой области ролика">
-          {fit === "crop" ? "Весь кадр" : "Кадр ролика"}
-        </button>
         <label className="tp-speed">
           <span>Скорость</span>
           <input type="range" min={20} max={120} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} />

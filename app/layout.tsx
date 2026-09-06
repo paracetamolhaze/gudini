@@ -7,6 +7,9 @@ export const metadata: Metadata = {
   description: "Сценарий → съёмка → автомонтаж → публикация в TikTok, Shorts и Reels",
   // на iPhone «На экран Домой» открывает сайт без адресной строки, в тёмной теме
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Гудини" },
+  // подтверждение владения доменом для Google Search Console (нужно, чтобы Google показывал
+  // логотип и имя приложения на экране входа): токен из «HTML tag» кладётся в GOOGLE_SITE_VERIFICATION
+  ...(process.env.GOOGLE_SITE_VERIFICATION ? { verification: { google: process.env.GOOGLE_SITE_VERIFICATION } } : {}),
 };
 
 // viewport-fit=cover: контент заходит под чёлку iPhone, отступы берутся из safe-area в CSS

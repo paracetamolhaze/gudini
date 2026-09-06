@@ -90,7 +90,7 @@ export async function publish(id: string, platform: Platform, options: PublishOp
   let result: PublishResult;
   try {
     if (platform === "youtube")
-      result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? [], coverPath, mode);
+      result = await publishYouTube(id, videoPath, title, description, project.meta?.hashtags ?? [], coverPath, mode);
     else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description, coverMs, options.tiktok, mode);
     else if (mode === "draft")
       result = {
@@ -147,6 +147,7 @@ async function youtubeAccessToken(): Promise<string | null> {
 }
 
 async function publishYouTube(
+  projectId: string,
   videoPath: string,
   title: string,
   description: string,
@@ -195,6 +196,9 @@ async function publishYouTube(
     coverPath && fs.existsSync(coverPath)
       ? await setYoutubeThumbnail(token, json.id, coverPath)
       : "Обложки нет — YouTube подставит кадр из видео.";
+  // обложка ещё раз после обработки: во время обработки YouTube принимает её, а по
+  // окончании подставляет свой кадр; результат допишется в карточку публикации
+  if (coverPath && fs.existsSync(coverPath)) void settleYoutubeThumbnail(projectId, json.id, coverPath);
   const privacy = mode === "draft" ? "private" : youtubePrivacy();
   // сообщение только о том, что не очевидно: черновик, доступ по ссылке, не принятая обложка
   const notes = [
@@ -213,6 +217,64 @@ async function publishYouTube(
 function youtubePrivacy(): "private" | "unlisted" | "public" {
   const v = String(process.env.YOUTUBE_PRIVACY ?? "private").toLowerCase();
   return v === "public" || v === "unlisted" ? v : "private";
+}
+
+/**
+ * Обложка после обработки. Ждём processingStatus=succeeded (до 20 минут), ставим обложку
+ * снова, через минуту ещё раз, и дописываем в карточку публикации, что вышло. Нужен scope
+ * youtube.readonly — без него (старое подключение) дожидаться нечем, об этом тоже пишем.
+ */
+async function settleYoutubeThumbnail(projectId: string, videoId: string, coverPath: string): Promise<void> {
+  const note = (text: string) => {
+    try {
+      const fresh = getProject(projectId);
+      if (!fresh) return;
+      const pubs = fresh.publications.map((pub) =>
+        pub.platform === "youtube" && pub.url?.endsWith(videoId) ? { ...pub, message: [pub.message, text].filter(Boolean).join(" ") } : pub,
+      );
+      updateProject(projectId, { publications: pubs });
+    } catch {}
+  };
+  try {
+    const started = Date.now();
+    let processed = false;
+    while (Date.now() - started < 20 * 60 * 1000) {
+      await new Promise((r) => setTimeout(r, 30_000));
+      const token = await youtubeAccessToken();
+      if (!token) return;
+      const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=processingDetails&id=${videoId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json: any = await res.json().catch(() => ({}));
+      if (res.status === 403) {
+        note("Обложку после обработки поставить нельзя: переподключите YouTube в Настройках (нужно право на чтение).");
+        return;
+      }
+      const status = json?.items?.[0]?.processingDetails?.processingStatus;
+      if (status === "succeeded") {
+        processed = true;
+        break;
+      }
+      if (status === "failed" || status === "terminated") {
+        note(`YouTube не обработал ролик (${status}).`);
+        return;
+      }
+    }
+    if (!processed) {
+      note("YouTube обрабатывал ролик дольше 20 минут — обложка поставлена только при загрузке.");
+      return;
+    }
+    let token = await youtubeAccessToken();
+    if (!token) return;
+    const first = await setYoutubeThumbnail(token, videoId, coverPath);
+    await new Promise((r) => setTimeout(r, 60_000));
+    token = (await youtubeAccessToken()) ?? token;
+    const second = await setYoutubeThumbnail(token, videoId, coverPath);
+    const ok = !first.startsWith("ОБЛОЖКА НЕ ПРИМЕНЕНА") && !second.startsWith("ОБЛОЖКА НЕ ПРИМЕНЕНА");
+    note(ok ? "Обложка поставлена повторно после обработки." : `После обработки: ${second}`);
+  } catch (e: any) {
+    note(`Обложка после обработки: ${String(e?.message ?? e).slice(0, 120)}`);
+  }
 }
 
 /** Установка обложки. Возвращает человеческую формулировку результата — молча не падаем. */

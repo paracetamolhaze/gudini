@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getSettings } from "@/lib/store";
 import { requestOrigin } from "@/lib/origin";
+import { tiktokDirectPostEnabled } from "@/lib/publish";
 
 type Ctx = { params: Promise<{ platform: string }> };
 
@@ -33,7 +34,9 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     url.searchParams.set("client_key", s.tiktokClientKey);
     url.searchParams.set("redirect_uri", redirect);
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", "user.info.basic,video.publish,video.upload");
+    // права ровно под режим: прямая публикация — video.publish, черновики — video.upload;
+    // лишний scope в заявке на аудит TikTok задерживает проверку
+    url.searchParams.set("scope", tiktokDirectPostEnabled() ? "user.info.basic,video.publish" : "user.info.basic,video.upload");
     url.searchParams.set("state", "gudini");
     url.searchParams.set("code_challenge", challenge);
     url.searchParams.set("code_challenge_method", "S256");

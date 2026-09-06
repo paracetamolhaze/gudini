@@ -658,3 +658,131 @@ a.balance-row:hover {
     display: none;
   }
 }
+
+/* ===== Телефон (iPhone) и ноутбук (MacBook) ===== */
+html {
+  -webkit-text-size-adjust: 100%; /* Safari не увеличивает текст при повороте */
+}
+button,
+.btn,
+.step,
+.nav-link,
+.project-item {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; /* без задержки двойного тапа */
+}
+.container {
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
+}
+.teleprompter-overlay {
+  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left));
+}
+.project-title {
+  font-size: 22px;
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+/* ноутбук: чуть шире колонка, таблицам балансов и журнала просторнее */
+@media (min-width: 1280px) {
+  .container {
+    max-width: 1040px;
+  }
+}
+/* телефон */
+@media (max-width: 640px) {
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px 0 10px;
+    margin-bottom: 18px;
+  }
+  .logo {
+    font-size: 24px;
+  }
+  .logo-sub {
+    display: none;
+  }
+  .topbar nav {
+    display: flex;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+  .topbar .nav-link {
+    flex: 1;
+    text-align: center;
+    padding: 9px 4px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  .card {
+    padding: 18px 16px;
+    border-radius: 14px;
+  }
+  .card h2 {
+    font-size: 17px;
+  }
+  .project-title {
+    font-size: 20px;
+  }
+  /* 16px — iPhone не приближает страницу при фокусе на поле */
+  input[type="text"],
+  input[type="password"],
+  textarea,
+  select {
+    font-size: 16px;
+    padding: 11px 12px;
+  }
+  .btn {
+    padding: 12px 16px;
+  }
+  /* кнопки действий в карточках — во всю ширину, по одной в строке */
+  .card .row > .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .card .row > .btn-sm {
+    flex: 0 0 auto;
+  }
+  .row .hint.or {
+    flex-basis: 100%;
+    text-align: center;
+  }
+  .step {
+    min-width: calc(50% - 3px);
+    font-size: 12.5px;
+    padding: 9px 4px;
+  }
+  .project-item {
+    padding: 14px;
+    gap: 10px;
+  }
+  .video-preview {
+    max-width: min(320px, 72vw);
+  }
+  .dropzone {
+    padding: 26px 14px;
+  }
+  .teleprompter-inner {
+    font-size: 24px;
+    line-height: 1.6;
+    padding: 42vh 4px;
+  }
+  .camera-pip {
+    width: 104px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  .platform-grid {
+    grid-template-columns: 1fr;
+  }
+  .balances {
+    padding: 14px 14px 6px;
+  }
+  .empty {
+    padding: 34px 12px;
+  }
+}

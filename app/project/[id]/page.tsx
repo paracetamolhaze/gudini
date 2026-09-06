@@ -63,7 +63,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
 
   return (
     <main>
-      <h1 style={{ fontSize: 22, marginBottom: 4 }}>{project.topic}</h1>
+      <h1 className="project-title">{project.topic}</h1>
       <p className="hint" style={{ marginBottom: 18 }}>
         Проект #{project.id.slice(0, 6)}
       </p>
@@ -251,7 +251,7 @@ function RecordStep({
           <button className="btn" onClick={() => setPrompterOpen(true)}>
             🎙 Записать с телесуфлёром
           </button>
-          <span className="hint">или</span>
+          <span className="hint or">или</span>
           <button className="btn btn-secondary" onClick={() => fileInput.current?.click()}>
             📁 Загрузить готовый файл
           </button>
@@ -298,7 +298,7 @@ function RecordStep({
 
         {project.rawVideo && !uploading && (
           <div className="row" style={{ marginTop: 16 }}>
-            <video className="video-preview" src={`/api/projects/${project.id}/video?which=raw`} controls style={{ margin: 0, maxWidth: 220 }} />
+            <video className="video-preview" src={`/api/projects/${project.id}/video?which=raw`} controls playsInline style={{ margin: 0, maxWidth: 220 }} />
             <div className="spacer" />
             <button className="btn" onClick={onNext}>
               К монтажу →
@@ -542,7 +542,7 @@ function ProcessStep({
 
       {project.processedVideo && processing.state !== "running" && (
         <div style={{ marginTop: 18 }}>
-          <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed&t=${Date.now()}`} controls />
+          <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed&t=${Date.now()}`} controls playsInline />
           <p className="hint" style={{ textAlign: "center", marginTop: 8 }}>
             Субтитры:{" "}
             {project.subtitlesSource === "scribe"

@@ -1055,7 +1055,7 @@ function PublishStep({
             {busy === "all" ? <span className="spin" /> : "🚀"} Опубликовать во все
           </button>
           <button className="btn btn-secondary" onClick={() => publishAll("draft")} disabled={busy !== null}>
-            {busy === "all" ? <span className="spin" /> : "📝"} Черновики во все — проверить сначала
+            {busy === "all" ? <span className="spin" /> : "📝"} Отправить в черновики
           </button>
         </div>
         <p className="hint" style={{ marginBottom: 12 }}>

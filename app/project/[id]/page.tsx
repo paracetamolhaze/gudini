@@ -346,6 +346,9 @@ function Teleprompter({
   const [camError, setCamError] = useState("");
   const [camInfo, setCamInfo] = useState("");
   const [seconds, setSeconds] = useState(0);
+  // «кадр» — показывается только область ролика (как в записи); «весь» — вся камера с рамкой области
+  const [fit, setFit] = useState<"crop" | "all">("crop");
+  const [stream, setStreamDims] = useState<{ w: number; h: number } | null>(null);
 
   /**
    * Камера: на телефоне просим вертикальный 1080×1920 — это родной формат ролика; на
@@ -366,6 +369,10 @@ function Teleprompter({
         ];
     const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
     let cancelled = false;
+    const dims = (st: MediaStream) => {
+      const t = st.getVideoTracks()[0]?.getSettings();
+      return t?.width && t?.height ? { w: t.width, h: t.height } : null;
+    };
     (async () => {
       let stream: MediaStream | null = null;
       let lastErr: any = null;
@@ -375,6 +382,28 @@ function Teleprompter({
           break;
         } catch (e) {
           lastErr = e;
+        }
+      }
+      // телефон отдал горизонтальный поток — просим вертикальный ещё раз через aspectRatio:
+      // иначе в ролик попадёт только треть кадра, и лицо выглядит как при зуме ×3
+      if (mobile && stream) {
+        const d = dims(stream);
+        if (d && d.w > d.h) {
+          for (const c of [
+            { video: { facingMode: "user", aspectRatio: { ideal: 9 / 16 }, height: { ideal: 1920 } }, audio },
+            { video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 9 / 16 } }, audio },
+          ] as MediaStreamConstraints[]) {
+            try {
+              const retry = await navigator.mediaDevices.getUserMedia(c);
+              const rd = dims(retry);
+              if (rd && rd.h > rd.w) {
+                stream.getTracks().forEach((t) => t.stop());
+                stream = retry;
+                break;
+              }
+              retry.getTracks().forEach((t) => t.stop());
+            } catch {}
+          }
         }
       }
       if (cancelled) {
@@ -387,11 +416,12 @@ function Teleprompter({
       }
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
-      const st = stream.getVideoTracks()[0]?.getSettings();
-      if (st?.width && st?.height) {
-        const portrait = st.height >= st.width;
-        const kept = portrait ? `${st.width}×${st.height}` : `${Math.round((st.height * 9) / 16)}×${st.height} из ${st.width}×${st.height}`;
-        setCamInfo(portrait ? `камера ${kept}` : `в кадр попадёт центр: ${kept}`);
+      const d = dims(stream);
+      if (d) {
+        setStreamDims(d);
+        const portrait = d.h >= d.w;
+        const keptW = Math.round((d.h * 9) / 16);
+        setCamInfo(portrait ? `камера ${d.w}×${d.h}` : `камера ${d.w}×${d.h}, в ролик — центр ${keptW}×${d.h}`);
       }
     })();
     return () => {
@@ -460,9 +490,13 @@ function Teleprompter({
 
   return (
     <div className="tp">
-      <div className="tp-stage">
+      <div className={`tp-stage ${fit === "all" ? "tp-stage--all" : ""}`}>
         {/* зеркало — как в селфи-камере; в запись идёт незеркальный кадр */}
         <video ref={videoRef} className="tp-video" autoPlay muted playsInline />
+        {fit === "all" && stream && stream.w > stream.h && (
+          // рамка области, которая попадёт в вертикальный ролик: центр шириной 9/16 высоты
+          <div className="tp-guide" style={{ aspectRatio: "9 / 16", height: `min(100%, ${((100 * stream.h) / stream.w).toFixed(2)}vw)` }} />
+        )}
         <div className="tp-text">
           <div className="tp-text-inner" ref={textRef}>
             {script || "Сценарий пуст — вернись на шаг 1"}
@@ -483,6 +517,9 @@ function Teleprompter({
         </span>
         {camInfo && <span className="hint tp-caminfo">{camInfo}</span>}
         <span className="spacer" />
+        <button className="btn btn-secondary btn-sm" onClick={() => setFit((f) => (f === "crop" ? "all" : "crop"))} title="Показать всю камеру с рамкой области ролика">
+          {fit === "crop" ? "Весь кадр" : "Кадр ролика"}
+        </button>
         <label className="tp-speed">
           <span>Скорость</span>
           <input type="range" min={20} max={120} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} />

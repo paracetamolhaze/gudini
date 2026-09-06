@@ -786,3 +786,64 @@ button,
     padding: 34px 12px;
   }
 }
+
+/* ===== Экран публикации TikTok ===== */
+.tiktok-panel {
+  margin-top: 14px;
+}
+.tiktok-author {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.tiktok-author img {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+.tiktok-grid {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.tiktok-grid .video-preview {
+  max-width: 220px;
+}
+.tiktok-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+label.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+label.check input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+  flex: none;
+}
+label.check a {
+  text-decoration: underline;
+  color: var(--accent);
+}
+@media (max-width: 640px) {
+  .tiktok-grid {
+    grid-template-columns: 1fr;
+  }
+  .tiktok-grid .video-preview {
+    max-width: min(220px, 60vw);
+  }
+}

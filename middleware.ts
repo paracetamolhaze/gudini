@@ -19,11 +19,21 @@ async function authCookieValue(password: string): Promise<string> {
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Файл подтверждения домена TikTok: содержимое кладётся в переменную TIKTOK_VERIFY_CONTENT
-  if (/^\/tiktok[\w.-]*\.txt$/i.test(pathname) && process.env.TIKTOK_VERIFY_CONTENT) {
-    return new NextResponse(process.env.TIKTOK_VERIFY_CONTENT, {
-      headers: { "Content-Type": "text/plain" },
-    });
+  // Файл подтверждения домена TikTok. TikTok проверяет URL-префикс (например /terms/) и ждёт
+  // по нему файл tiktok<ТОКЕН>.txt с содержимым tiktok-developers-site-verification=<ТОКЕН>.
+  // Файл отдаётся по любому пути, но только для токенов из TIKTOK_VERIFY_CONTENT (через запятую),
+  // иначе любой мог бы подтвердить наш домен для своего приложения.
+  const verify = pathname.match(/\/tiktok([\w-]+)\.txt$/i);
+  if (verify) {
+    const allowed = (process.env.TIKTOK_VERIFY_CONTENT ?? "")
+      .split(",")
+      .map((s) => s.trim().replace(/^tiktok-developers-site-verification=/, ""))
+      .filter(Boolean);
+    if (allowed.includes(verify[1])) {
+      return new NextResponse(`tiktok-developers-site-verification=${verify[1]}`, {
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
   }
 
   const password = process.env.SITE_PASSWORD;

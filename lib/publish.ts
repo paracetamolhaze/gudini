@@ -4,8 +4,23 @@ import { getProject, getSettings, projectDir, updateActiveTokens, Platform, Publ
 
 export type PublishResult = Omit<Publication, "at">;
 
+/** Что автор выбрал на экране публикации TikTok (Direct Post требует его выбора, а не наших значений по умолчанию). */
+export type TikTokPostOptions = {
+  title: string;
+  privacyLevel: string;
+  allowComment: boolean;
+  allowDuet: boolean;
+  allowStitch: boolean;
+  coverMs: number;
+  brandContent: boolean;
+  brandOrganic: boolean;
+  consent: boolean;
+};
+
+export type PublishOptions = { tiktok?: TikTokPostOptions };
+
 /** Публикация на платформу. Без подключённого аккаунта — демо-режим (симуляция). */
-export async function publish(id: string, platform: Platform): Promise<Publication> {
+export async function publish(id: string, platform: Platform, options: PublishOptions = {}): Promise<Publication> {
   const project = getProject(id);
   if (!project?.processedVideo) throw new Error("Сначала смонтируйте видео");
   const videoPath = path.join(projectDir(id), project.processedVideo);
@@ -21,7 +36,7 @@ export async function publish(id: string, platform: Platform): Promise<Publicati
   try {
     if (platform === "youtube")
       result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? [], coverPath);
-    else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description, coverMs);
+    else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description, coverMs, options.tiktok);
     else result = await publishInstagram(id, title, description, coverMs, Boolean(coverPath && fs.existsSync(coverPath)));
   } catch (e: any) {
     result = { platform, status: "error", message: String(e?.message ?? e) };
@@ -203,56 +218,105 @@ async function tiktokAccessToken(): Promise<string | null> {
   return tokens.access_token;
 }
 
+export const tiktokDirectPostEnabled = () => process.env.TIKTOK_DIRECT_POST === "1";
+
+export type TikTokCreatorInfo = {
+  nickname: string;
+  avatarUrl: string;
+  /** какие уровни видимости TikTok разрешает этому автору; без аудита приложения — только SELF_ONLY */
+  privacyOptions: string[];
+  commentDisabled: boolean;
+  duetDisabled: boolean;
+  stitchDisabled: boolean;
+  maxDurationSec: number;
+};
+
+/**
+ * Автор и его ограничения из creator_info. TikTok требует спрашивать это перед каждой
+ * прямой публикацией и показывать пользователю: экран публикации строится по этим данным.
+ */
+export async function tiktokCreatorInfo(): Promise<TikTokCreatorInfo | null> {
+  const token = await tiktokAccessToken();
+  if (!token) return null;
+  const res = await fetch("https://open.tiktokapis.com/v2/post/publish/creator_info/query/", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+  });
+  const info: any = await res.json().catch(() => ({}));
+  if (!res.ok || info?.error?.code !== "ok") {
+    throw new Error(`TikTok creator_info: ${res.status} ${String(info?.error?.message ?? "").slice(0, 200)}`);
+  }
+  const d = info?.data ?? {};
+  return {
+    nickname: String(d.creator_nickname ?? ""),
+    avatarUrl: String(d.creator_avatar_url ?? ""),
+    privacyOptions: Array.isArray(d.privacy_level_options) ? d.privacy_level_options.map(String) : [],
+    commentDisabled: Boolean(d.comment_disabled),
+    duetDisabled: Boolean(d.duet_disabled),
+    stitchDisabled: Boolean(d.stitch_disabled),
+    maxDurationSec: Number(d.max_video_post_duration_sec ?? 0),
+  };
+}
+
 /**
  * Два режима. Черновик (по умолчанию): ролик приезжает в «Уведомления → Загрузки»,
  * подпись и обложку автор выбирает сам в приложении; аудита не требует.
- * TIKTOK_DIRECT_POST=1 — прямая публикация с подписью (заголовок, описание, хэштеги)
- * и обложкой по таймкоду; видимость — TIKTOK_PRIVACY (PUBLIC_TO_EVERYONE по умолчанию).
- * Пока приложение не прошло аудит Content Posting API, TikTok разрешает только
- * SELF_ONLY — это видно в ответе, и публикация так и подписывается.
+ * TIKTOK_DIRECT_POST=1 — прямая публикация с тем, что автор выбрал на экране публикации:
+ * подпись, видимость из списка creator_info, комментарии/дуэты/стичи, кадр обложки,
+ * пометка коммерческого контента, согласие с правилами. Своих значений по умолчанию нет —
+ * этого требуют правила TikTok для Direct Post. Пока приложение не прошло аудит, TikTok
+ * разрешает только SELF_ONLY, и это видно в списке видимости.
  */
-async function publishTikTok(videoPath: string, title: string, description: string, coverMs: number): Promise<PublishResult> {
+async function publishTikTok(
+  videoPath: string,
+  title: string,
+  description: string,
+  coverMs: number,
+  opts?: TikTokPostOptions,
+): Promise<PublishResult> {
   const token = await tiktokAccessToken();
   if (!token) return demo("tiktok", "аккаунт TikTok не подключён");
 
   const video = fs.readFileSync(videoPath);
-  const direct = process.env.TIKTOK_DIRECT_POST === "1";
+  const direct = tiktokDirectPostEnabled();
   const source_info = { source: "FILE_UPLOAD", video_size: video.length, chunk_size: video.length, total_chunk_count: 1 };
 
   let privacy = "";
   let privacyNote = "";
   let body: Record<string, unknown> = { source_info };
   if (direct) {
-    // TikTok требует спросить, какие уровни видимости доступны автору: без аудита — только SELF_ONLY
-    const infoRes = await fetch("https://open.tiktokapis.com/v2/post/publish/creator_info/query/", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    });
-    const info: any = await infoRes.json().catch(() => ({}));
-    if (!infoRes.ok || info?.error?.code !== "ok") {
-      throw new Error(`TikTok creator_info: ${infoRes.status} ${String(info?.error?.message ?? "").slice(0, 200)}`);
+    if (!opts) {
+      throw new Error("Прямая публикация в TikTok идёт только с экрана публикации: подпись, кто увидит видео, согласие с правилами");
     }
-    const options: string[] = Array.isArray(info?.data?.privacy_level_options) ? info.data.privacy_level_options : [];
-    const wanted = String(process.env.TIKTOK_PRIVACY ?? "PUBLIC_TO_EVERYONE").toUpperCase();
-    privacy = options.includes(wanted) ? wanted : (options[0] ?? "SELF_ONLY");
-    if (privacy !== wanted) {
-      privacyNote = ` Видимость ${privacy} вместо ${wanted}: TikTok разрешает только её — приложение ещё не прошло аудит Content Posting API.`;
+    if (!opts.consent) throw new Error("TikTok: перед публикацией нужно подтвердить согласие с правилами");
+    const info = await tiktokCreatorInfo();
+    if (!info) return demo("tiktok", "аккаунт TikTok не подключён");
+    if (!info.privacyOptions.includes(opts.privacyLevel)) {
+      throw new Error(`TikTok: видимость ${opts.privacyLevel || "не выбрана"} недоступна этому аккаунту (доступны: ${info.privacyOptions.join(", ") || "нет"})`);
     }
-    const maxSec = Number(info?.data?.max_video_post_duration_sec ?? 0);
+    if (opts.brandContent && opts.privacyLevel === "SELF_ONLY") {
+      throw new Error("TikTok: брендированный контент нельзя публиковать с видимостью «только я»");
+    }
+    privacy = opts.privacyLevel;
     body = {
       post_info: {
-        // подпись = заголовок + описание + хэштеги, лимит TikTok 2200 символов
-        title: `${title}\n\n${description}`.slice(0, 2200),
+        // подпись — то, что автор отредактировал на экране; лимит TikTok 2200 символов
+        title: String(opts.title ?? `${title}\n\n${description}`).slice(0, 2200),
         privacy_level: privacy,
-        disable_duet: false,
-        disable_comment: false,
-        disable_stitch: false,
+        disable_comment: !opts.allowComment || info.commentDisabled,
+        disable_duet: !opts.allowDuet || info.duetDisabled,
+        disable_stitch: !opts.allowStitch || info.stitchDisabled,
         // своей картинки API TikTok не принимает — только кадр из видео по таймкоду
-        video_cover_timestamp_ms: Math.max(0, coverMs),
+        video_cover_timestamp_ms: Math.max(0, Math.round(Number(opts.coverMs) || coverMs)),
+        brand_content_toggle: Boolean(opts.brandContent),
+        brand_organic_toggle: Boolean(opts.brandOrganic),
       },
       source_info,
     };
-    if (maxSec) privacyNote += ` Лимит длительности у аккаунта: ${maxSec} с.`;
+    if (privacy === "SELF_ONLY" && info.privacyOptions.length === 1) {
+      privacyNote = " TikTok разрешил только «только я»: приложение ещё не прошло аудит Content Posting API.";
+    }
+    if (info.maxDurationSec) privacyNote += ` Лимит длительности у аккаунта: ${info.maxDurationSec} с.`;
   }
 
   const initUrl = direct
@@ -304,12 +368,13 @@ async function publishTikTok(videoPath: string, title: string, description: stri
     if (status === "PUBLISH_COMPLETE" || status === "FAILED") break;
   }
   if (status === "FAILED") throw new Error(`TikTok не опубликовал ролик: ${failReason || "причина не названа"}`);
+  const coverSec = ((opts?.coverMs ?? coverMs) / 1000).toFixed(1);
   return {
     platform: "tiktok",
     status: "published",
     message:
       (status === "PUBLISH_COMPLETE"
-        ? `Опубликовано в TikTok с подписью и обложкой по таймкоду ${(coverMs / 1000).toFixed(1)} с (видимость ${privacy}).`
+        ? `Опубликовано в TikTok с подписью и обложкой по кадру ${coverSec} с (видимость ${privacy}).`
         : `Отправлено в TikTok, обработка ещё идёт (статус ${status}) — проверьте профиль через минуту.`) + privacyNote,
   };
 }

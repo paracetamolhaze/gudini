@@ -655,6 +655,207 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
   );
 }
 
+/* ================== Экран публикации TikTok (Direct Post) ================== */
+
+type TikTokScreen = {
+  direct: boolean;
+  connected: boolean;
+  creator: {
+    nickname: string;
+    avatarUrl: string;
+    privacyOptions: string[];
+    commentDisabled: boolean;
+    duetDisabled: boolean;
+    stitchDisabled: boolean;
+    maxDurationSec: number;
+  } | null;
+  caption: string;
+  coverSec: number;
+  error?: string;
+};
+
+const PRIVACY_LABELS: Record<string, string> = {
+  PUBLIC_TO_EVERYONE: "Все",
+  MUTUAL_FOLLOW_FRIENDS: "Взаимные подписчики",
+  FOLLOWER_OF_CREATOR: "Подписчики",
+  SELF_ONLY: "Только я",
+};
+
+/**
+ * Правила TikTok для прямой публикации: автор видит, в какой аккаунт уйдёт ролик, сам
+ * выбирает видимость из списка, который вернул TikTok, включает комментарии/дуэты/стичи,
+ * правит подпись, помечает коммерческий контент и подтверждает согласие с правилами.
+ * Без этого экрана аудит Content Posting API не проходит.
+ */
+function TikTokPanel({
+  project,
+  screen,
+  busy,
+  onPublish,
+}: {
+  project: Project;
+  screen: TikTokScreen;
+  busy: boolean;
+  onPublish: (opts: Record<string, unknown>) => Promise<void>;
+}) {
+  const [title, setTitle] = useState(screen.caption);
+  const [privacy, setPrivacy] = useState("");
+  const [allowComment, setAllowComment] = useState(!screen.creator?.commentDisabled);
+  const [allowDuet, setAllowDuet] = useState(!screen.creator?.duetDisabled);
+  const [allowStitch, setAllowStitch] = useState(!screen.creator?.stitchDisabled);
+  const [coverSec, setCoverSec] = useState(String(screen.coverSec));
+  const [commercial, setCommercial] = useState(false);
+  const [brandOrganic, setBrandOrganic] = useState(false);
+  const [brandContent, setBrandContent] = useState(false);
+  const [consent, setConsent] = useState(false);
+
+  const c = screen.creator;
+  const options = c?.privacyOptions ?? [];
+  const brandedBlocksSelf = commercial && brandContent;
+  const commercialIncomplete = commercial && !brandOrganic && !brandContent;
+  const ready = Boolean(privacy) && consent && !commercialIncomplete && !(brandedBlocksSelf && privacy === "SELF_ONLY") && title.trim().length > 0;
+
+  const consentText = commercial && brandContent
+    ? (
+      <>
+        Публикуя, вы соглашаетесь с{" "}
+        <a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noreferrer">Branded Content Policy</a> и{" "}
+        <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">Music Usage Confirmation</a> TikTok.
+      </>
+    )
+    : (
+      <>
+        Публикуя, вы соглашаетесь с{" "}
+        <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noreferrer">Music Usage Confirmation</a> TikTok.
+      </>
+    );
+
+  if (!screen.connected || !c) {
+    return (
+      <div className="card tiktok-panel">
+        <h2>🎵 Публикация в TikTok</h2>
+        <div className="error-box">{screen.error ?? "Аккаунт TikTok не подключён — подключите его в Настройках."}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card tiktok-panel">
+      <h2>🎵 Публикация в TikTok</h2>
+      <div className="tiktok-author">
+        {c.avatarUrl && <img src={c.avatarUrl} alt="" />}
+        <div>
+          <div style={{ fontWeight: 600 }}>Ролик уйдёт в аккаунт {c.nickname ? `@${c.nickname}` : "TikTok"}</div>
+          <div className="hint">
+            {options.length === 1 && options[0] === "SELF_ONLY"
+              ? "TikTok разрешает этому приложению только видимость «Только я»: приложение ещё не прошло аудит."
+              : c.maxDurationSec
+                ? `Максимальная длительность для аккаунта: ${c.maxDurationSec} с.`
+                : ""}
+          </div>
+        </div>
+      </div>
+
+      <div className="tiktok-grid">
+        <div>
+          <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed`} controls playsInline />
+          <p className="hint" style={{ textAlign: "center", marginTop: 6 }}>Так ролик увидят в TikTok</p>
+        </div>
+        <div>
+          <label>Подпись</label>
+          <textarea rows={6} value={title} maxLength={2200} onChange={(e) => setTitle(e.target.value)} />
+          <p className="hint" style={{ marginTop: 4 }}>{title.length} / 2200</p>
+
+          <label>Кто увидит видео</label>
+          <select value={privacy} onChange={(e) => setPrivacy(e.target.value)}>
+            <option value="" disabled>Выберите…</option>
+            {options.map((o) => (
+              <option key={o} value={o} disabled={brandedBlocksSelf && o === "SELF_ONLY"}>
+                {PRIVACY_LABELS[o] ?? o}
+              </option>
+            ))}
+          </select>
+          {brandedBlocksSelf && <p className="hint">Брендированный контент нельзя публиковать с видимостью «Только я».</p>}
+
+          <label>Разрешить зрителям</label>
+          <div className="tiktok-toggles">
+            <label className="check">
+              <input type="checkbox" checked={allowComment} disabled={c.commentDisabled} onChange={(e) => setAllowComment(e.target.checked)} />
+              Комментарии{c.commentDisabled && " (выключены в настройках аккаунта)"}
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={allowDuet} disabled={c.duetDisabled} onChange={(e) => setAllowDuet(e.target.checked)} />
+              Дуэты{c.duetDisabled && " (выключены в настройках аккаунта)"}
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={allowStitch} disabled={c.stitchDisabled} onChange={(e) => setAllowStitch(e.target.checked)} />
+              Стичи{c.stitchDisabled && " (выключены в настройках аккаунта)"}
+            </label>
+          </div>
+
+          <label>Кадр для обложки, секунда видео</label>
+          <input type="text" inputMode="decimal" value={coverSec} onChange={(e) => setCoverSec(e.target.value)} style={{ maxWidth: 140 }} />
+          <p className="hint">TikTok берёт обложку только из кадра видео, свою картинку через API он не принимает.</p>
+
+          <label>Коммерческий контент</label>
+          <div className="tiktok-toggles">
+            <label className="check">
+              <input type="checkbox" checked={commercial} onChange={(e) => setCommercial(e.target.checked)} />
+              Видео продвигает бренд, товар или услугу
+            </label>
+            {commercial && (
+              <>
+                <label className="check" style={{ marginLeft: 22 }}>
+                  <input type="checkbox" checked={brandOrganic} onChange={(e) => setBrandOrganic(e.target.checked)} />
+                  Ваш бренд — вы продвигаете себя или свой бизнес
+                </label>
+                <label className="check" style={{ marginLeft: 22 }}>
+                  <input type="checkbox" checked={brandContent} onChange={(e) => setBrandContent(e.target.checked)} />
+                  Брендированный контент — вы продвигаете другой бренд или чужой продукт
+                </label>
+                {commercialIncomplete && <p className="hint">Отметьте хотя бы один вариант.</p>}
+                {(brandOrganic || brandContent) && (
+                  <p className="hint">
+                    На видео появится пометка «{brandContent ? "Платное партнёрство" : "Промо-контент"}».
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
+          <label className="check" style={{ marginTop: 14 }}>
+            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+            <span>{consentText}</span>
+          </label>
+
+          <div className="row" style={{ marginTop: 14 }}>
+            <button
+              className="btn"
+              disabled={!ready || busy}
+              onClick={() =>
+                onPublish({
+                  title: title.trim(),
+                  privacyLevel: privacy,
+                  allowComment,
+                  allowDuet,
+                  allowStitch,
+                  coverMs: Math.max(0, Math.round((Number(coverSec.replace(",", ".")) || 0) * 1000)),
+                  brandContent: commercial && brandContent,
+                  brandOrganic: commercial && brandOrganic,
+                  consent,
+                })
+              }
+            >
+              {busy ? <span className="spin" /> : "Опубликовать в TikTok"}
+            </button>
+            {!ready && <span className="hint">Нужны подпись, выбор видимости и согласие с правилами.</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ================== Шаг 4: Публикация ================== */
 
 function PublishStep({
@@ -723,6 +924,15 @@ function PublishStep({
     }
   }
 
+  const [tiktokScreen, setTiktokScreen] = useState<TikTokScreen | null>(null);
+  const [tiktokOpen, setTiktokOpen] = useState(false);
+  useEffect(() => {
+    fetch(`/api/projects/${project.id}/tiktok`)
+      .then((r) => r.json())
+      .then((j) => setTiktokScreen(j))
+      .catch(() => setTiktokScreen(null));
+  }, [project.id]);
+
   /** Подпись для TikTok: в черновики API её не передаёт, автор вставляет вручную. */
   async function copyCaption() {
     const meta = project?.meta;
@@ -739,7 +949,7 @@ function PublishStep({
     }
   }
 
-  async function publishTo(platform: string) {
+  async function publishTo(platform: string, extra: Record<string, unknown> = {}) {
     setBusy(platform);
     setError("");
     try {
@@ -747,7 +957,7 @@ function PublishStep({
       const res = await fetch(`/api/projects/${project.id}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform }),
+        body: JSON.stringify({ platform, ...extra }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error);
@@ -821,10 +1031,16 @@ function PublishStep({
                   {pub?.status === "error" && <span style={{ color: "var(--error)" }}>{pub.message}</span>}
                   {!pub && (connected[key] ? "Аккаунт подключён" : "Аккаунт не подключён — сработает демо-режим")}
                 </div>
-                <button className="btn btn-sm" onClick={() => publishTo(key)} disabled={busy !== null}>
-                  {busy === key ? <span className="spin" /> : pub ? "Опубликовать снова" : "Опубликовать"}
-                </button>
-                {key === "tiktok" && project.meta && (
+                {key === "tiktok" && tiktokScreen?.direct ? (
+                  <button className="btn btn-sm" onClick={() => setTiktokOpen((o) => !o)} disabled={busy !== null}>
+                    {tiktokOpen ? "Скрыть экран публикации" : pub ? "Опубликовать снова" : "Настроить и опубликовать"}
+                  </button>
+                ) : (
+                  <button className="btn btn-sm" onClick={() => publishTo(key)} disabled={busy !== null}>
+                    {busy === key ? <span className="spin" /> : pub ? "Опубликовать снова" : "Опубликовать"}
+                  </button>
+                )}
+                {key === "tiktok" && project.meta && !tiktokScreen?.direct && (
                   <button
                     className="btn btn-secondary btn-sm"
                     style={{ marginTop: 8 }}
@@ -838,6 +1054,17 @@ function PublishStep({
             );
           })}
         </div>
+        {tiktokOpen && tiktokScreen && (
+          <TikTokPanel
+            project={project}
+            screen={tiktokScreen}
+            busy={busy === "tiktok"}
+            onPublish={async (opts) => {
+              await publishTo("tiktok", { tiktok: opts });
+              setTiktokOpen(false);
+            }}
+          />
+        )}
         <div className="row" style={{ marginTop: 18 }}>
           <a className="btn btn-secondary" href={`/api/projects/${project.id}/video?which=processed`} download={`gudini-${project.id}.mp4`}>
             ⬇ Скачать готовое видео

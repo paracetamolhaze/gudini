@@ -790,47 +790,43 @@ label.check a {
   }
 }
 
-/* ===== Телесуфлёр: камера во весь экран, текст поверх ===== */
+/* ===== Телесуфлёр: один кадр 9:16 для просмотра и записи ===== */
 .tp {
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: #000;
+  background: #08090b;
+  display: flex;
+  flex-direction: column;
 }
 .tp-stage {
-  position: absolute;
-  inset: 0;
+  position: relative;
   display: flex;
+  flex: 1 1 0;
+  min-height: 0;
   justify-content: center;
   align-items: center;
   overflow: hidden;
 }
-/* рамка будущего ролика: всегда 9:16, вписана в экран целиком */
+/* ResizeObserver fits this frame BETWEEN controls, never underneath them. */
 .tp-frame {
   position: relative;
-  height: min(100%, calc(100vw * 16 / 9));
   aspect-ratio: 9 / 16;
-  max-width: 100%;
   overflow: hidden;
   background: #000;
+  flex: none;
 }
-.tp-video-bg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  filter: blur(22px) brightness(0.55) saturate(0.75);
-  transform: scale(1.12) scaleX(-1);
-}
-.tp-video {
+.tp-source,
+.tp-canvas,
+.tp-playback {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
-  transform: scaleX(-1);
 }
+.tp-source { object-fit: cover; }
+.tp-canvas { background: #000; }
 .tp-text {
   position: absolute;
   inset: 0;
@@ -839,49 +835,35 @@ label.check a {
   mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 62%, transparent 82%);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 62%, transparent 82%);
 }
-/* превью — ровно та вертикальная область, которая попадёт в ролик: на телефоне весь экран,
-   на компьютере вертикальный кадр по центру, как экран телефона */
 .tp-text-inner {
-  font-size: clamp(22px, 4.2vh, 40px);
+  font-size: clamp(20px, 3.4vh, 32px);
   line-height: 1.55;
   font-weight: 700;
   text-align: center;
   white-space: pre-wrap;
   color: #fff;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95), 0 0 24px rgba(0, 0, 0, 0.9);
-  /* текст начинается в верхней трети экрана — глаза остаются рядом с камерой */
-  padding: 30vh 6vw 60vh;
+  padding: 35% 6% 100%;
 }
 .tp-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
   display: flex;
+  flex: none;
   align-items: center;
+  justify-content: center;
   gap: 10px;
   flex-wrap: wrap;
   padding: 10px 14px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
-  z-index: 2;
+  background: #111216;
 }
-.tp-top {
-  top: 0;
-  padding-top: max(10px, env(safe-area-inset-top));
-}
-.tp-bottom {
-  bottom: 0;
-  justify-content: center;
-  padding-bottom: max(14px, env(safe-area-inset-bottom));
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0));
-}
+.tp-top { padding-top: max(10px, env(safe-area-inset-top)); }
+.tp-bottom { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
 .tp-rec {
   color: var(--error);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.tp-caminfo {
-  color: rgba(255, 255, 255, 0.7);
-}
+.tp-format { font-size: 12px; color: #d4d7e0; white-space: nowrap; }
+.tp-frame-note { width: 100%; margin: 0; text-align: center; color: var(--muted); font-size: 12px; }
 .tp-speed {
   display: flex;
   align-items: center;
@@ -890,33 +872,11 @@ label.check a {
   color: rgba(255, 255, 255, 0.8);
   font-size: 12px;
 }
-.tp-speed input {
-  width: 110px;
-}
-.tp-error {
-  position: absolute;
-  top: 70px;
-  left: 14px;
-  right: 14px;
-  z-index: 3;
-}
+.tp-speed input { width: 110px; }
+.tp-error { flex: none; margin: 6px 14px; }
 @media (max-width: 640px) {
-  .tp-speed span {
-    display: none;
-  }
-  .tp-speed input {
-    width: 80px;
-  }
-  .tp-caminfo {
-    display: none;
-  }
-  .tp-text-inner {
-    font-size: clamp(20px, 3.4vh, 28px);
-    padding: 22vh 5vw 60vh;
-  }
-  .tp-bottom .btn {
-    flex: 1 1 auto;
-    justify-content: center;
-  }
+  .tp-speed span { display: none; }
+  .tp-speed input { width: 80px; }
+  .tp-text-inner { font-size: clamp(18px, 3.4vh, 28px); }
+  .tp-bottom .btn { flex: 1 1 auto; justify-content: center; }
 }
-

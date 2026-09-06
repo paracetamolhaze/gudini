@@ -4,10 +4,10 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { runFfmpeg, probe } from "../lib/ffmpeg";
-import { renderPlan } from "../lib/pipeline";
+import { buildCleanSource, renderPlan } from "../lib/pipeline";
 import { checkRenderConformance, checkPointsFor } from "../lib/renderConformance";
 import { frameHash, hamming } from "../lib/sceneHash";
-import { CARD, CARD_FILTER, CARD_CROP, AUTHOR_CROP, INTRO_ZOOM } from "../lib/topInset";
+import { CARD, CARD_FILTER, CARD_CROP, AUTHOR_CROP } from "../lib/topInset";
 import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
 import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS, pickFrameForNeeds } from "../lib/storyAssetPack";
 import { packDistribution, montagePreflight } from "../lib/montageValidator";
@@ -18,7 +18,7 @@ import { densifyTimeline, chainTimeline, MontageEvent } from "../lib/creativeDir
  * Регрессия на НАСТОЯЩЕМ рендере, покадрово, без единого API-вызова.
  *
  * Верхняя карточка — всегда 900×506 на x=90, y=120; автор под ней виден; между
- * картинками нет пустого кадра; вступительный зум один. Каждое правило здесь
+ * картинками нет пустого кадра; границы записанного кадра сохраняются. Каждое правило здесь
  * появилось после реального провала, который тесты на функциях не ловили.
  */
 
@@ -131,27 +131,60 @@ test("1c: картинки сменяются встык, без пустого 
   }
 });
 
-test("1d: единственный вступительный зум, дальше масштаб стабилен", { timeout: 300_000 }, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-zoom-"));
+test("1d: края записи 9:16 сохраняются в рендере с чисткой и без неё на всём таймлайне", { timeout: 300_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-framing-"));
   try {
-    await fixture(dir);
-    await renderPlan(dir, path.join(dir, "aroll.mp4"), { version: 1, duration: 5, events: [], captionStyle: { ...DEFAULT_CAPTION_STYLE } }, 5, () => {});
-    const out = path.join(dir, "out.mp4");
-    // сравниваем угол кадра: при приближении он уходит за край, и вырезанный участок меняется
-    const corner = async (at: number) => {
-      const f = path.join(dir, `c-${at}.jpg`);
-      await runFfmpeg(["-ss", String(at), "-i", out, "-frames:v", "1", "-vf", "crop=200:200:0:0", f]);
-      return (await frameHash(f, dir))!;
+    const raw = path.join(dir, "aroll.mp4");
+    // Четыре разных маркера касаются краёв. Старый зум 1.055 полностью убирал
+    // их с экрана после 1.5 с; зеркало или дополнительный crop тоже меняют образцы.
+    const markers = [
+      { x: 0, y: 0, color: "red" },
+      { x: 1048, y: 0, color: "lime" },
+      { x: 0, y: 1888, color: "blue" },
+      { x: 1048, y: 1888, color: "yellow" },
+    ];
+    await runFfmpeg([
+      "-f", "lavfi", "-i", "color=c=gray:s=1080x1920:d=3.5:r=30",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=3.5",
+      "-vf", markers.map(({ x, y, color }) => `drawbox=x=${x}:y=${y}:w=32:h=32:color=${color}:t=fill`).join(","),
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-shortest", raw,
+    ]);
+    fs.writeFileSync(
+      path.join(dir, "subs.ass"),
+      "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+    );
+    const sampleMarkers = async (source: string, at: number) => {
+      const f = path.join(dir, "sample.rgb");
+      await runFfmpeg(["-ss", String(at), "-i", source, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", f]);
+      const pixels = fs.readFileSync(f);
+      assert.equal(pixels.length, 1080 * 1920 * 3, "кадр остался 1080×1920");
+      return markers.map(({ x, y }) => {
+        const rgb = [0, 0, 0];
+        // Середина цветной области: погрешность кодека на границе не влияет на тест.
+        for (let py = y + 8; py < y + 24; py++) {
+          for (let px = x + 8; px < x + 24; px++) {
+            const offset = (py * 1080 + px) * 3;
+            for (let channel = 0; channel < 3; channel++) rgb[channel] += pixels[offset + channel] / 256;
+          }
+        }
+        return rgb;
+      });
     };
-    const h0 = await corner(0.05);
-    const h1 = await corner(INTRO_ZOOM.seconds + 0.1);
-    assert.ok(hamming(h0, h1) > 0, "к концу вступления кадр приблизился");
-    assert.ok(INTRO_ZOOM.to >= 1.05 && INTRO_ZOOM.to <= 1.06, "масштаб 1.05–1.06");
-    assert.ok(INTRO_ZOOM.seconds >= 1.2 && INTRO_ZOOM.seconds <= 1.8, "длительность 1.2–1.8с");
-    const chain = fs.readFileSync("lib/pipeline.ts", "utf8");
-    const render = chain.slice(chain.indexOf("export async function renderPlan"), chain.indexOf("async function selfCheck"));
-    assert.equal((render.match(/introZoomFilter\(\)/g) ?? []).length, 1, "зум применён ровно один раз");
-    assert.ok(!/PUNCH_IN|zoompan|\[0:v\]split/.test(render), "старой архитектуры punch-in и второй ветки нет");
+    const reference = await sampleMarkers(raw, 0.1);
+    await buildCleanSource(dir, raw, [{ start: 0, end: 1 }, { start: 1.5, end: 3.5 }]);
+    for (const [source, duration] of [[raw, 3.5], [path.join(dir, "clean.mp4"), 3]] as const) {
+      await renderPlan(dir, source, { version: 1, duration, events: [], captionStyle: { ...DEFAULT_CAPTION_STYLE } }, duration, () => {});
+      for (const at of [0.1, 2.5]) {
+        const actual = await sampleMarkers(path.join(dir, "out.mp4"), at);
+        actual.forEach((rgb, corner) => rgb.forEach((value, channel) => {
+          assert.ok(
+            Math.abs(value - reference[corner][channel]) < 16,
+            `${path.basename(source)}, ${at}с: маркер ${corner}, канал ${channel} изменился — кадр обрезан, увеличен или отражён`,
+          );
+        }));
+      }
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

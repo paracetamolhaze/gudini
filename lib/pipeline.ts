@@ -19,7 +19,7 @@ import { fileFingerprint, textHash } from "./fileFingerprint";
 import { checkRenderConformance } from "./renderConformance";
 import { pauseCut } from "./speechCleanupPlan";
 import { buildAss } from "./subtitles";
-import { CARD, CARD_FILTER, introZoomFilter } from "./topInset";
+import { CARD, CARD_FILTER } from "./topInset";
 import { applyScriptFormatting } from "./scriptFormat";
 import { attachScriptPunctuation } from "./scriptPunctuation";
 import { generateMeta } from "./ai";
@@ -557,7 +557,7 @@ export async function buildCleanSource(
   );
 }
 
-/** Детерминированный рендер EditPlan: базовый кадр → punch-in → б-роллы → субтитры → callouts. */
+/** Детерминированный рендер EditPlan: базовый кадр → б-роллы → субтитры. */
 export async function renderPlan(
   dir: string,
   source: string,
@@ -571,13 +571,10 @@ export async function renderPlan(
   const src = await probe(path.isAbsolute(source) ? source : path.join(dir, source));
   const fit = authorFitFilter(src.displayWidth, src.displayHeight);
 
-  // A-roll проходит РОВНО один путь обработки: scale → crop → fps → вступительный зум.
-  // Никаких split/повторных scale поверх той же картинки: раньше punch-in накладывал
-  // пересканированную копию кадра, и на этих секундах заметно менялись цвет и контраст.
-  // Зум здесь — обрезка того же кадра, копии нет, цвет одинаковый до, во время и после.
-  let chain =
-    `[0:v]${fit},fps=30,` +
-    `${introZoomFilter()}[vbase]`;
+  // Запись телесуфлёра уже содержит выбранный пользователем кадр 9:16.
+  // Сохраняем его границы на всём таймлайне: никаких скрытых приближений после записи.
+  // Загрузки другого формата по-прежнему вписываются целиком через authorFitFilter.
+  let chain = `[0:v]${fit},fps=30[vbase]`;
   let current = "vbase";
 
   // Верхняя карточка — только неподвижная картинка, всегда одного размера и
@@ -666,4 +663,3 @@ async function selfCheck(dir: string, expectedDur: number, cutPoints: number[] =
     }
   }
 }
-

@@ -15,7 +15,7 @@ export type ProcessingState = {
 
 export type Publication = {
   platform: Platform;
-  status: "demo" | "published" | "error";
+  status: "demo" | "published" | "error" | "skipped";
   url?: string;
   message?: string;
   at: string;

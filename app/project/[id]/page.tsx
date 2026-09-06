@@ -926,6 +926,7 @@ function PublishStep({
 
   const [tiktokScreen, setTiktokScreen] = useState<TikTokScreen | null>(null);
   const [tiktokOpen, setTiktokOpen] = useState(false);
+  const [batchNote, setBatchNote] = useState("");
   useEffect(() => {
     fetch(`/api/projects/${project.id}/tiktok`)
       .then((r) => r.json())
@@ -969,6 +970,48 @@ function PublishStep({
     }
   }
 
+  /**
+   * Во все подключённые платформы по очереди. live: YouTube и Instagram сразу, TikTok через
+   * форму — TikTok требует, чтобы видимость выбрал сам автор. draft: YouTube приватным
+   * черновиком, TikTok в черновики приложения, Instagram пропускается (черновиков у API нет).
+   */
+  async function publishAll(mode: "live" | "draft") {
+    setBusy("all");
+    setError("");
+    setBatchNote("");
+    const notes: string[] = [];
+    try {
+      if (!(await saveMeta())) return;
+      for (const { key, name } of PLATFORMS) {
+        if (!connected[key]) {
+          notes.push(`${name}: не подключён, пропущен`);
+          continue;
+        }
+        if (key === "tiktok" && mode === "live" && tiktokScreen?.direct) {
+          notes.push("TikTok: откройте форму ниже, выберите видимость и опубликуйте");
+          setTiktokOpen(true);
+          continue;
+        }
+        const res = await fetch(`/api/projects/${project.id}/publish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform: key, mode }),
+        });
+        const j = await res.json();
+        const pub = j.publication;
+        if (!res.ok) notes.push(`${name}: ошибка — ${j.error}`);
+        else if (pub?.status === "published") notes.push(`${name}: готово`);
+        else notes.push(`${name}: ${pub?.message ?? pub?.status ?? "без ответа"}`);
+      }
+      await reload();
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setBatchNote(notes.join(" · "));
+      setBusy(null);
+    }
+  }
+
   if (!project.processedVideo) {
     return (
       <div className="card">
@@ -1007,6 +1050,19 @@ function PublishStep({
 
       <div className="card">
         <h2>🚀 Куда публикуем</h2>
+        <div className="row" style={{ marginBottom: 14 }}>
+          <button className="btn" onClick={() => publishAll("live")} disabled={busy !== null}>
+            {busy === "all" ? <span className="spin" /> : "🚀"} Опубликовать во все
+          </button>
+          <button className="btn btn-secondary" onClick={() => publishAll("draft")} disabled={busy !== null}>
+            {busy === "all" ? <span className="spin" /> : "📝"} Черновики во все — проверить сначала
+          </button>
+        </div>
+        <p className="hint" style={{ marginBottom: 12 }}>
+          «Во все»: YouTube в общий доступ, Instagram сразу, TikTok через форму ниже. «Черновики»: YouTube приватным
+          черновиком в Studio, TikTok в «Уведомления → Загрузки», Instagram пропускается — черновиков у него нет.
+        </p>
+        {batchNote && <div className="success-box">{batchNote}</div>}
         <div className="platform-grid">
           {PLATFORMS.map(({ key, name, icon }) => {
             const pub = project.publications.find((p) => p.platform === key);
@@ -1028,6 +1084,7 @@ function PublishStep({
                     </span>
                   )}
                   {pub?.status === "demo" && <span style={{ color: "var(--warn)" }}>{pub.message}</span>}
+                  {pub?.status === "skipped" && <span>{pub.message}</span>}
                   {pub?.status === "error" && <span style={{ color: "var(--error)" }}>{pub.message}</span>}
                   {!pub && (connected[key] ? "Аккаунт подключён" : "Аккаунт не подключён — сработает демо-режим")}
                 </div>

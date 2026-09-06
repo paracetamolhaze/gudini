@@ -17,7 +17,14 @@ export type TikTokPostOptions = {
   consent: boolean;
 };
 
-export type PublishOptions = { tiktok?: TikTokPostOptions };
+/**
+ * live — как настроено (YouTube по YOUTUBE_PRIVACY, TikTok по TIKTOK_DIRECT_POST, Instagram сразу);
+ * draft — «сначала проверить»: YouTube приватным черновиком, TikTok в черновики приложения,
+ * Instagram пропускается — черновиков у его API нет.
+ */
+export type PublishMode = "live" | "draft";
+
+export type PublishOptions = { tiktok?: TikTokPostOptions; mode?: PublishMode };
 
 /** Публикация на платформу. Без подключённого аккаунта — демо-режим (симуляция). */
 export async function publish(id: string, platform: Platform, options: PublishOptions = {}): Promise<Publication> {
@@ -32,11 +39,18 @@ export async function publish(id: string, platform: Platform, options: PublishOp
   const coverPath = project.cover ? path.join(projectDir(id), project.cover) : null;
   const coverMs = Math.round((project.coverOffsetSec ?? 1) * 1000);
 
+  const mode: PublishMode = options.mode === "draft" ? "draft" : "live";
   let result: PublishResult;
   try {
     if (platform === "youtube")
-      result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? [], coverPath);
-    else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description, coverMs, options.tiktok);
+      result = await publishYouTube(videoPath, title, description, project.meta?.hashtags ?? [], coverPath, mode);
+    else if (platform === "tiktok") result = await publishTikTok(videoPath, title, description, coverMs, options.tiktok, mode);
+    else if (mode === "draft")
+      result = {
+        platform,
+        status: "skipped",
+        message: "Черновиков в Instagram через API нет — в режиме проверки пропущен, публикуйте кнопкой «во все» или отдельной.",
+      };
     else result = await publishInstagram(id, title, description, coverMs, Boolean(coverPath && fs.existsSync(coverPath)));
   } catch (e: any) {
     result = { platform, status: "error", message: String(e?.message ?? e) };
@@ -91,6 +105,7 @@ async function publishYouTube(
   description: string,
   tags: string[],
   coverPath: string | null,
+  mode: PublishMode = "live",
 ): Promise<PublishResult> {
   const token = await youtubeAccessToken();
   if (!token) return demo("youtube", "аккаунт YouTube не подключён");
@@ -104,7 +119,7 @@ async function publishYouTube(
     },
     // YOUTUBE_PRIVACY=public — ролик выходит сразу; по умолчанию private: черновик, который
     // владелец канала проверяет и публикует из YouTube Studio
-    status: { privacyStatus: youtubePrivacy(), selfDeclaredMadeForKids: false },
+    status: { privacyStatus: mode === "draft" ? "private" : youtubePrivacy(), selfDeclaredMadeForKids: false },
   };
 
   const boundary = "gudini" + Date.now();
@@ -133,7 +148,7 @@ async function publishYouTube(
     coverPath && fs.existsSync(coverPath)
       ? await setYoutubeThumbnail(token, json.id, coverPath)
       : "Обложки нет — YouTube подставит кадр из видео.";
-  const privacy = youtubePrivacy();
+  const privacy = mode === "draft" ? "private" : youtubePrivacy();
   const how =
     privacy === "public"
       ? "Опубликовано на канале."
@@ -303,12 +318,14 @@ async function publishTikTok(
   description: string,
   coverMs: number,
   opts?: TikTokPostOptions,
+  mode: PublishMode = "live",
 ): Promise<PublishResult> {
   const token = await tiktokAccessToken();
   if (!token) return demo("tiktok", "аккаунт TikTok не подключён");
 
   const video = fs.readFileSync(videoPath);
-  const direct = tiktokDirectPostEnabled();
+  // режим проверки — всегда черновик в приложении, даже если включена прямая публикация
+  const direct = tiktokDirectPostEnabled() && mode !== "draft";
   // Правила TikTok для FILE_UPLOAD: кусок от 5 до 64 МБ; файл до 64 МБ — одним куском,
   // больше — кусками по 32 МБ, остаток уходит в последний кусок. Ролик 113 МБ одним
   // куском давал invalid_params «The chunk size is invalid».

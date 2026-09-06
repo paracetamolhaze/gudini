@@ -258,6 +258,36 @@ export async function tiktokCreatorInfo(): Promise<TikTokCreatorInfo | null> {
   };
 }
 
+const TIKTOK_CHUNK = 32 * 1024 * 1024;
+const TIKTOK_SINGLE_MAX = 64 * 1024 * 1024;
+
+/** Разбиение файла по правилам TikTok: до 64 МБ — один кусок, иначе куски по 32 МБ, остаток — в последний. */
+function tiktokChunkPlan(size: number): { chunkSize: number; count: number } {
+  if (size <= TIKTOK_SINGLE_MAX) return { chunkSize: size, count: 1 };
+  return { chunkSize: TIKTOK_CHUNK, count: Math.floor(size / TIKTOK_CHUNK) };
+}
+
+/** Последовательная отправка кусков на upload_url: промежуточные — 206, последний — 201. */
+async function tiktokUploadChunks(uploadUrl: string, video: Buffer, plan: { chunkSize: number; count: number }): Promise<void> {
+  for (let i = 0; i < plan.count; i++) {
+    const start = i * plan.chunkSize;
+    const end = i === plan.count - 1 ? video.length - 1 : start + plan.chunkSize - 1;
+    const chunk = video.subarray(start, end + 1);
+    const res = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "video/mp4",
+        "Content-Length": String(chunk.length),
+        "Content-Range": `bytes ${start}-${end}/${video.length}`,
+      },
+      body: new Uint8Array(chunk),
+    });
+    if (!res.ok) {
+      throw new Error(`TikTok upload: кусок ${i + 1} из ${plan.count} (${start}-${end}) отклонён: ${res.status} ${(await res.text()).slice(0, 200)}`);
+    }
+  }
+}
+
 /**
  * Два режима. Черновик (по умолчанию): ролик приезжает в «Уведомления → Загрузки»,
  * подпись и обложку автор выбирает сам в приложении; аудита не требует.
@@ -279,7 +309,16 @@ async function publishTikTok(
 
   const video = fs.readFileSync(videoPath);
   const direct = tiktokDirectPostEnabled();
-  const source_info = { source: "FILE_UPLOAD", video_size: video.length, chunk_size: video.length, total_chunk_count: 1 };
+  // Правила TikTok для FILE_UPLOAD: кусок от 5 до 64 МБ; файл до 64 МБ — одним куском,
+  // больше — кусками по 32 МБ, остаток уходит в последний кусок. Ролик 113 МБ одним
+  // куском давал invalid_params «The chunk size is invalid».
+  const plan = tiktokChunkPlan(video.length);
+  const source_info = {
+    source: "FILE_UPLOAD",
+    video_size: video.length,
+    chunk_size: plan.chunkSize,
+    total_chunk_count: plan.count,
+  };
 
   let privacy = "";
   let privacyNote = "";
@@ -333,15 +372,7 @@ async function publishTikTok(
   const uploadUrl = init?.data?.upload_url;
   if (!uploadUrl) throw new Error(`TikTok: ${JSON.stringify(init).slice(0, 300)}`);
 
-  const putRes = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "video/mp4",
-      "Content-Range": `bytes 0-${video.length - 1}/${video.length}`,
-    },
-    body: new Uint8Array(video),
-  });
-  if (!putRes.ok) throw new Error(`TikTok upload: ${putRes.status}`);
+  await tiktokUploadChunks(uploadUrl, video, plan);
 
   if (!direct) {
     return {

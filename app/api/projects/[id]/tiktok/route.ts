@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProject } from "@/lib/store";
-import { tiktokCreatorInfo, tiktokDirectPostEnabled } from "@/lib/publish";
+import { coverLeadSec, tiktokCreatorInfo, tiktokDirectPostEnabled } from "@/lib/publish";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -19,7 +19,8 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
     .filter(Boolean)
     .join("\n\n")
     .slice(0, 2200);
-  const coverSec = project.coverOffsetSec ?? 1;
+  // обложка вставляется первым кадром — превью с нулевой секунды и есть своя обложка
+  const coverSec = project.cover && coverLeadSec() > 0 ? 0 : (project.coverOffsetSec ?? 1);
   if (!direct) return NextResponse.json({ direct, connected: false, creator: null, caption, coverSec });
 
   try {

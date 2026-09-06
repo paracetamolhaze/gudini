@@ -795,7 +795,7 @@ function TikTokPanel({
 
           <label>Кадр для обложки, секунда видео</label>
           <input type="text" inputMode="decimal" value={coverSec} onChange={(e) => setCoverSec(e.target.value)} style={{ maxWidth: 140 }} />
-          <p className="hint">TikTok берёт обложку только из кадра видео, свою картинку через API он не принимает.</p>
+          <p className="hint">0 — ваша обложка: она стоит первым кадром ролика. Другое число — кадр из видео на этой секунде.</p>
 
           <label>Коммерческий контент</label>
           <div className="tiktok-toggles">

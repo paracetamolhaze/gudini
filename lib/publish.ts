@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { getProject, getSettings, projectDir, updateActiveTokens, Platform, Publication, updateProject } from "./store";
+import { runFfmpeg } from "./ffmpeg";
 
 export type PublishResult = Omit<Publication, "at">;
 
@@ -26,18 +27,64 @@ export type PublishMode = "live" | "draft";
 
 export type PublishOptions = { tiktok?: TikTokPostOptions; mode?: PublishMode };
 
+/**
+ * Обложка первым кадром. YouTube для Shorts и TikTok не показывают свою картинку, даже
+ * если API её принял: превью берётся из кадра видео. Поэтому для них публикуется копия
+ * ролика, где обложка стоит первым кадром на COVER_LEAD_SEC секунд (по умолчанию 0.2),
+ * и превью получается своей. Исходный монтаж не меняется; Instagram получает оригинал
+ * и обложку по ссылке. 0 выключает.
+ */
+export const coverLeadSec = (): number => {
+  const v = Number(process.env.COVER_LEAD_SEC ?? "0.2");
+  return Number.isFinite(v) && v > 0 ? Math.min(v, 2) : 0;
+};
+
+async function withCoverLead(dir: string, videoFile: string, coverFile: string | null): Promise<string> {
+  const lead = coverLeadSec();
+  if (!lead || !coverFile || !fs.existsSync(path.join(dir, coverFile))) return videoFile;
+  const src = path.join(dir, videoFile);
+  const out = "out-lead.mp4";
+  const stamp = [fs.statSync(src).size, fs.statSync(src).mtimeMs, fs.statSync(path.join(dir, coverFile)).mtimeMs, lead].join(":");
+  const stampFile = path.join(dir, out + ".stamp");
+  if (fs.existsSync(path.join(dir, out)) && fs.existsSync(stampFile) && fs.readFileSync(stampFile, "utf8") === stamp) return out;
+  await runFfmpeg(
+    [
+      "-loop", "1", "-framerate", "30", "-t", String(lead), "-i", coverFile,
+      "-i", videoFile,
+      "-f", "lavfi", "-t", String(lead), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+      "-filter_complex",
+      "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[c];" +
+        "[2:a]aformat=sample_rates=48000:channel_layouts=stereo[a0];" +
+        "[1:a]aformat=sample_rates=48000:channel_layouts=stereo[a1];" +
+        "[c][a0][1:v][a1]concat=n=2:v=1:a=1[v][a]",
+      "-map", "[v]", "-map", "[a]",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-r", "30", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+      out,
+    ],
+    { cwd: dir },
+  );
+  fs.writeFileSync(stampFile, stamp, "utf8");
+  return out;
+}
+
 /** Публикация на платформу. Без подключённого аккаунта — демо-режим (симуляция). */
 export async function publish(id: string, platform: Platform, options: PublishOptions = {}): Promise<Publication> {
   const project = getProject(id);
   if (!project?.processedVideo) throw new Error("Сначала смонтируйте видео");
-  const videoPath = path.join(projectDir(id), project.processedVideo);
+  const dir = projectDir(id);
+  // YouTube и TikTok — копия с обложкой первым кадром; Instagram — оригинал и обложка по ссылке
+  const videoFile = platform === "instagram" ? project.processedVideo : await withCoverLead(dir, project.processedVideo, project.cover ?? null);
+  const videoPath = path.join(dir, videoFile);
+  const leadUsed = videoFile !== project.processedVideo;
   const title = project.meta?.title ?? project.topic;
   const description = [project.meta?.description ?? "", (project.meta?.hashtags ?? []).join(" ")]
     .filter(Boolean)
     .join("\n\n");
 
   const coverPath = project.cover ? path.join(projectDir(id), project.cover) : null;
-  const coverMs = Math.round((project.coverOffsetSec ?? 1) * 1000);
+  // с обложкой первым кадром кадр превью — нулевой
+  const coverMs = leadUsed ? 0 : Math.round((project.coverOffsetSec ?? 1) * 1000);
 
   const mode: PublishMode = options.mode === "draft" ? "draft" : "live";
   let result: PublishResult;

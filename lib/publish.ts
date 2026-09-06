@@ -149,17 +149,16 @@ async function publishYouTube(
       ? await setYoutubeThumbnail(token, json.id, coverPath)
       : "Обложки нет — YouTube подставит кадр из видео.";
   const privacy = mode === "draft" ? "private" : youtubePrivacy();
-  const how =
-    privacy === "public"
-      ? "Опубликовано на канале."
-      : privacy === "unlisted"
-        ? "Залито по ссылке (unlisted) — откройте YouTube Studio и сделайте общедоступным."
-        : "Залито приватным черновиком — откройте YouTube Studio, проверьте и опубликуйте.";
+  // сообщение только о том, что не очевидно: черновик, доступ по ссылке, не принятая обложка
+  const notes = [
+    privacy === "private" ? "Черновик в YouTube Studio." : privacy === "unlisted" ? "Доступ по ссылке." : null,
+    coverNote.startsWith("ОБЛОЖКА НЕ ПРИМЕНЕНА") ? coverNote : null,
+  ].filter(Boolean);
   return {
     platform: "youtube",
     status: "published",
     url: `https://youtube.com/shorts/${json.id}`,
-    message: `${how} ${coverNote}`,
+    message: notes.length ? notes.join(" ") : undefined,
   };
 }
 
@@ -370,9 +369,8 @@ async function publishTikTok(
       source_info,
     };
     if (privacy === "SELF_ONLY" && info.privacyOptions.length === 1) {
-      privacyNote = " TikTok разрешил только «только я»: приложение ещё не прошло аудит Content Posting API.";
+      privacyNote = "Видимость «только я»: приложение ещё не прошло аудит TikTok.";
     }
-    if (info.maxDurationSec) privacyNote += ` Лимит длительности у аккаунта: ${info.maxDurationSec} с.`;
   }
 
   const initUrl = direct
@@ -402,11 +400,7 @@ async function publishTikTok(
   await tiktokUploadChunks(uploadUrl, video, plan);
 
   if (!direct) {
-    return {
-      platform: "tiktok",
-      status: "published",
-      message: "Залито в черновики TikTok — откройте приложение: Уведомления → Загрузки, там подпись и публикация.",
-    };
+    return { platform: "tiktok", status: "published", message: "Черновик в TikTok: Уведомления → Загрузки." };
   }
 
   // прямая публикация обрабатывается на стороне TikTok: ждём итог, чтобы не назвать упавшее опубликованным
@@ -426,15 +420,11 @@ async function publishTikTok(
     if (status === "PUBLISH_COMPLETE" || status === "FAILED") break;
   }
   if (status === "FAILED") throw new Error(`TikTok не опубликовал ролик: ${failReason || "причина не названа"}`);
-  const coverSec = ((opts?.coverMs ?? coverMs) / 1000).toFixed(1);
-  return {
-    platform: "tiktok",
-    status: "published",
-    message:
-      (status === "PUBLISH_COMPLETE"
-        ? `Опубликовано в TikTok с подписью и обложкой по кадру ${coverSec} с (видимость ${privacy}).`
-        : `Отправлено в TikTok, обработка ещё идёт (статус ${status}) — проверьте профиль через минуту.`) + privacyNote,
-  };
+  const notes = [
+    status === "PUBLISH_COMPLETE" ? null : `Обработка в TikTok ещё идёт (${status}) — проверьте профиль через минуту.`,
+    privacyNote || null,
+  ].filter(Boolean);
+  return { platform: "tiktok", status: "published", message: notes.length ? notes.join(" ") : undefined };
 }
 
 // ===== Instagram Reels (Graph API) =====
@@ -537,9 +527,16 @@ async function publishInstagram(
   });
   if (!pubRes.ok) throw new Error(`IG publish: ${(await pubRes.text()).slice(0, 300)}`);
   const pub: any = await pubRes.json();
+  // ссылка на сам Reels: Graph API отдаёт permalink по id опубликованного медиа
+  let url: string | undefined;
+  try {
+    const link: any = await (await fetch(`${graph}/v21.0/${pub.id}?fields=permalink&access_token=${token}`)).json();
+    if (typeof link?.permalink === "string") url = link.permalink;
+  } catch {}
   return {
     platform: "instagram",
     status: "published",
-    message: `Опубликовано (media id ${pub.id}). ${hasCover ? "Обложка своя." : "Обложки нет — взят кадр из видео."}`,
+    url,
+    message: hasCover ? undefined : "Обложки нет — взят кадр из видео.",
   };
 }

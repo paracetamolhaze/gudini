@@ -1029,7 +1029,7 @@ function PublishStep({
         <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveMeta} />
         <label>Описание</label>
         <textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} onBlur={saveMeta} />
-        <label>Хэштеги (через пробел)</label>
+        <label>Хэштеги</label>
         <input type="text" value={hashtags} onChange={(e) => setHashtags(e.target.value)} onBlur={saveMeta} />
         <div className="hashtags">
           {hashtags
@@ -1058,10 +1058,6 @@ function PublishStep({
             {busy === "all" ? <span className="spin" /> : "📝"} Отправить в черновики
           </button>
         </div>
-        <p className="hint" style={{ marginBottom: 12 }}>
-          «Во все»: YouTube в общий доступ, Instagram сразу, TikTok через форму ниже. «Черновики»: YouTube приватным
-          черновиком в Studio, TikTok в «Уведомления → Загрузки», Instagram пропускается — черновиков у него нет.
-        </p>
         {batchNote && <div className="success-box">{batchNote}</div>}
         <div className="platform-grid">
           {PLATFORMS.map(({ key, name, icon }) => {
@@ -1088,15 +1084,27 @@ function PublishStep({
                   {pub?.status === "error" && <span style={{ color: "var(--error)" }}>{pub.message}</span>}
                   {!pub && (connected[key] ? "Аккаунт подключён" : "Аккаунт не подключён — сработает демо-режим")}
                 </div>
-                {key === "tiktok" && tiktokScreen?.direct ? (
-                  <button className="btn btn-sm" onClick={() => setTiktokOpen((o) => !o)} disabled={busy !== null}>
-                    {tiktokOpen ? "Скрыть экран публикации" : pub ? "Опубликовать снова" : "Настроить и опубликовать"}
-                  </button>
-                ) : (
-                  <button className="btn btn-sm" onClick={() => publishTo(key)} disabled={busy !== null}>
-                    {busy === key ? <span className="spin" /> : pub ? "Опубликовать снова" : "Опубликовать"}
-                  </button>
-                )}
+                <div className="row" style={{ gap: 8 }}>
+                  {key === "tiktok" && tiktokScreen?.direct ? (
+                    <button className="btn btn-sm" onClick={() => setTiktokOpen((o) => !o)} disabled={busy !== null}>
+                      {tiktokOpen ? "Скрыть форму" : pub ? "Опубликовать снова" : "Опубликовать"}
+                    </button>
+                  ) : (
+                    <button className="btn btn-sm" onClick={() => publishTo(key)} disabled={busy !== null}>
+                      {busy === key ? <span className="spin" /> : pub ? "Опубликовать снова" : "Опубликовать"}
+                    </button>
+                  )}
+                  {key !== "instagram" && (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => publishTo(key, { mode: "draft" })}
+                      disabled={busy !== null}
+                      title={key === "youtube" ? "Приватный черновик в YouTube Studio" : "Черновик в TikTok: Уведомления → Загрузки"}
+                    >
+                      Черновик
+                    </button>
+                  )}
+                </div>
                 {key === "tiktok" && project.meta && !tiktokScreen?.direct && (
                   <button
                     className="btn btn-secondary btn-sm"
@@ -1131,7 +1139,6 @@ function PublishStep({
               ⬇ Обложка
             </a>
           )}
-          <span className="hint">Готовый MP4 можно опубликовать вручную из приложения платформы</span>
         </div>
       </div>
     </>

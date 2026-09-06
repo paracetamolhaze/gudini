@@ -12,6 +12,9 @@ export type ProbeInfo = {
   duration: number; // секунды
   width: number;
   height: number;
+  /** размеры, как кадр показывается: с учётом метаданных поворота (телефоны пишут 1920×1080 + rotate=90) */
+  displayWidth: number;
+  displayHeight: number;
   hasAudio: boolean;
   fps: number;
   audioDuration: number;
@@ -42,10 +45,16 @@ export async function probe(file: string): Promise<ProbeInfo> {
   if (!video) throw new Error("В файле не найден видеопоток");
   const fpsRaw = String(video.avg_frame_rate ?? video.r_frame_rate ?? "0/1");
   const [num, den] = fpsRaw.split("/").map(Number);
+  const rotation = Math.abs(
+    Number((video.side_data_list ?? []).find((d: any) => d?.rotation !== undefined)?.rotation ?? video.tags?.rotate ?? 0),
+  );
+  const rotated = rotation % 180 === 90;
   return {
     duration: parseFloat(json.format?.duration ?? video.duration ?? "0"),
     width: video.width,
     height: video.height,
+    displayWidth: rotated ? video.height : video.width,
+    displayHeight: rotated ? video.width : video.height,
     hasAudio: Boolean(audio),
     fps: den ? num / den : 0,
     audioDuration: audio ? parseFloat(audio.duration ?? json.format?.duration ?? "0") || 0 : 0,

@@ -233,7 +233,7 @@ export async function processProject(id: string): Promise<void> {
         [
           "-ss", String(segments[0].start), "-t", String(segments[0].end - segments[0].start),
           "-i", raw,
-          "-vf", CLEAN_SCALE,
+          "-vf", authorFitFilter(info.displayWidth, info.displayHeight),
           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
           "-c:a", "aac", "-b:a", "192k",
           "clean.mp4",
@@ -497,14 +497,32 @@ function keepRunLedger(dir: string, status: "done" | "failed"): void {
   } catch {}
 }
 
-/** Геометрия чистого файла: та же, что у выхода; для 1080p-исходника — без изменений. */
-const CLEAN_SCALE = "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920";
+/**
+ * Геометрия кадра автора: весь кадр целиком, никакой обрезки. Вертикальный исходник 9:16
+ * (телефон) просто масштабируется — 1:1 с тем, что снято. Любой другой (веб-камера,
+ * горизонтальная съёмка, 4:3) вписывается целиком, а поля заливаются размытой копией кадра —
+ * тот же приём, что у карточек в brollEntity. Раньше центр вырезался до 9:16, и веб-камера
+ * давала «зум ×3», которого автор в превью не видел.
+ */
+export function authorFitFilter(displayWidth: number, displayHeight: number): string {
+  const target = 1080 / 1920;
+  const ratio = displayWidth > 0 && displayHeight > 0 ? displayWidth / displayHeight : target;
+  if (Math.abs(ratio - target) / target < 0.02) return "scale=1080:1920:flags=lanczos,setsar=1";
+  return (
+    "split[fitbg][fitfg];" +
+    "[fitbg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=28,eq=brightness=-0.12:saturation=0.75[fitbgb];" +
+    "[fitfg]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos[fitfgs];" +
+    "[fitbgb][fitfgs]overlay=(W-w)/2:(H-h)/2,setsar=1"
+  );
+}
 
 export async function buildCleanSource(
   dir: string,
   raw: string,
   segments: { start: number; end: number }[],
 ): Promise<void> {
+  const src = await probe(path.isAbsolute(raw) ? raw : path.join(dir, raw));
+  const fit = authorFitFilter(src.displayWidth, src.displayHeight);
   const parts: string[] = [];
   const labels: string[] = [];
   segments.forEach((seg, i) => {
@@ -523,7 +541,7 @@ export async function buildCleanSource(
   // не отличается. Исходник raw.mp4 остаётся нетронутым.
   const graph =
     parts.join(";") +
-    `;${labels.join("")}concat=n=${segments.length}:v=1:a=1[vc][a];[vc]${CLEAN_SCALE}[v]`;
+    `;${labels.join("")}concat=n=${segments.length}:v=1:a=1[vc][a];[vc]${fit}[v]`;
 
   const total = segments.reduce((sum, s) => sum + (s.end - s.start), 0);
   await runFfmpeg(
@@ -549,13 +567,16 @@ export async function renderPlan(
 ): Promise<void> {
   const music = hasMusic();
   const brolls = plan.events.filter((e) => e.type === "B_ROLL" && e.file);
+  // источник — clean.mp4 (уже 1080×1920) или raw без склеек: в обоих случаях кадр целиком, без обрезки
+  const src = await probe(path.isAbsolute(source) ? source : path.join(dir, source));
+  const fit = authorFitFilter(src.displayWidth, src.displayHeight);
 
   // A-roll проходит РОВНО один путь обработки: scale → crop → fps → вступительный зум.
   // Никаких split/повторных scale поверх той же картинки: раньше punch-in накладывал
   // пересканированную копию кадра, и на этих секундах заметно менялись цвет и контраст.
   // Зум здесь — обрезка того же кадра, копии нет, цвет одинаковый до, во время и после.
   let chain =
-    `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,` +
+    `[0:v]${fit},fps=30,` +
     `${introZoomFilter()}[vbase]`;
   let current = "vbase";
 

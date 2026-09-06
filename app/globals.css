@@ -805,27 +805,42 @@ label.check a {
   align-items: center;
   overflow: hidden;
 }
-/* превью — ровно та вертикальная область, которая попадёт в ролик: на телефоне весь экран,
-   на компьютере вертикальный кадр по центру, как экран телефона */
-.tp-video {
+/* рамка будущего ролика: всегда 9:16, вписана в экран целиком */
+.tp-frame {
+  position: relative;
+  height: min(100%, calc(100vw * 16 / 9));
+  aspect-ratio: 9 / 16;
   max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+  overflow: hidden;
   background: #000;
+}
+.tp-video-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(22px) brightness(0.55) saturate(0.75);
+  transform: scale(1.12) scaleX(-1);
+}
+.tp-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   transform: scaleX(-1);
 }
 .tp-text {
   position: absolute;
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%);
-  width: min(100vw, calc(100vh * 9 / 16));
-  height: 100%;
+  inset: 0;
   overflow: hidden;
   pointer-events: none;
   mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 62%, transparent 82%);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 62%, transparent 82%);
 }
+/* превью — ровно та вертикальная область, которая попадёт в ролик: на телефоне весь экран,
+   на компьютере вертикальный кадр по центру, как экран телефона */
 .tp-text-inner {
   font-size: clamp(22px, 4.2vh, 40px);
   line-height: 1.55;

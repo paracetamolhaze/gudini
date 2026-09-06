@@ -333,6 +333,7 @@ function Teleprompter({
   onRecorded: (blob: Blob) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const bgRef = useRef<HTMLVideoElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -344,81 +345,99 @@ function Teleprompter({
   const speedRef = useRef(speed);
   speedRef.current = speed;
   const [camError, setCamError] = useState("");
-  const [camInfo, setCamInfo] = useState("");
   const [seconds, setSeconds] = useState(0);
+  /** реальные размеры кадра, как его показывает <video>: с учётом ориентации телефона */
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  const [camNote, setCamNote] = useState("");
 
   /**
-   * Камера: на телефоне просим вертикальный 1080×1920 — это родной формат ролика; на
-   * компьютере веб-камера всегда горизонтальная, просим максимум (4K, если умеет), а в
-   * ролик попадёт центральная вертикальная треть — она и показана на экране.
+   * Превью — это ровно будущий ролик: рамка 9:16, кадр камеры вписан целиком, поля —
+   * размытая копия кадра. Монтаж делает то же самое (authorFitFilter), обрезки нет нигде.
+   * Камера: на телефоне добиваемся вертикального кадра (три попытки, каждая после остановки
+   * предыдущего потока — iOS держит только одну камеру), размеры читаем с <video> после
+   * loadedmetadata, а не из настроек дорожки — iOS в них пишет размеры сенсора.
    */
   useEffect(() => {
     const mobile = navigator.maxTouchPoints > 1 || /iPhone|iPad|Android/i.test(navigator.userAgent);
-    const attempts: MediaStreamConstraints[] = mobile
+    const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    const attempts: MediaTrackConstraints[] = mobile
       ? [
-          { video: { facingMode: "user", width: { ideal: 1080 }, height: { ideal: 1920 }, frameRate: { ideal: 30 } }, audio: true },
-          { video: { facingMode: "user" }, audio: true },
+          { facingMode: "user", width: { ideal: 1080 }, height: { ideal: 1920 }, frameRate: { ideal: 30 } },
+          { facingMode: "user", aspectRatio: { ideal: 9 / 16 }, height: { ideal: 1920 } },
+          { facingMode: "user" },
         ]
       : [
-          { video: { facingMode: "user", width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } }, audio: true },
-          { video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: true },
-          { video: true, audio: true },
+          { facingMode: "user", width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } },
+          { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } },
+          {},
         ];
-    const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
     let cancelled = false;
-    const dims = (st: MediaStream) => {
-      const t = st.getVideoTracks()[0]?.getSettings();
-      return t?.width && t?.height ? { w: t.width, h: t.height } : null;
+
+    const stopCurrent = () => {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
     };
+    const attach = (stream: MediaStream): Promise<{ w: number; h: number }> =>
+      new Promise((resolve) => {
+        const v = videoRef.current;
+        if (!v) return resolve({ w: 0, h: 0 });
+        const done = () => resolve({ w: v.videoWidth, h: v.videoHeight });
+        v.onloadedmetadata = done;
+        v.srcObject = stream;
+        if (bgRef.current) bgRef.current.srcObject = stream;
+        if (v.readyState >= 1 && v.videoWidth) done();
+        setTimeout(done, 2500); // страховка: iOS иногда не шлёт событие
+      });
+
     (async () => {
-      let stream: MediaStream | null = null;
       let lastErr: any = null;
+      let got: { w: number; h: number } | null = null;
       for (const c of attempts) {
+        stopCurrent();
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ ...c, audio });
-          break;
+          const stream = await navigator.mediaDevices.getUserMedia({ video: c, audio });
+          if (cancelled) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          streamRef.current = stream;
+          got = await attach(stream);
+          // на телефоне добиваемся вертикального кадра; на компьютере берём первый удавшийся
+          if (!mobile || (got.w > 0 && got.h > got.w)) break;
         } catch (e) {
           lastErr = e;
         }
       }
-      // телефон отдал горизонтальный поток — просим вертикальный ещё раз через aspectRatio:
-      // иначе в ролик попадёт только треть кадра, и лицо выглядит как при зуме ×3
-      if (mobile && stream) {
-        const d = dims(stream);
-        if (d && d.w > d.h) {
-          for (const c of [
-            { video: { facingMode: "user", aspectRatio: { ideal: 9 / 16 }, height: { ideal: 1920 } }, audio },
-            { video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 9 / 16 } }, audio },
-          ] as MediaStreamConstraints[]) {
-            try {
-              const retry = await navigator.mediaDevices.getUserMedia(c);
-              const rd = dims(retry);
-              if (rd && rd.h > rd.w) {
-                stream.getTracks().forEach((t) => t.stop());
-                stream = retry;
-                break;
-              }
-              retry.getTracks().forEach((t) => t.stop());
-            } catch {}
-          }
-        }
-      }
-      if (cancelled) {
-        stream?.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      if (!stream) {
+      if (cancelled) return;
+      if (!streamRef.current) {
         setCamError(`Камера недоступна: ${String(lastErr?.message ?? lastErr)}. Можно загрузить файл, снятый на телефон.`);
         return;
       }
-      streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
-      const d = dims(stream);
-      if (d) setCamInfo(`камера ${d.w}×${d.h}`);
+      const d = got && got.w > 0 ? got : null;
+      setDims(d);
+      if (!d) setCamNote("камера открыта, размер кадра не определён");
+      else if (d.h > d.w) setCamNote(`камера ${d.w}×${d.h}, в ролик 1:1`);
+      else setCamNote(mobile ? `камера отдала горизонтальный кадр ${d.w}×${d.h} — держите телефон вертикально; в ролик войдёт весь кадр` : `камера ${d.w}×${d.h}: в ролик целиком, по краям размытый фон`);
     })();
+
+    // поворот телефона меняет ориентацию потока — перечитываем размеры
+    const onTurn = () => {
+      setTimeout(() => {
+        const v = videoRef.current;
+        if (v && v.videoWidth) {
+          const d = { w: v.videoWidth, h: v.videoHeight };
+          setDims(d);
+          setCamNote(d.h > d.w ? `камера ${d.w}×${d.h}, в ролик 1:1` : `горизонтальный кадр ${d.w}×${d.h} — держите телефон вертикально`);
+        }
+      }, 400);
+    };
+    window.addEventListener("orientationchange", onTurn);
+    window.addEventListener("resize", onTurn);
     return () => {
       cancelled = true;
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+      window.removeEventListener("orientationchange", onTurn);
+      window.removeEventListener("resize", onTurn);
+      stopCurrent();
       cancelAnimationFrame(scrollRef.current.raf);
     };
   }, []);
@@ -455,8 +474,7 @@ function Teleprompter({
     const mime = ["video/webm;codecs=h264,opus", "video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"].find(
       (m) => MediaRecorder.isTypeSupported(m),
     );
-    const st = stream.getVideoTracks()[0]?.getSettings();
-    const pixels = (st?.width ?? 1920) * (st?.height ?? 1080);
+    const pixels = (dims?.w ?? 1920) * (dims?.h ?? 1080);
     // 12 Мбит/с для 1080p, 30 — для 4K: запас под перекодирование в 1080×1920 без «мыла»
     const bitrate = pixels > 1920 * 1080 * 1.5 ? 30_000_000 : 12_000_000;
     const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate, audioBitsPerSecond: 192_000 });
@@ -483,11 +501,14 @@ function Teleprompter({
   return (
     <div className="tp">
       <div className="tp-stage">
-        {/* весь кадр камеры целиком — как в обычной камере; зеркало для селфи, в запись идёт незеркальный кадр */}
-        <video ref={videoRef} className="tp-video" autoPlay muted playsInline />
-        <div className="tp-text">
-          <div className="tp-text-inner" ref={textRef}>
-            {script || "Сценарий пуст — вернись на шаг 1"}
+        {/* рамка 9:16 = будущий ролик; фон — размытая копия кадра, как в монтаже; зеркало только для селфи-превью */}
+        <div className="tp-frame">
+          <video ref={bgRef} className="tp-video-bg" autoPlay muted playsInline aria-hidden />
+          <video ref={videoRef} className="tp-video" autoPlay muted playsInline />
+          <div className="tp-text">
+            <div className="tp-text-inner" ref={textRef}>
+              {script || "Сценарий пуст — вернись на шаг 1"}
+            </div>
           </div>
         </div>
       </div>
@@ -503,7 +524,7 @@ function Teleprompter({
             "Готов к записи"
           )}
         </span>
-        {camInfo && <span className="hint tp-caminfo">{camInfo}</span>}
+        {camNote && <span className="hint tp-caminfo">{camNote}</span>}
         <span className="spacer" />
         <label className="tp-speed">
           <span>Скорость</span>
@@ -528,7 +549,7 @@ function Teleprompter({
       <div className="tp-bar tp-bottom">
         {!recording ? (
           <>
-            <button className="btn" onClick={start} disabled={!streamRef.current && !camError}>
+            <button className="btn" onClick={start} disabled={!streamRef.current || !dims}>
               ⏺ Начать запись
             </button>
             <button className="btn btn-secondary" onClick={onClose}>

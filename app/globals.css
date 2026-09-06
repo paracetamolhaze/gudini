@@ -319,51 +319,7 @@ label {
   background: rgba(139, 92, 246, 0.05);
 }
 
-/* ===== Телесуфлёр ===== */
-.teleprompter-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(5, 5, 10, 0.97);
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  padding: 20px;
-}
-
-.teleprompter-text {
-  flex: 1;
-  overflow: hidden;
-  position: relative;
-  max-width: 700px;
-  margin: 0 auto;
-  width: 100%;
-  mask-image: linear-gradient(to bottom, transparent, #000 15%, #000 85%, transparent);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 15%, #000 85%, transparent);
-}
-
-.teleprompter-inner {
-  font-size: 34px;
-  line-height: 1.7;
-  font-weight: 600;
-  text-align: center;
-  white-space: pre-wrap;
-  padding: 45vh 10px;
-}
-
-.camera-pip {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  width: 180px;
-  aspect-ratio: 9 / 16;
-  border-radius: 12px;
-  object-fit: cover;
-  border: 2px solid var(--accent);
-  z-index: 101;
-  background: #000;
-}
-
-.rec-dot {
+/* ===== Телесуфлёр ===== */.rec-dot {
   display: inline-block;
   width: 10px;
   height: 10px;
@@ -676,10 +632,6 @@ button,
   padding-right: max(20px, env(safe-area-inset-right));
   padding-bottom: calc(80px + env(safe-area-inset-bottom));
 }
-.teleprompter-overlay {
-  padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom))
-    max(20px, env(safe-area-inset-left));
-}
 .project-title {
   font-size: 22px;
   margin-bottom: 4px;
@@ -766,16 +718,6 @@ button,
   .dropzone {
     padding: 26px 14px;
   }
-  .teleprompter-inner {
-    font-size: 24px;
-    line-height: 1.6;
-    padding: 42vh 4px;
-  }
-  .camera-pip {
-    width: 104px;
-    right: 10px;
-    bottom: calc(10px + env(safe-area-inset-bottom));
-  }
   .platform-grid {
     grid-template-columns: 1fr;
   }
@@ -845,5 +787,121 @@ label.check a {
   }
   .tiktok-grid .video-preview {
     max-width: min(220px, 60vw);
+  }
+}
+
+/* ===== Телесуфлёр: камера во весь экран, текст поверх ===== */
+.tp {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #000;
+}
+.tp-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+/* превью — ровно та вертикальная область, которая попадёт в ролик: на телефоне весь экран,
+   на компьютере вертикальный кадр по центру, как экран телефона */
+.tp-video {
+  height: 100%;
+  aspect-ratio: 9 / 16;
+  max-width: 100%;
+  object-fit: cover;
+  background: #000;
+  transform: scaleX(-1);
+}
+.tp-text {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  width: min(100vw, calc(100vh * 9 / 16));
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 62%, transparent 82%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 62%, transparent 82%);
+}
+.tp-text-inner {
+  font-size: clamp(22px, 4.2vh, 40px);
+  line-height: 1.55;
+  font-weight: 700;
+  text-align: center;
+  white-space: pre-wrap;
+  color: #fff;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95), 0 0 24px rgba(0, 0, 0, 0.9);
+  /* текст начинается в верхней трети экрана — глаза остаются рядом с камерой */
+  padding: 30vh 6vw 60vh;
+}
+.tp-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+  z-index: 2;
+}
+.tp-top {
+  top: 0;
+  padding-top: max(10px, env(safe-area-inset-top));
+}
+.tp-bottom {
+  bottom: 0;
+  justify-content: center;
+  padding-bottom: max(14px, env(safe-area-inset-bottom));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0));
+}
+.tp-rec {
+  color: var(--error);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.tp-caminfo {
+  color: rgba(255, 255, 255, 0.7);
+}
+.tp-speed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+}
+.tp-speed input {
+  width: 110px;
+}
+.tp-error {
+  position: absolute;
+  top: 70px;
+  left: 14px;
+  right: 14px;
+  z-index: 3;
+}
+@media (max-width: 640px) {
+  .tp-speed span {
+    display: none;
+  }
+  .tp-speed input {
+    width: 80px;
+  }
+  .tp-caminfo {
+    display: none;
+  }
+  .tp-text-inner {
+    font-size: clamp(20px, 3.4vh, 28px);
+    padding: 22vh 5vw 60vh;
+  }
+  .tp-bottom .btn {
+    flex: 1 1 auto;
+    justify-content: center;
   }
 }

@@ -18,9 +18,7 @@ export async function GET(req: NextRequest, { params }: Ctx) {
     url.searchParams.set("client_id", s.googleClientId);
     url.searchParams.set("redirect_uri", redirect);
     url.searchParams.set("response_type", "code");
-    // readonly — чтобы дождаться конца обработки ролика и поставить обложку после неё:
-    // поставленная во время обработки обложка у Shorts затирается автокадром
-    url.searchParams.set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly");
+    url.searchParams.set("scope", "https://www.googleapis.com/auth/youtube.upload");
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "consent");
     return NextResponse.redirect(url);

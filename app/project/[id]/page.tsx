@@ -344,19 +344,58 @@ function Teleprompter({
   const speedRef = useRef(speed);
   speedRef.current = speed;
   const [camError, setCamError] = useState("");
+  const [camInfo, setCamInfo] = useState("");
+  const [seconds, setSeconds] = useState(0);
 
+  /**
+   * Камера: на телефоне просим вертикальный 1080×1920 — это родной формат ролика; на
+   * компьютере веб-камера всегда горизонтальная, просим максимум (4K, если умеет), а в
+   * ролик попадёт центральная вертикальная треть — она и показана на экране.
+   */
   useEffect(() => {
-    navigator.mediaDevices
-      .getUserMedia({
-        video: { width: { ideal: 1080 }, height: { ideal: 1920 }, facingMode: "user" },
-        audio: { echoCancellation: true, noiseSuppression: true },
-      })
-      .then((stream) => {
-        streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
-      })
-      .catch((e) => setCamError(`Камера недоступна: ${e.message}. Можно загрузить файл, снятый на телефон.`));
+    const mobile = navigator.maxTouchPoints > 1 || /iPhone|iPad|Android/i.test(navigator.userAgent);
+    const attempts: MediaStreamConstraints[] = mobile
+      ? [
+          { video: { facingMode: "user", width: { ideal: 1080 }, height: { ideal: 1920 }, frameRate: { ideal: 30 } }, audio: true },
+          { video: { facingMode: "user" }, audio: true },
+        ]
+      : [
+          { video: { facingMode: "user", width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } }, audio: true },
+          { video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: true },
+          { video: true, audio: true },
+        ];
+    const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    let cancelled = false;
+    (async () => {
+      let stream: MediaStream | null = null;
+      let lastErr: any = null;
+      for (const c of attempts) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ ...c, audio });
+          break;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      if (cancelled) {
+        stream?.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      if (!stream) {
+        setCamError(`Камера недоступна: ${String(lastErr?.message ?? lastErr)}. Можно загрузить файл, снятый на телефон.`);
+        return;
+      }
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      const st = stream.getVideoTracks()[0]?.getSettings();
+      if (st?.width && st?.height) {
+        const portrait = st.height >= st.width;
+        const kept = portrait ? `${st.width}×${st.height}` : `${Math.round((st.height * 9) / 16)}×${st.height} из ${st.width}×${st.height}`;
+        setCamInfo(portrait ? `камера ${kept}` : `в кадр попадёт центр: ${kept}`);
+      }
+    })();
     return () => {
+      cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       cancelAnimationFrame(scrollRef.current.raf);
     };
@@ -379,14 +418,26 @@ function Teleprompter({
     return () => cancelAnimationFrame(scrollRef.current.raf);
   }, [scrolling]);
 
+  useEffect(() => {
+    if (!recording) return;
+    const t0 = Date.now();
+    const id = setInterval(() => setSeconds(Math.floor((Date.now() - t0) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [recording]);
+
   function start() {
     const stream = streamRef.current;
     if (!stream) return;
     chunksRef.current = [];
-    const mime = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"].find((m) =>
-      MediaRecorder.isTypeSupported(m),
+    // H.264 там, где браузер умеет (Chrome, Safari): меньше потерь при перекодировании в монтаже
+    const mime = ["video/webm;codecs=h264,opus", "video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"].find(
+      (m) => MediaRecorder.isTypeSupported(m),
     );
-    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5_000_000 });
+    const st = stream.getVideoTracks()[0]?.getSettings();
+    const pixels = (st?.width ?? 1920) * (st?.height ?? 1080);
+    // 12 Мбит/с для 1080p, 30 — для 4K: запас под перекодирование в 1080×1920 без «мыла»
+    const bitrate = pixels > 1920 * 1080 * 1.5 ? 30_000_000 : 12_000_000;
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate, audioBitsPerSecond: 192_000 });
     recorder.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
     recorder.onstop = () => {
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "video/webm" });
@@ -394,6 +445,7 @@ function Teleprompter({
     };
     recorder.start(1000);
     recorderRef.current = recorder;
+    setSeconds(0);
     setRecording(true);
     setScrolling(true);
   }
@@ -404,29 +456,39 @@ function Teleprompter({
     recorderRef.current?.stop();
   }
 
+  const mmss = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+
   return (
-    <div className="teleprompter-overlay">
-      <div className="row" style={{ maxWidth: 700, margin: "0 auto", width: "100%" }}>
-        {recording ? (
-          <span>
-            <span className="rec-dot" />
-            ЗАПИСЬ
-          </span>
-        ) : (
-          <span className="hint">Готов к записи</span>
-        )}
-        <div className="spacer" />
-        <label style={{ margin: 0 }}>Скорость</label>
-        <input
-          type="range"
-          min={20}
-          max={120}
-          value={speed}
-          onChange={(e) => setSpeed(Number(e.target.value))}
-          style={{ width: 120 }}
-        />
-        <button className="btn btn-secondary btn-sm" onClick={() => setScrolling((s) => !s)}>
-          {scrolling ? "⏸ Пауза текста" : "▶ Текст"}
+    <div className="tp">
+      <div className="tp-stage">
+        {/* зеркало — как в селфи-камере; в запись идёт незеркальный кадр */}
+        <video ref={videoRef} className="tp-video" autoPlay muted playsInline />
+        <div className="tp-text">
+          <div className="tp-text-inner" ref={textRef}>
+            {script || "Сценарий пуст — вернись на шаг 1"}
+          </div>
+        </div>
+      </div>
+
+      <div className="tp-bar tp-top">
+        <span className={recording ? "tp-rec" : "hint"}>
+          {recording ? (
+            <>
+              <span className="rec-dot" />
+              {mmss}
+            </>
+          ) : (
+            "Готов к записи"
+          )}
+        </span>
+        {camInfo && <span className="hint tp-caminfo">{camInfo}</span>}
+        <span className="spacer" />
+        <label className="tp-speed">
+          <span>Скорость</span>
+          <input type="range" min={20} max={120} value={speed} onChange={(e) => setSpeed(Number(e.target.value))} />
+        </label>
+        <button className="btn btn-secondary btn-sm" onClick={() => setScrolling((v) => !v)}>
+          {scrolling ? "⏸ Текст" : "▶ Текст"}
         </button>
         <button
           className="btn btn-secondary btn-sm"
@@ -435,21 +497,13 @@ function Teleprompter({
             if (textRef.current) textRef.current.style.transform = "translateY(0)";
           }}
         >
-          ⏮ Сначала
+          ⏮
         </button>
       </div>
 
-      {camError && <div className="error-box">{camError}</div>}
+      {camError && <div className="error-box tp-error">{camError}</div>}
 
-      <div className="teleprompter-text">
-        <div className="teleprompter-inner" ref={textRef}>
-          {script || "Сценарий пуст — вернись на шаг 1"}
-        </div>
-      </div>
-
-      <video ref={videoRef} className="camera-pip" autoPlay muted playsInline />
-
-      <div className="row" style={{ justifyContent: "center", paddingBottom: 8 }}>
+      <div className="tp-bar tp-bottom">
         {!recording ? (
           <>
             <button className="btn" onClick={start} disabled={!streamRef.current && !camError}>

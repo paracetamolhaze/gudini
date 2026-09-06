@@ -581,12 +581,16 @@ export async function renderPlan(
 
   chain += `;[${current}]ass=subs.ass[v]`;
 
+  // Голос: лёгкое подавление шума до выравнивания громкости (loudnorm поднимает тихую
+  // запись на 10–15 дБ и вместе с ней шум комнаты), затем возврат к 48 кГц — loudnorm
+  // отдаёт 192 кГц, и без aresample ролик кодировался в AAC 96 кГц с шипением.
+  const voice = "afftdn=nr=10:nf=-45:tn=1,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000";
   const audioChain = music
-    ? `[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[vo];` +
-      `[1:a]volume=0.22[mus];` +
+    ? `[0:a]${voice}[vo];` +
+      `[1:a]volume=0.22,aresample=48000[mus];` +
       `[mus][vo]sidechaincompress=threshold=0.05:ratio=12:attack=20:release=500[duck];` +
       `[vo][duck]amix=inputs=2:duration=first:normalize=0[a]`
-    : `[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[a]`;
+    : `[0:a]${voice}[a]`;
 
   await runFfmpeg(
     [
@@ -600,7 +604,7 @@ export async function renderPlan(
       // CRF 18 / medium вместо 21 / veryfast: ~8–9 Мбит/с на 1080×1920 — запас под
       // пережатие площадками; рендер дольше на десятки секунд, денег не стоит
       "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-      "-c:a", "aac", "-b:a", "192k",
+      "-c:a", "aac", "-ar", "48000", "-b:a", "192k",
       "-movflags", "+faststart",
       ...(music ? ["-shortest"] : []),
       "out.mp4",

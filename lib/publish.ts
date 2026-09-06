@@ -366,7 +366,17 @@ async function publishTikTok(
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!initRes.ok) throw new Error(`TikTok init: ${initRes.status} ${(await initRes.text()).slice(0, 300)}`);
+  if (!initRes.ok) {
+    const text = await initRes.text();
+    // до аудита TikTok публикует только в приватный аккаунт — это настройка аккаунта, не сайта
+    if (/unaudited_client_can_only_post_to_private_accounts/.test(text)) {
+      throw new Error(
+        "TikTok: пока приложение не прошло аудит, публиковать можно только в приватный аккаунт. " +
+          "В приложении TikTok: Настройки и конфиденциальность → Конфиденциальность → «Приватный аккаунт», затем повторите.",
+      );
+    }
+    throw new Error(`TikTok init: ${initRes.status} ${text.slice(0, 300)}`);
+  }
 
   const init: any = await initRes.json();
   const uploadUrl = init?.data?.upload_url;

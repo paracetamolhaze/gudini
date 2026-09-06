@@ -93,3 +93,24 @@ https://gudinijr.duckdns.org/api/auth/instagram/callback
 6. TikTok: подать приложение на аудит Content Posting API; до одобрения ролики идут как SELF_ONLY.
 7. Проверить на одном ролике: кнопка «Опубликовать» на шаге 4 для каждой платформы; сообщение под
    кнопкой говорит, что именно ушло, а чего платформа не приняла.
+
+## 4. Уточнения после переезда (6 сентября)
+
+- **Google, секрет клиента.** Консоль больше не показывает Client secret. Если он не сохранён,
+  на странице клиента нажмите «Add secret», скопируйте новый и впишите на сайте.
+- **Google, публикация приложения.** Кнопка «Publish app» неактивна, пока не заполнен Branding:
+  https://console.cloud.google.com/auth/branding — имя приложения, e-mail поддержки, контакт
+  разработчика. Потом https://console.cloud.google.com/auth/audience → «Publish app».
+- **Meta, форма Business login settings** не сохраняется без двух служебных адресов, они есть на сайте:
+  ```
+  Deauthorize callback URL:   https://gudinijr.duckdns.org/api/auth/instagram/deauthorize
+  Data deletion request URL:  https://gudinijr.duckdns.org/api/auth/instagram/data-deletion
+  ```
+  Instagram App ID и Instagram App Secret берутся со страницы «API setup with Instagram business
+  login», а не из Settings → Basic (там ID и секрет приложения Meta для запасного входа через Facebook).
+  В Settings → Basic адреса политики и соглашения: `https://gudinijr.duckdns.org/privacy` и
+  `https://gudinijr.duckdns.org/terms`, старые адреса Railway убрать.
+- **TikTok.** В Sandbox после правок нажмите «Apply changes» вверху справа. Адреса Terms of Service и
+  Privacy Policy заменить на `https://gudinijr.duckdns.org/terms` и `https://gudinijr.duckdns.org/privacy`.
+  Sandbox публикует только для аккаунтов из «Target users» и только с видимостью «только я»;
+  для настоящих публикаций те же настройки нужно повторить во вкладке Production и подать на аудит.

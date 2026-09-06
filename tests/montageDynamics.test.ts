@@ -22,7 +22,8 @@ test("1: звук перебивок никогда не попадает в р�
   assert.ok(!brollBlock.includes(":a]"), "звук перебивки не подключается вообще");
 
   // голос — из исходника; вторая аудиодорожка допустима только для фоновой музыки
-  assert.ok(render.includes("[0:a]loudnorm"), "голос автора берётся из исходника");
+  // голос из исходника проходит шумоподавление и loudnorm (цепочка вынесена в переменную voice)
+  assert.ok(/\[0:a\](\$\{voice\}|loudnorm)/.test(render) && render.includes("loudnorm=I=-16"), "голос автора берётся из исходника");
   const audio = render.slice(render.indexOf("const audioChain"), render.indexOf("await runFfmpeg"));
   const audioRefs = [...audio.matchAll(/\[(\d+):a\]/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(audioRefs)].sort(), ["0", "1"], "только голос и музыка");

@@ -1,7 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE, getSettings } from "./store";
-import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences, detectBlackNear, type ProbeInfo } from "./ffmpeg";
+import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences, detectBlackNear, measureRmsWindows, type ProbeInfo } from "./ffmpeg";
+import { analyzeLevel, levelGateError, analysisGainDb, transcriptGateError } from "./speechGate";
 import {
   edgesFromSilences,
   mechanicalCuts,
@@ -99,6 +100,28 @@ export async function processProject(id: string): Promise<void> {
     setStep(id, "Анализ звука", 6);
     await extractAudio(raw, "audio_full.wav", dir);
     const duration = (await probeDuration(path.join(dir, "audio_full.wav"))) || info.duration;
+
+    // --- Ворота 1 (бесплатно): уровень записи. Запись с телесуфлёра на iPhone пришла
+    // на −57 дБ, и конвейер узнал об этом только в режиссёре монтажа — после $1.19
+    // исследования, медиатеки и визуальной проверки. Почти беззвучная запись
+    // останавливается здесь; просто тихая — анализируется по усиленной копии звука
+    // (детектор тишины и распознавание рассчитаны на обычный уровень; итоговый
+    // рендер берёт звук из исходника и выравнивает его loudnorm как раньше).
+    const rmsWindows = await measureRmsWindows("audio_full.wav", dir);
+    const level = analyzeLevel(rmsWindows);
+    if (rmsWindows.length) {
+      console.log(`Уровень записи: ${level.loudestDb.toFixed(1)} дБ, активного звука ${level.activeSeconds} с из ${duration.toFixed(0)}, последний звук на ${level.lastActiveAt} с`);
+      const levelError = levelGateError(level);
+      if (levelError) throw new Error(levelError);
+      const gain = analysisGainDb(level);
+      if (gain > 0) {
+        console.warn(`Запись тихая (${level.loudestDb.toFixed(0)} дБ): звук для анализа усилен на ${gain} дБ`);
+        await runFfmpeg(["-i", "audio_full.wav", "-af", `volume=${gain}dB`, "-c:a", "pcm_s16le", "audio_full_boost.wav"], { cwd: dir });
+        fs.renameSync(path.join(dir, "audio_full_boost.wav"), path.join(dir, "audio_full.wav"));
+      }
+    } else {
+      console.warn("Уровень записи не измерен (ffmpeg astats): проверка пропущена");
+    }
     const silences = await detectSilences("audio_full.wav", dir, duration);
     const edges = edgesFromSilences(silences, duration);
 
@@ -193,6 +216,15 @@ export async function processProject(id: string): Promise<void> {
         cost: (AUDIO_PRICES[asrModel] ?? 0) * (duration / 60),
         estimated: true,
       });
+    }
+
+    // --- Ворота 2 (бесплатно): распознанной речи должно хватать на сценарий. Иначе
+    // чистка речи, биты, медиатека и визуальная проверка оплачиваются ради ролика,
+    // который режиссёр всё равно отклонит. Расшифровка уже сохранена — повторный
+    // запуск того же файла её не оплачивает.
+    if (rawWords) {
+      const transcriptError = transcriptGateError(rawWords, duration, project.script);
+      if (transcriptError) throw new Error(transcriptError);
     }
 
     // --- Speech Cleanup: запинки/повторы/фальстарты + умные паузы (только при реальном ASR) ---

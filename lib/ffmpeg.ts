@@ -144,6 +144,38 @@ export async function extractAudio(
   await runFfmpeg([...pre, "-i", inputFile, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", outputWav], { cwd });
 }
 
+/**
+ * Посекундный RMS (дБFS) звуковой дорожки: для проверки уровня записи до платных стадий.
+ * Тишина/−inf → −100. При ошибке ffmpeg — пустой список (проверка пропускается).
+ */
+export async function measureRmsWindows(file: string, cwd: string, windowSec = 1): Promise<number[]> {
+  const rate = 16000;
+  const stderr = await new Promise<string>((resolve) => {
+    const proc = spawn(
+      ffmpegBin(),
+      [
+        "-hide_banner", "-v", "info", "-i", file, "-vn",
+        "-af",
+        `aresample=${rate},asetnsamples=n=${Math.round(rate * windowSec)},` +
+          "astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level," +
+          "ametadata=mode=print:key=lavfi.astats.Overall.RMS_level",
+        "-f", "null", "-",
+      ],
+      { cwd, windowsHide: true },
+    );
+    let out = "";
+    proc.stderr.on("data", (d) => (out += d));
+    proc.on("error", () => resolve(""));
+    proc.on("close", () => resolve(out));
+  });
+  const values: number[] = [];
+  for (const m of stderr.matchAll(/lavfi\.astats\.Overall\.RMS_level=(-?[\d.]+|-inf|inf|nan)/g)) {
+    const v = parseFloat(m[1]);
+    values.push(Number.isFinite(v) ? Math.max(-100, v) : -100);
+  }
+  return values;
+}
+
 export type SilenceEvent = { start: number; end: number };
 
 /** Все участки тишины в файле (silencedetect). */

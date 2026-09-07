@@ -26,6 +26,11 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
   const [seconds, setSeconds] = useState(0);
   const [review, setReview] = useState<{ blob: Blob; url: string } | null>(null);
   const [frameSize, setFrameSize] = useState<{ width: number; height: number }>();
+  // Уровень микрофона (пик за последние 4 с, дБFS) и предупреждение: дубль с iPhone
+  // пришёл на −57 дБ, и это выяснилось только после платного монтажа.
+  const [micDb, setMicDb] = useState<number | null>(null);
+  const [micWarn, setMicWarn] = useState("");
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -52,8 +57,11 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
     let source: MediaStream | null = null;
     let capture: PortraitCapture | null = null;
     let removeTrackListeners = () => {};
+    let meterTimer = 0;
     setReady(false);
     setError("");
+    setMicDb(null);
+    setMicWarn("");
 
     const interrupt = (message: string) => {
       if (abort.signal.aborted) return;
@@ -93,7 +101,10 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
           try {
             source = await navigator.mediaDevices.getUserMedia({
               video: constraints,
-              audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+              // echoCancellation:false — на iPhone «обработка голоса» Safari (эхоподавление)
+              // отдаёт микрофон на 25–30 дБ тише, чем камера телефона; страница ничего не
+              // воспроизводит, подавлять эхо нечего. Уровень виден в индикаторе микрофона.
+              audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true },
             });
             if (abort.signal.aborted) {
               source.getTracks().forEach((track) => track.stop());
@@ -134,6 +145,48 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
           track.removeEventListener("unmute", onUnmute);
         });
         setReady(capture.isLive());
+        // Индикатор уровня микрофона: анализатор слушает ту же дорожку, в запись не вмешивается.
+        try {
+          const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          const audioTracks = source.getAudioTracks();
+          if (AC && audioTracks.length) {
+            const ctx = new AC();
+            audioCtxRef.current = ctx;
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 1024;
+            ctx.createMediaStreamSource(new MediaStream(audioTracks)).connect(analyser);
+            const buf = new Float32Array(analyser.fftSize);
+            const recent: number[] = [];
+            let quietSince = 0;
+            let silentSince = 0;
+            meterTimer = window.setInterval(() => {
+              if (ctx.state === "suspended") { void ctx.resume().catch(() => {}); return; }
+              analyser.getFloatTimeDomainData(buf);
+              let sum = 0;
+              for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+              const db = 20 * Math.log10(Math.sqrt(sum / buf.length) || 1e-6);
+              recent.push(db);
+              if (recent.length > 27) recent.shift(); // ~4 с
+              const peak = Math.max(...recent);
+              setMicDb(peak);
+              const now = Date.now();
+              const rec = recorderRef.current?.state === "recording";
+              if (!rec) { quietSince = 0; silentSince = 0; setMicWarn(""); return; }
+              if (peak > -40) { quietSince = 0; silentSince = 0; setMicWarn(""); return; }
+              if (peak > -60) {
+                silentSince = 0;
+                quietSince ||= now;
+                if (now - quietSince > 3000) setMicWarn(`Микрофон пишет очень тихо (${peak.toFixed(0)} дБ, норма −20…−30): монтаж такую запись отклонит. Говорите ближе или проверьте микрофон.`);
+                return;
+              }
+              quietSince = 0;
+              silentSince ||= now;
+              if (now - silentSince > 10000) setMicWarn(`Микрофон молчит уже ${Math.round((now - silentSince) / 1000)} с. Если вы говорите — микрофон не пишет звук.`);
+            }, 150);
+          }
+        } catch {
+          setMicDb(null);
+        }
       } catch (err) {
         capture?.dispose();
         captureRef.current = null;
@@ -147,6 +200,9 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       abort.abort();
       document.removeEventListener("visibilitychange", onVisibility);
       removeTrackListeners();
+      window.clearInterval(meterTimer);
+      void audioCtxRef.current?.close().catch(() => {});
+      audioCtxRef.current = null;
       const recorder = recorderRef.current;
       if (recorder) {
         recorder.onstop = null;
@@ -188,6 +244,8 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
     const capture = captureRef.current;
     if (!ready || !capture?.isLive() || recorderRef.current?.state === "recording" || stopping) return;
     setError("");
+    setMicWarn("");
+    void audioCtxRef.current?.resume().catch(() => {}); // iOS запускает анализатор только по жесту
     const chunks: Blob[] = [];
     try {
       const mimeType = ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm"].find(
@@ -240,6 +298,11 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
           {review ? "Просмотр записи" : recording ? <><span className="rec-dot" />{mmss}</> : ready ? "Готов к записи" : "Подключение камеры…"}
         </span>
         <span className="tp-format">9:16 · 1080×1920</span>
+        {!review && micDb !== null && (
+          <span className={`tp-mic ${micDb > -40 ? "tp-mic--ok" : micDb > -60 ? "tp-mic--quiet" : "tp-mic--silent"}`} title="Уровень микрофона, пик за 4 с">
+            🎤 {micDb.toFixed(0)} дБ
+          </span>
+        )}
         {!review && <>
           <label className="tp-speed">
             <span>Скорость</span>
@@ -259,6 +322,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         </div>
       </div>
       {error && <div className="error-box tp-error" role="alert">{error}</div>}
+      {!error && micWarn && <div className="tp-warn" role="status">{micWarn}</div>}
       <div className="tp-bar tp-bottom">
         <p className="tp-frame-note">{review ? "Это сохранённый дубль. Монтаж сохранит его кадрирование." : "В запись попадёт кадр внутри рамки. Текст и кнопки не записываются."}</p>
         {review ? <>

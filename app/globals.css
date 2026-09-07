@@ -874,6 +874,11 @@ label.check a {
 }
 .tp-speed input { width: 110px; }
 .tp-error { flex: none; margin: 6px 14px; }
+.tp-mic { font-size: 12px; white-space: nowrap; padding: 2px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); }
+.tp-mic--ok { color: #7ee787; }
+.tp-mic--quiet { color: #f0b429; }
+.tp-mic--silent { color: #d4d7e0; }
+.tp-warn { flex: none; margin: 6px 14px; padding: 8px 12px; border-radius: 8px; background: rgba(240, 180, 41, 0.15); color: #f0b429; font-size: 13px; }
 @media (max-width: 640px) {
   .tp-speed span { display: none; }
   .tp-speed input { width: 80px; }

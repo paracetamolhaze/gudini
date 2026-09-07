@@ -580,7 +580,7 @@ function ProcessStep({
       </div>
       <p className="hint" style={{ marginBottom: 14 }}>
         {style === "ai_film"
-          ? "Сверху — цельный AI-фильм по смыслу речи (Veo), снизу — ты с субтитрами и своим звуком. Сначала собирается план с ценой; генерация только после подтверждения."
+          ? "Сверху — цельный AI-фильм по смыслу речи (Google Veo), снизу — ты с субтитрами и своим звуком. Шаг 1: план сцен с ценой (Veo ещё не вызывается). Шаг 2: генерация в Veo и монтаж — только после твоего подтверждения."
           : "Гудини кадрирует видео в 9:16 (1080×1920), нормализует громкость, добавит крупные «горящие» субтитры по словам, карточки-иллюстрации и сгенерирует описание с хэштегами."}
       </p>
 
@@ -628,7 +628,7 @@ function ProcessStep({
             filmPlan ? (
               <>
                 <button className="btn" onClick={() => start("generate")} disabled={!project.rawVideo}>
-                  🎬 Сгенерировать фильм и смонтировать (~${filmPlan.estimatedCost.toFixed(2)})
+                  🎬 Шаг 2: сгенерировать фильм в Veo и смонтировать (~${filmPlan.estimatedCost.toFixed(2)})
                 </button>
                 <button className="btn btn-secondary" onClick={() => start("plan")} disabled={!project.rawVideo}>
                   Пересобрать план
@@ -636,7 +636,7 @@ function ProcessStep({
               </>
             ) : (
               <button className="btn" onClick={() => start("plan")} disabled={!project.rawVideo}>
-                📝 Собрать план фильма (Veo не вызывается)
+                📝 Шаг 1: собрать план фильма (бесплатно по Veo, оплата на шаге 2)
               </button>
             )
           ) : (

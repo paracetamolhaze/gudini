@@ -506,7 +506,7 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
       <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>
         {headlineFailed
           ? "Не удалось подобрать заголовок, сохраняющий тему ролика. Картинка не генерировалась — деньги не потрачены."
-          : "Не удалось сгенерировать качественную обложку."}
+          : `Проверка отклонила обложку${project.coverReason ? `: ${project.coverReason}` : ""}. Перегенерируйте — одна платная генерация.`}
       </p>
       {editing ? (
         <div style={{ maxWidth: 320, margin: "8px auto 0" }}>

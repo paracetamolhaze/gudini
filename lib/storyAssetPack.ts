@@ -65,6 +65,27 @@ export function imageLedTopic(kind: string | undefined): boolean {
 let imageLedMode = false;
 
 /**
+ * Нужны ли вообще ролики с YouTube. В ролик вставляются только карточки-картинки,
+ * видеофрагменты не используются, а yt-dlp — единственное медленное звено медиатеки
+ * (задушенные загрузки, JS-задачки YouTube). MEDIA_VIDEO_SOURCES:
+ *   off      — ролики не трогаются вовсе, только картинки;
+ *   fallback — картинки первыми для любой темы, ролик ищется только под блок,
+ *              где картинки не нашлось; ядра из роликов нет (по умолчанию);
+ *   on       — прежняя схема: ядро из роликов и порядок по типу темы.
+ */
+export type VideoSourcesMode = "off" | "fallback" | "on";
+export function videoSourcesMode(): VideoSourcesMode {
+  const v = process.env.MEDIA_VIDEO_SOURCES;
+  return v === "off" || v === "on" ? v : "fallback";
+}
+
+/** Идентификатор ролика YouTube из любой формы ссылки. */
+export function youtubeId(url: string): string | null {
+  const m = url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/embed\/|\/live\/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])/);
+  return m ? m[1] : null;
+}
+
+/**
  * Версия правил визуального контроля. Меняется, когда отбор материала становится
  * строже: тогда старый пакет действительно невалиден и пересборка оправдана.
  *
@@ -347,8 +368,9 @@ export function beatQueries(r: StoryResearchPack, need: MediaResearchNeed): stri
     }
     return [
       [need.visualDescription, title].filter(Boolean).join(" ").slice(0, 120),
+      [need.visualDescription, "official still"].join(" ").slice(0, 120),
       [title, ents !== title ? ents : "", short].filter(Boolean).join(" ").slice(0, 120),
-      [need.visualDescription, "official still poster"].join(" ").slice(0, 120),
+      [title, "poster"].join(" ").slice(0, 120),
     ].filter((q) => q.trim().length > 6);
   }
   return [
@@ -844,6 +866,7 @@ export async function buildAssetPack(
   dir: string,
 ): Promise<StoryAssetPackV2> {
   const T0 = taste();
+  const videoMode = videoSourcesMode();
   const fingerprint = packFingerprint(research, beats, needs);
   const existing = reusablePack(dir, fingerprint);
   if (existing) {
@@ -866,7 +889,7 @@ export async function buildAssetPack(
   // и качаем только верх списка. Качать всё подряд в порядке выдачи — трата времени:
   // из полусотни находок полезны единицы, и порядок Brave их не выделяет.
   const pool = new Map<string, { v: any; score: number }>();
-  for (const q of coreVideoQueries(research)) {
+  if (videoMode === "on") for (const q of coreVideoQueries(research)) {
     for (const v of await braveVideos(q)) {
       stages.videoResults++;
       if (isYoutube(v.url)) stages.ytUrlsDiscovered++;
@@ -899,8 +922,11 @@ export async function buildAssetPack(
   const PARALLEL = 3;
   /** не новости: постеры, титульные карточки и снятые сцены — материал, а не подделка */
   const staged = (research.kind ?? "NEWS_EVENT") !== "NEWS_EVENT";
-  imageLedMode = imageLedTopic(research.kind);
-  if (imageLedMode) console.log(`Медиатека: тема «${research.kind}» — иллюстрации первыми, кадры из чужих видео только как запас`);
+  imageLedMode = imageLedTopic(research.kind) || videoMode !== "on";
+  console.log(
+    `Медиатека: тема «${research.kind ?? "?"}», ролики ${videoMode === "off" ? "выключены" : videoMode === "on" ? "как основа" : "только запас для пустых блоков"}` +
+      (imageLedMode ? " — картинки первыми" : ""),
+  );
   if (staged) console.log(`  тип истории: ${research.kind} — постеры и кадры из фильма допускаются, проверка источников по теме`);
   type VideoCand = { url: string; directUrl?: string };
   /**
@@ -1046,12 +1072,16 @@ export async function buildAssetPack(
     // качать ролик ради неподвижного кадра незачем. Для реального действия
     // наоборот — нужна съёмка.
     const imageFirst = need.preferredMedia === "IMAGE" || imageLedMode;
+    // обложки роликов YouTube (1280×720, мгновенно и без yt-dlp) — для тем со съёмкой;
+    // для объяснений они приносят заставки чужих объяснялок с текстом
+    const youtubeThumbs = videoMode !== "off" && (research.kind === "ENTERTAINMENT" || research.kind === "NEWS_EVENT");
     // Совместимость с блоками проставляется позже, поэтому «закрыт ли блок»
     // здесь определяется тем, что нашли под него прямо сейчас.
     let gotVideo = false;
     let gotImage = false;
 
     const searchVideo = async (): Promise<void> => {
+      if (videoMode === "off") return;
       const videoBudget = need.importance === "HIGH" ? T.beat_video_queries : Math.max(1, T.beat_video_queries - 1);
       for (const q of queries.slice(0, videoBudget)) {
         if (gotVideo || assets.length >= T.max_total_assets) break;
@@ -1114,11 +1144,8 @@ export async function buildAssetPack(
       const imageQueries = imageLedMode ? T.beat_image_queries + 2 : T.beat_image_queries;
       const perQuery = imageLedMode ? 10 : 6;
       let acceptedForNeed = 0;
-      for (const q of queries.slice(0, imageQueries)) {
-        if (acceptedForNeed >= T.max_items_per_beat) break;
-        // Кандидаты одного запроса проверяются по IMAGE_PARALLEL сразу: скачивание и
-        // зрение — это ожидание сети, по одному это занимало до 5 с на картинку.
-        const candidates = (await braveImages(q)).slice(0, perQuery);
+      type ImageCandidate = { title: string; url: string; imageUrl: string; description?: string };
+      const considerImages = async (candidates: ImageCandidate[]) => {
         await runPool(candidates, IMAGE_PARALLEL, async (im) => {
           if (assets.length >= T.max_total_assets || acceptedForNeed >= T.max_items_per_beat) return;
           stages.imageResults++;
@@ -1212,6 +1239,24 @@ export async function buildAssetPack(
             });
           } catch {}
         });
+      };
+      for (const q of queries.slice(0, imageQueries)) {
+        if (acceptedForNeed >= T.max_items_per_beat) break;
+        // Кандидаты одного запроса проверяются по IMAGE_PARALLEL сразу: скачивание и
+        // зрение — это ожидание сети, по одному это занимало до 5 с на картинку.
+        await considerImages((await braveImages(q)).slice(0, perQuery));
+      }
+      // Обложки роликов YouTube: готовый кадр 1280×720 по адресу i.ytimg.com, без
+      // yt-dlp и ограничений скорости. Часть обложек с текстом отсеет проверка.
+      if (youtubeThumbs && acceptedForNeed < T.max_items_per_beat && queries[0]) {
+        const vids = (await braveVideos(queries[0])).slice(0, 8);
+        const covers: ImageCandidate[] = [];
+        for (const v of vids) {
+          const id = isYoutube(v.url) ? youtubeId(v.url) : null;
+          if (!id) continue;
+          covers.push({ title: v.title, url: v.url, imageUrl: `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`, description: v.description ?? "" });
+        }
+        if (covers.length) await considerImages(covers);
       }
     };
 

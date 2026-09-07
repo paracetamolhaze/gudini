@@ -38,11 +38,14 @@ const JS_RUNTIME = process.env.YTDLP_JS_RUNTIME || "node";
  */
 const MAX_BYTES = 220_000_000;
 const MAX_FILESIZE_ARG = "220M";
+// 720p первым: в ролик идут карточки 900×506, кадр 1280×720 в них уменьшается,
+// а не растягивается, при вдвое меньшем объёме загрузки с задушенного YouTube.
 const VIDEO_ONLY = [
-  "bv*[height<=1080][ext=mp4][filesize<200M]",
-  "bv*[height<=1080][ext=mp4][filesize_approx<200M]",
+  "bv*[height<=720][ext=mp4][filesize<120M]",
+  "bv*[height<=720][ext=mp4][filesize_approx<120M]",
   "bv*[height<=720][ext=mp4]",
   "bv*[height<=720]",
+  "bv*[height<=1080][ext=mp4][filesize<200M]",
   "bv*[ext=mp4]",
   "bv*",
   "best",

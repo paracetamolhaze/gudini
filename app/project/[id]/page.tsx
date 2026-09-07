@@ -2,6 +2,7 @@
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Teleprompter from "./Teleprompter";
+import { saveRecording, loadRecording, deleteRecording, shareOrDownload, type StoredRecording } from "@/lib/recordingStore";
 
 type Meta = { title: string; description: string; hashtags: string[] };
 type Publication = { platform: string; status: string; url?: string; message?: string; at: string };
@@ -197,6 +198,116 @@ function RecordStep({
   // Файл и место обрыва держатся в памяти: после ошибки загрузку можно продолжить,
   // а не записывать дубль заново.
   const pendingRef = useRef<{ file: File; offset: number } | null>(null);
+  // Копия записи в хранилище телефона (IndexedDB): переживает ошибку сети и перезагрузку.
+  const [stored, setStored] = useState<StoredRecording | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadRecording(project.id).then((r) => { if (alive) setStored(r); });
+    return () => { alive = false; };
+  }, [project.id]);
+
+  // Потоковая отправка: куски записи уходят на сервер во время съёмки, «стоп» лишь
+  // закрывает файл. Раньше запись сначала целиком лежала в памяти страницы, потом
+  // грузилась минуту, и обрыв сети на 80 МБ уносил её без следа.
+  const streamRef = useRef<{ name: string; sent: number; total: number; chain: Promise<void>; failed: string | null; last: Blob | null } | null>(null);
+  const [streamNote, setStreamNote] = useState("");
+  const mbOf = (n: number) => Math.round(n / 1048576);
+
+  async function putChunk(name: string, chunk: Blob, offset: number, total: number): Promise<any> {
+    let attempt = 0;
+    for (;;) {
+      let res: Response;
+      try {
+        res = await fetch(`/api/projects/${project.id}/upload`, {
+          method: "PUT",
+          headers: { "x-filename": encodeURIComponent(name), "x-file-size": String(total), "x-offset": String(offset) },
+          body: chunk,
+        });
+      } catch (e: any) {
+        if (++attempt >= 6) throw new Error(`сеть: ${String(e?.message ?? e)}`);
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        continue;
+      }
+      const json: any = await res.json().catch(() => ({}));
+      if (res.ok) return json;
+      if (res.status === 409 && typeof json.received === "number") {
+        if (json.received >= offset + chunk.size) return json; // уже на сервере (дубль после обрыва)
+        throw new Error(`рассинхрон: на сервере ${mbOf(json.received)} МБ, ожидалось ${mbOf(offset)} МБ`);
+      }
+      if (++attempt >= 5) throw new Error(json.error ?? `HTTP ${res.status}`);
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+
+  function startStream(mimeType: string) {
+    const name = mimeType.startsWith("video/mp4") ? "record.mp4" : "record.webm";
+    streamRef.current = { name, sent: 0, total: 0, chain: Promise.resolve(), failed: null, last: null };
+    setStreamNote("");
+  }
+
+  function pushChunk(chunk: Blob) {
+    const st = streamRef.current;
+    if (!st || st.failed) return;
+    const offset = st.total;
+    st.total += chunk.size;
+    st.last = chunk;
+    st.chain = st.chain.then(async () => {
+      if (st.failed) return;
+      try {
+        await putChunk(st.name, chunk, offset, 0);
+        st.sent = offset + chunk.size;
+        setStreamNote(`${mbOf(st.sent)} МБ`);
+      } catch (e: any) {
+        st.failed = String(e?.message ?? e);
+        setStreamNote("сеть оборвалась — дошлём после записи");
+      }
+    });
+  }
+
+  /** Закрыть файл на сервере: последний кусок повторно с общим размером — сервер видит дубль и финализирует. */
+  async function finishStream(): Promise<boolean> {
+    const st = streamRef.current;
+    if (!st) return false;
+    await st.chain;
+    if (st.failed || st.sent !== st.total || !st.last || st.total === 0) return false;
+    const json = await putChunk(st.name, st.last, st.total - st.last.size, st.total);
+    return Boolean(json?.uploadedSize || json?.done || json?.rawVideo);
+  }
+
+  async function acceptTake(blob: Blob) {
+    const name = blob.type.startsWith("video/mp4") ? "record.mp4" : "record.webm";
+    const file = new File([blob], name, { type: blob.type });
+    setError("");
+    setUploading(true);
+    setUploadPct(99);
+    setUploadNote("закрываю файл на сервере…");
+    let ok = false;
+    try {
+      ok = await finishStream();
+    } catch {
+      ok = false;
+    }
+    if (ok) {
+      await deleteRecording(project.id);
+      setStored(null);
+      streamRef.current = null;
+      setUploadNote("");
+      setUploading(false);
+      await reload();
+      onNext();
+      return;
+    }
+    // поток не дошёл до конца: докачиваем обычным путём с места, до которого он дошёл
+    const from = streamRef.current?.sent ?? 0;
+    streamRef.current = null;
+    await upload(file, from);
+  }
+
+  async function uploadStored() {
+    if (!stored) return;
+    const file = new File([stored.blob], stored.name, { type: stored.blob.type });
+    await upload(file, 0);
+  }
 
   async function upload(file: File, startOffset = 0) {
     setError("");
@@ -257,6 +368,8 @@ function RecordStep({
         setUploadNote(`${mb(offset)} из ${mb(file.size)} МБ`);
       }
       pendingRef.current = null;
+      await deleteRecording(project.id);
+      setStored(null);
       setUploadNote("");
       setUploading(false);
       await reload();
@@ -286,6 +399,16 @@ function RecordStep({
           Снимай вертикально (9:16), в хорошем свете, с хорошим звуком. Можно записать прямо здесь с телесуфлёром —
           текст будет плыть по экрану, пока камера пишет.
         </p>
+        {stored && !uploading && !pendingRef.current && (
+          <div className="error-box" style={{ marginBottom: 12 }}>
+            Незагруженная запись от {new Date(stored.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}, {mbOf(stored.blob.size)} МБ — она сохранена на этом телефоне.
+            <div className="row" style={{ marginTop: 8 }}>
+              <button className="btn" onClick={() => void uploadStored()}>⤴ Загрузить на сервер</button>
+              <button className="btn btn-secondary" onClick={() => void shareOrDownload(stored.blob, stored.name)}>💾 На телефон</button>
+              <button className="btn btn-secondary" onClick={() => { void deleteRecording(project.id); setStored(null); }}>Удалить</button>
+            </div>
+          </div>
+        )}
         <div className="row">
           {!uploading && pendingRef.current && (
               <button className="btn" onClick={resumeUpload} style={{ marginRight: 8 }}>
@@ -355,9 +478,17 @@ function RecordStep({
         <Teleprompter
           script={project.script ?? ""}
           onClose={() => setPrompterOpen(false)}
+          onRecordingStart={startStream}
+          onChunk={pushChunk}
+          uploadNote={streamNote}
+          onTakeReady={(blob) => {
+            const name = blob.type.startsWith("video/mp4") ? "record.mp4" : "record.webm";
+            void saveRecording(project.id, blob, name).then((saved) => { if (saved) setStored({ projectId: project.id, blob, name, at: new Date().toISOString() }); });
+          }}
+          onSave={(blob) => void shareOrDownload(blob, blob.type.startsWith("video/mp4") ? "record.mp4" : "record.webm")}
           onRecorded={(blob) => {
             setPrompterOpen(false);
-            upload(new File([blob], blob.type.startsWith("video/mp4") ? "record.mp4" : "record.webm", { type: blob.type }));
+            void acceptTake(blob);
           }}
         />
       )}

@@ -6,10 +6,20 @@ import { attachCamera, createPortraitCapture, PORTRAIT_FRAME, type PortraitCaptu
 const isMobileDevice = () => /iPhone|iPad|Android/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
 const sourceLive = (s: MediaStream) => s.getTracks().every((track) => track.readyState === "live" && !track.muted);
 
-export default function Teleprompter({ script, onClose, onRecorded }: {
+export default function Teleprompter({ script, onClose, onRecorded, onRecordingStart, onChunk, onTakeReady, onSave, uploadNote }: {
   script: string;
   onClose: () => void;
   onRecorded: (blob: Blob) => void;
+  /** запись пошла: страница открывает потоковую отправку на сервер */
+  onRecordingStart?: (mimeType: string) => void;
+  /** очередной кусок записи (раз в секунду): уходит на сервер сразу, не дожидаясь «стоп» */
+  onChunk?: (chunk: Blob) => void;
+  /** дубль записан и показан на просмотр: страница кладёт копию в хранилище телефона */
+  onTakeReady?: (blob: Blob) => void;
+  /** сохранить дубль на телефон (Фото / загрузки) */
+  onSave?: (blob: Blob) => void;
+  /** строка о потоковой отправке для верхней панели («☁ 45 МБ») */
+  uploadNote?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -315,7 +325,10 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       // после тяжёлых означают смерть видео, запись останавливается сразу.
       const chunkKB: number[] = [];
       recorder.ondataavailable = (event) => {
-        if (event.data.size) chunks.push(event.data);
+        if (event.data.size) {
+          chunks.push(event.data);
+          onChunk?.(event.data);
+        }
         chunkKB.push(event.data.size / 1024);
         const n = chunkKB.length;
         if (n >= 3 && chunkKB.slice(0, n - 2).some((kb) => kb >= 150) && chunkKB[n - 1] < 60 && chunkKB[n - 2] < 60) {
@@ -340,12 +353,14 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
           setError("Браузер не сохранил кадры. Попробуйте записать дубль ещё раз.");
           return;
         }
+        onTakeReady?.(blob);
         setReview({ blob, url: URL.createObjectURL(blob) });
       };
       // Куски по секунде во всех браузерах: по их размеру видно, живо ли видео.
       // Мусорную длительность контейнера Safari при склейке кусков снимает
       // нормализация записи на входе конвейера (raw-norm.mp4).
       recorder.start(1000);
+      onRecordingStart?.(mimeType);
       void (navigator as any).wakeLock?.request?.("screen").then((lock: { release: () => Promise<void> }) => { wakeLockRef.current = lock; }).catch(() => {});
       recorderRef.current = recorder;
       setSeconds(0);
@@ -369,6 +384,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
           {review ? "Просмотр записи" : recording ? <><span className="rec-dot" />{mmss}</> : ready ? "Готов к записи" : "Подключение камеры…"}
         </span>
         <span className="tp-format">9:16 · 1080×1920</span>
+        {uploadNote && <span className="tp-mic tp-mic--ok" title="Запись уходит на сервер во время съёмки">☁ {uploadNote}</span>}
         {!review && micDb !== null && (
           <span className={`tp-mic ${micDb > -40 ? "tp-mic--ok" : micDb > -60 ? "tp-mic--quiet" : "tp-mic--silent"}`} title="Уровень микрофона, пик за 4 с">
             🎤 {micDb.toFixed(0)} дБ
@@ -406,6 +422,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         <p className="tp-frame-note">{review ? "Это сохранённый дубль. Монтаж сохранит его кадрирование." : "В запись попадёт кадр внутри рамки. Текст и кнопки не записываются."}</p>
         {review ? <>
           <button className="btn" onClick={() => onRecorded(review.blob)}>Использовать запись</button>
+          {onSave && <button className="btn btn-secondary" onClick={() => onSave(review.blob)}>💾 На телефон</button>}
           <button className="btn btn-secondary" onClick={() => { resetText(); setReview(null); }}>Перезаписать</button>
           <button className="btn btn-secondary" onClick={onClose}>Закрыть</button>
         </> : recording ? <button className="btn" disabled={stopping} onClick={stop}>{stopping ? "Сохранение…" : "⏹ Остановить запись"}</button> : <>

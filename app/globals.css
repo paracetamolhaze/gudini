@@ -826,6 +826,7 @@ label.check a {
   object-fit: contain;
 }
 .tp-source { object-fit: cover; }
+.tp-source--direct { background: #000; }
 .tp-canvas { background: #000; }
 .tp-text {
   position: absolute;

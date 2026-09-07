@@ -18,6 +18,8 @@ type Scenario = {
   bitrate?: number;
   preview: boolean;
   analyser: boolean;
+  /** холст 1080×1920 как в телесуфлёре: "capture" — держится захват, пишется дорожка камеры; "record" — пишется поток холста */
+  canvas?: "capture" | "record";
 };
 
 const CAM = (w: number, h: number): MediaTrackConstraints => ({
@@ -33,6 +35,8 @@ const SCENARIOS: Scenario[] = [
   { name: "720p, 6 Мбит/с", video: CAM(1280, 720), bitrate: 6_000_000, preview: true, analyser: true },
   { name: "без превью (дорожка только в рекордер)", video: CAM(1920, 1080), bitrate: 12_000_000, preview: false, analyser: true },
   { name: "без анализатора звука", video: CAM(1920, 1080), bitrate: 12_000_000, preview: true, analyser: false },
+  { name: "холст 1080×1920 + captureStream, запись с дорожки камеры", video: CAM(1920, 1080), bitrate: 12_000_000, preview: true, analyser: true, canvas: "capture" },
+  { name: "запись с потока холста (старый путь телесуфлёра)", video: CAM(1920, 1080), bitrate: 12_000_000, preview: true, analyser: true, canvas: "record" },
 ];
 
 type Result = {
@@ -67,6 +71,7 @@ function judge(chunksKB: number[]): { alive: number; diedAt: number | null } {
 
 export default function RecordDiagnostics() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("");
   const [results, setResults] = useState<Result[]>([]);
@@ -75,6 +80,7 @@ export default function RecordDiagnostics() {
     const base: Result = { name: sc.name, mime: "", track: "", chunksKB: [], videoAliveSec: 0, diedAtSec: null, previewFrames: 0 };
     let stream: MediaStream | null = null;
     let ctx: AudioContext | null = null;
+    const canvasStreams: MediaStream[] = [];
     const video = videoRef.current;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -106,10 +112,35 @@ export default function RecordDiagnostics() {
           await ctx.resume().catch(() => {});
         }
       }
+      let recordStream: MediaStream = stream;
+      if (sc.canvas && video && canvasRef.current) {
+        const canvas = canvasRef.current;
+        canvas.width = 1080;
+        canvas.height = 1920;
+        const ctx2d = canvas.getContext("2d", { alpha: false });
+        if (!ctx2d) throw new Error("холст недоступен");
+        const draw = () => {
+          const w = video.videoWidth, h = video.videoHeight;
+          if (!w || !h) return;
+          const cw = Math.min(w, h * 9 / 16), ch = Math.min(h, w * 16 / 9);
+          ctx2d.drawImage(video, (w - cw) / 2, (h - ch) / 2, cw, ch, 0, 0, 1080, 1920);
+        };
+        const loop = () => {
+          if (!video.srcObject) return;
+          draw();
+          if (typeof video.requestVideoFrameCallback === "function") video.requestVideoFrameCallback(loop);
+          else requestAnimationFrame(loop);
+        };
+        loop();
+        const canvasStream = canvas.captureStream(30);
+        stream.getAudioTracks().forEach((t) => canvasStream.addTrack(t));
+        if (sc.canvas === "record") recordStream = canvasStream;
+        canvasStreams.push(canvasStream);
+      }
       const mime = ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm"].find((m) => MediaRecorder.isTypeSupported(m));
       if (!mime) throw new Error("MediaRecorder не поддерживает mp4/webm");
       base.mime = mime;
-      const rec = new MediaRecorder(stream, {
+      const rec = new MediaRecorder(recordStream, {
         mimeType: mime,
         ...(sc.bitrate ? { videoBitsPerSecond: sc.bitrate } : {}),
         audioBitsPerSecond: 192_000,
@@ -135,6 +166,7 @@ export default function RecordDiagnostics() {
       return { ...base, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
     } finally {
       stream?.getTracks().forEach((t) => t.stop());
+      canvasStreams.forEach((cs) => cs.getVideoTracks().forEach((t) => t.stop()));
       if (video) video.srcObject = null;
       void ctx?.close().catch(() => {});
     }
@@ -168,10 +200,13 @@ export default function RecordDiagnostics() {
     <main className="container" style={{ maxWidth: 820 }}>
       <h1>Диагностика записи</h1>
       <p className="hint">
-        Пять коротких записей по {SECONDS} секунд с разными настройками. Ничего не загружается и не оплачивается.
+        Семь коротких записей по {SECONDS} секунд с разными настройками. Ничего не загружается и не оплачивается.
         Держите телефон как при съёмке и говорите, чтобы был звук. Экран не гасите.
       </p>
-      <video ref={videoRef} muted playsInline style={{ width: 160, aspectRatio: "9 / 16", background: "#000", borderRadius: 8 }} />
+      <div style={{ display: "flex", gap: 12 }}>
+        <video ref={videoRef} muted playsInline style={{ width: 160, aspectRatio: "9 / 16", background: "#000", borderRadius: 8 }} />
+        <canvas ref={canvasRef} width={1080} height={1920} style={{ width: 160, aspectRatio: "9 / 16", background: "#000", borderRadius: 8 }} aria-label="Холст как в телесуфлёре" />
+      </div>
       <div style={{ margin: "12px 0" }}>
         <button className="btn" disabled={running} onClick={run}>{running ? "Идёт диагностика…" : "▶ Запустить диагностику"}</button>
       </div>

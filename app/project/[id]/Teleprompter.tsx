@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { attachCamera, createPortraitCapture, PORTRAIT_FRAME, type PortraitCapture } from "@/lib/portraitCapture";
 
 const isMobileDevice = () => /iPhone|iPad|Android/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+const sourceLive = (s: MediaStream) => s.getTracks().every((track) => track.readyState === "live" && !track.muted);
 
 export default function Teleprompter({ script, onClose, onRecorded }: {
   script: string;
@@ -36,6 +37,13 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
   const [camFps, setCamFps] = useState<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<MediaStream | null>(null);
+  // Прямой режим (телефон, поток 9:16): превью — сам элемент камеры, запись — с её
+  // дорожки, холст не создаётся вовсе. Диагностика на iPhone (iOS 18.7): рекордер с
+  // теми же настройками живёт 20 с без холста, а в телесуфлёре с холстом 1080×1920 и
+  // captureStream видео умирало на 8-й и 13-й секунде.
+  const [directMode, setDirectMode] = useState(false);
+  const directRef = useRef(false);
+  const directFpsRef = useRef(0);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -129,18 +137,38 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         }
         if (!source) throw lastError ?? new Error("Камера недоступна");
         if (abort.signal.aborted) return;
-        capture = createPortraitCapture(video, canvas, source, (err) => {
+        const direct = mobile && video.videoWidth > 0 && video.videoHeight > 0 &&
+          Math.abs(video.videoWidth / video.videoHeight - 9 / 16) < 0.03;
+        directRef.current = direct;
+        setDirectMode(direct);
+        if (direct) {
           captureRef.current = null;
-          interrupt(err.message);
-        });
-        captureRef.current = capture;
+          // счётчик кадров превью: колбэк вызывается на каждый новый кадр элемента
+          if (typeof video.requestVideoFrameCallback === "function") {
+            const times: number[] = [];
+            const onFrame = (now: number) => {
+              if (abort.signal.aborted) return;
+              times.push(now);
+              while (times.length && times[0] < now - 1000) times.shift();
+              directFpsRef.current = times.length;
+              video.requestVideoFrameCallback(onFrame);
+            };
+            video.requestVideoFrameCallback(onFrame);
+          }
+        } else {
+          capture = createPortraitCapture(video, canvas, source, (err) => {
+            captureRef.current = null;
+            interrupt(err.message);
+          });
+          captureRef.current = capture;
+        }
         sourceRef.current = source;
         const onMute = () => interrupt("Камера или микрофон приостановлены. Проверьте дубль или откройте камеру заново.");
         const onEnded = () => interrupt("Камера или микрофон отключены. Откройте камеру заново.");
         const onUnmute = () => {
-          if (!abort.signal.aborted && captureRef.current?.isLive()) {
-            setReady(true);
-          }
+          if (abort.signal.aborted) return;
+          const live = directRef.current ? Boolean(sourceRef.current && sourceLive(sourceRef.current)) : Boolean(captureRef.current?.isLive());
+          if (live) setReady(true);
         };
         source.getTracks().forEach((track) => {
           track.addEventListener("mute", onMute);
@@ -152,10 +180,10 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
           track.removeEventListener("ended", onEnded);
           track.removeEventListener("unmute", onUnmute);
         });
-        setReady(capture.isLive());
+        setReady(direct ? sourceLive(source) : Boolean(capture?.isLive()));
         fpsTimer = window.setInterval(() => {
           const c = captureRef.current;
-          setCamFps(c ? c.fps() : null);
+          setCamFps(directRef.current ? directFpsRef.current : c ? c.fps() : null);
         }, 500);
         // Индикатор уровня микрофона: анализатор слушает ту же дорожку, в запись не вмешивается.
         try {
@@ -227,6 +255,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       capture?.dispose();
       captureRef.current = null;
       sourceRef.current = null;
+      directRef.current = false;
       source?.getTracks().forEach((track) => track.stop());
       if (videoRef.current) videoRef.current.srcObject = null;
     };
@@ -256,7 +285,9 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
 
   function start() {
     const capture = captureRef.current;
-    if (!ready || !capture?.isLive() || recorderRef.current?.state === "recording" || stopping) return;
+    const src = sourceRef.current;
+    const live = directRef.current ? Boolean(src && sourceLive(src)) : Boolean(capture?.isLive());
+    if (!ready || !live || recorderRef.current?.state === "recording" || stopping) return;
     setError("");
     setMicWarn("");
     void audioCtxRef.current?.resume().catch(() => {}); // iOS запускает анализатор только по жесту
@@ -266,19 +297,13 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         (mime) => MediaRecorder.isTypeSupported(mime),
       );
       if (!mimeType) throw new Error("Браузер не поддерживает формат записи. Попробуйте Safari или Chrome.");
-      // На телефоне запись идёт с дорожки камеры напрямую, минуя холст: в Safari на
-      // iPhone холст переставал получать кадры через 8 с, и в файле оставался звук без
-      // видео. Дорожка телефона и есть кадр 9:16, который показывает превью (обрезки
-      // нет), так что «как снимаю, так и в ролике» сохраняется. Другие пропорции — холст.
-      const camVideo = videoRef.current;
-      const src = sourceRef.current;
+      // Прямой режим: дорожка камеры и есть кадр 9:16, который показывает превью
+      // (обрезки нет), «как снимаю, так и в ролике» сохраняется. Иначе — поток холста.
       const camTrack = src?.getVideoTracks()[0];
-      const direct = Boolean(
-        camTrack && camVideo && isMobileDevice() &&
-        camVideo.videoWidth > 0 && camVideo.videoHeight > 0 &&
-        Math.abs(camVideo.videoWidth / camVideo.videoHeight - 9 / 16) < 0.03,
-      );
-      const recordStream = direct && src && camTrack ? new MediaStream([camTrack, ...src.getAudioTracks()]) : capture.stream;
+      const recordStream = directRef.current && src && camTrack
+        ? new MediaStream([camTrack, ...src.getAudioTracks()])
+        : capture?.stream;
+      if (!recordStream) throw new Error("Камера не готова к записи. Откройте её заново.");
       const recorder = new MediaRecorder(recordStream, {
         mimeType, videoBitsPerSecond: 12_000_000, audioBitsPerSecond: 192_000,
       });
@@ -361,8 +386,8 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       <div className="tp-stage" ref={stageRef}>
         <div className="tp-frame" style={frameSize}>
           {review ? <video className="tp-playback" src={review.url} controls playsInline /> : <>
-            <video ref={videoRef} className="tp-source" autoPlay muted playsInline aria-hidden />
-            <canvas ref={canvasRef} className="tp-canvas" width={PORTRAIT_FRAME.width} height={PORTRAIT_FRAME.height} aria-label="Кадр, который попадёт в запись" />
+            <video ref={videoRef} className={`tp-source${directMode ? " tp-source--direct" : ""}`} autoPlay muted playsInline aria-hidden={!directMode} aria-label={directMode ? "Кадр, который попадёт в запись" : undefined} />
+            <canvas ref={canvasRef} className="tp-canvas" hidden={directMode} width={PORTRAIT_FRAME.width} height={PORTRAIT_FRAME.height} aria-label="Кадр, который попадёт в запись" />
             <div className="tp-text"><div className="tp-text-inner" ref={textRef}>{script || "Сценарий пуст"}</div></div>
           </>}
         </div>

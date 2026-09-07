@@ -6,7 +6,7 @@ import { StoryAssetPackV2, PackAsset } from "./storyAssetPack";
 import { taste } from "./montageTaste";
 
 /** Версия промпта режиссёра: поднимать при изменении текста промпта, иначе сохранённый план переиспользуется. */
-export const DIRECTOR_PROMPT_VERSION = 1;
+export const DIRECTOR_PROMPT_VERSION = 2;
 import { addCost } from "./pipelineCost";
 
 /**
@@ -100,6 +100,9 @@ function systemPrompt(): string {
    фразу нет ничего лучше.
 10. Если под фразу в медиатеке нет ПОДХОДЯЩЕГО материала — не ставь ничего.
     Лицо автора лучше неподходящего кадра. Заполнять таймлайн ради процента нельзя.
+11. При равной оценке ИЛЛЮСТРАЦИЯ лучше, чем КАДР ВИДЕО: кадр, вырезанный из чужого
+    ролика, бери только когда иллюстрации под эту фразу нет. Один и тот же материал
+    дважды не ставь даже под разные фразы.
 
 Ответь СТРОГО валидным JSON:
 {"placements":[{"assetId":"...","beatId":"...","quote":"дословные слова из транскрипции","seconds":3.6}]}`;
@@ -238,7 +241,9 @@ export async function directMontage(
         .map((b) => `${b}=${a.beatScores?.[b] ?? "?"}`)
         .join(" ");
       const family = a.sceneFamily ? ` сцена:${a.sceneFamily}` : "";
-      return `id=${a.id} [${a.kind === "VIDEO_SEGMENT" ? "ВИДЕО" : "ФОТО"}/${a.role}]${family} ${scored} — ${a.description.slice(0, 110)}${seg}`;
+      // происхождение видно режиссёру: иллюстрация с сайта или кадр, вырезанный из чужого ролика
+      const origin = a.kind === "VIDEO_SEGMENT" ? "ВИДЕО" : /^still-/.test(a.file) ? "КАДР ВИДЕО" : "ИЛЛЮСТРАЦИЯ";
+      return `id=${a.id} [${origin}/${a.role}]${family} ${scored} — ${a.description.slice(0, 110)}${seg}`;
     })
     .join("\n");
   const beatList = beats

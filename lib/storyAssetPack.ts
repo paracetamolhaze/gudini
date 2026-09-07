@@ -47,7 +47,22 @@ const domainOf = (u: string) => {
  * карточки: видео-сегменты, обрезанные под вертикаль, для нового стиля
  * непригодны, и пакет прошлой версии переиспользовать нельзя.
  */
-export const PACK_VERSION = 3;
+export const PACK_VERSION = 4;
+
+/**
+ * Темы, где иллюстрация с сайта лучше кадра из чужого ролика: объяснение, история,
+ * человек, продукт. Для новостей нужна съёмка события, для кино — кадры и постеры.
+ * В «что такое блокчейн» 24 из 28 материалов были кадрами из YouTube-объяснялок,
+ * а веб-картинки искались только для блоков, где видео не нашлось (4 принято).
+ * MEDIA_IMAGE_LED=0/1 переопределяет.
+ */
+export function imageLedTopic(kind: string | undefined): boolean {
+  const env = process.env.MEDIA_IMAGE_LED;
+  if (env === "0") return false;
+  if (env === "1") return true;
+  return kind !== undefined && kind !== "NEWS_EVENT" && kind !== "ENTERTAINMENT";
+}
+let imageLedMode = false;
 
 /**
  * Версия правил визуального контроля. Меняется, когда отбор материала становится
@@ -80,6 +95,9 @@ export type StageCounts = {
   segmentsExtracted: number;
   imageResults: number;
   imageVerifyPass: number;
+  /** картинка не скачалась (403, таймаут) или меньше карточки: раньше терялись молча */
+  imageFetchFailed: number;
+  imageTooSmall: number;
   imagesAccepted: number;
   beforeBeatMatch: number;
   beatCompatible: number;
@@ -105,7 +123,7 @@ export type StageCounts = {
 export const stages: StageCounts = {
   videoResults: 0, sourceVerifyPass: 0, probeAttempted: 0, probeOk: 0,
   downloadAttempted: 0, downloadOk: 0, sourceVideosAccepted: 0, framesSampled: 0,
-  segmentsExtracted: 0, imageResults: 0, imageVerifyPass: 0, imagesAccepted: 0,
+  segmentsExtracted: 0, imageResults: 0, imageVerifyPass: 0, imagesAccepted: 0, imageFetchFailed: 0, imageTooSmall: 0,
   beforeBeatMatch: 0, beatCompatible: 0, shortlisted: 0,
   ytUrlsDiscovered: 0, ytDownloadAttempted: 0, ytDownloadOk: 0,
   ytSourceVideosAccepted: 0, ytSegments: 0,
@@ -309,16 +327,27 @@ export function scoreCandidate(
 }
 
 /** Запрос под конкретный блок: контекст истории + что нужно показать. */
-function beatQueries(r: StoryResearchPack, need: MediaResearchNeed): string[] {
+export function beatQueries(r: StoryResearchPack, need: MediaResearchNeed): string[] {
   const year = r.eventYear ? String(r.eventYear) : "";
   const ents = need.entities.length ? need.entities.join(" ") : r.entities[0]?.name ?? "";
   const event = r.entities.find((e) => e.type === "EVENT")?.name ?? "";
-  if ((r.kind ?? "NEWS_EVENT") !== "NEWS_EVENT") {
+  const kind = r.kind ?? "NEWS_EVENT";
+  if (kind !== "NEWS_EVENT") {
     // не новости: год и «событие» не помогают, помогает название темы и то, что в кадре
     const title = event || r.entities[0]?.name || r.topic;
+    const short = need.visualDescription.split(" ").slice(0, 6).join(" ");
+    if (imageLedTopic(kind)) {
+      // объяснение/история/человек/продукт: ищем иллюстрации, схемы и фото, а не постеры
+      return [
+        [need.visualDescription, "illustration"].join(" ").slice(0, 120),
+        [need.visualDescription, title].filter(Boolean).join(" ").slice(0, 120),
+        [short, kind === "EXPLAINER" ? "diagram infographic" : "photo"].join(" ").slice(0, 120),
+        [title, ents !== title ? ents : "", short, "illustration"].filter(Boolean).join(" ").slice(0, 120),
+      ].filter((q) => q.trim().length > 6);
+    }
     return [
       [need.visualDescription, title].filter(Boolean).join(" ").slice(0, 120),
-      [title, ents !== title ? ents : "", need.visualDescription.split(" ").slice(0, 6).join(" ")].filter(Boolean).join(" ").slice(0, 120),
+      [title, ents !== title ? ents : "", short].filter(Boolean).join(" ").slice(0, 120),
       [need.visualDescription, "official still poster"].join(" ").slice(0, 120),
     ].filter((q) => q.trim().length > 6);
   }
@@ -365,7 +394,7 @@ export function segmentWindowDecision(
   const points = WINDOW_OFFSETS.map((frac, i) => ({
     offsetFrac: frac,
     atSec: Number((windowSec * frac).toFixed(2)),
-    verdict: analyses[i] ? qcReject(analyses[i]!, { factualBeat: true, staged }) : "кадр не описан",
+    verdict: analyses[i] ? qcReject(analyses[i]!, { factualBeat: true, staged, noTalkingHeads: imageLedMode }) : "кадр не описан",
   }));
 
   let cleanParts = 0;
@@ -854,9 +883,10 @@ export async function buildAssetPack(
     }
   }
 
+  // В режиме иллюстраций чужие ролики — запас, а не основа: короткий шорт-лист.
   const shortlist = [...pool.entries()]
     .sort((a, b) => b[1].score - a[1].score)
-    .slice(0, T0.core_download_shortlist);
+    .slice(0, imageLedMode ? Math.min(3, T0.core_download_shortlist) : T0.core_download_shortlist);
   stages.shortlisted = shortlist.length;
   console.log(
     `CORE: кандидатов ${pool.size} → в шорт-лист ${shortlist.length} ` +
@@ -867,6 +897,8 @@ export async function buildAssetPack(
   const PARALLEL = 3;
   /** не новости: постеры, титульные карточки и снятые сцены — материал, а не подделка */
   const staged = (research.kind ?? "NEWS_EVENT") !== "NEWS_EVENT";
+  imageLedMode = imageLedTopic(research.kind);
+  if (imageLedMode) console.log(`Медиатека: тема «${research.kind}» — иллюстрации первыми, кадры из чужих видео только как запас`);
   if (staged) console.log(`  тип истории: ${research.kind} — постеры и кадры из фильма допускаются, проверка источников по теме`);
   type VideoCand = { url: string; directUrl?: string };
   /**
@@ -960,7 +992,8 @@ export async function buildAssetPack(
   // Партиями по PARALLEL, в порядке шорт-листа; результаты применяются по порядку,
   // чтобы состав медиатеки не зависел от того, чья загрузка закончилась раньше.
   const shortlistEntries = [...shortlist];
-  for (let b = 0; b < shortlistEntries.length && coreSegments < 12; b += PARALLEL) {
+  const coreSegmentsCap = imageLedMode ? 6 : 12;
+  for (let b = 0; b < shortlistEntries.length && coreSegments < coreSegmentsCap; b += PARALLEL) {
     const batch = shortlistEntries.slice(b, b + PARALLEL);
     const results = await Promise.all(
       batch.map(([vid, { v, score }]) =>
@@ -971,7 +1004,7 @@ export async function buildAssetPack(
       ),
     );
     for (const r of results) {
-      if (!r || !r.cut.assets.length || coreSegments >= 12) continue;
+      if (!r || !r.cut.assets.length || coreSegments >= coreSegmentsCap) continue;
       const { vid, v, cut, method } = r;
       const yt = isYoutube(v.url);
       stages.sourceVideosAccepted++;
@@ -1009,7 +1042,7 @@ export async function buildAssetPack(
     // статичного факта хорошее проверенное фото лучше, чем целый видеосюжет:
     // качать ролик ради неподвижного кадра незачем. Для реального действия
     // наоборот — нужна съёмка.
-    const imageFirst = need.preferredMedia === "IMAGE";
+    const imageFirst = need.preferredMedia === "IMAGE" || imageLedMode;
     // Совместимость с блоками проставляется позже, поэтому «закрыт ли блок»
     // здесь определяется тем, что нашли под него прямо сейчас.
     let gotVideo = false;
@@ -1073,9 +1106,15 @@ export async function buildAssetPack(
     const searchImages = async (): Promise<void> => {
       // Если блок уже закрыт видео и фото ему не предпочтительнее — картинки не ищем.
       if (gotVideo && !imageFirst) return;
-      for (const q of queries.slice(0, T.beat_image_queries)) {
-        for (const im of (await braveImages(q)).slice(0, 6)) {
-          if (assets.length >= T.max_total_assets) break;
+      // Режим иллюстраций: шире поиск (запросов и находок), но не больше
+      // max_items_per_beat принятых на блок — зрение платное.
+      const imageQueries = imageLedMode ? T.beat_image_queries + 2 : T.beat_image_queries;
+      const perQuery = imageLedMode ? 10 : 6;
+      let acceptedForNeed = 0;
+      for (const q of queries.slice(0, imageQueries)) {
+        if (acceptedForNeed >= T.max_items_per_beat) break;
+        for (const im of (await braveImages(q)).slice(0, perQuery)) {
+          if (assets.length >= T.max_total_assets || acceptedForNeed >= T.max_items_per_beat) break;
           stages.imageResults++;
           const key = im.imageUrl.split("?")[0];
           if (seenImage.has(key)) continue;
@@ -1090,15 +1129,34 @@ export async function buildAssetPack(
           const id = sid(key);
           const file = path.join(mediaDir, `img-${id}.jpg`);
           try {
-            const res = await fetch(im.imageUrl, { headers: { "User-Agent": "Gudini/1.0" } });
-            if (!res.ok) continue;
+            // сайты отдают картинку браузеру и режут «неизвестного бота» 403-м:
+            // заголовки как у браузера, ссылка на страницу-источник, лимит времени
+            const res = await fetch(im.imageUrl, {
+              headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                Referer: im.url,
+              },
+              signal: AbortSignal.timeout(15_000),
+            }).catch(() => null);
+            if (!res || !res.ok) {
+              stages.imageFetchFailed++;
+              continue;
+            }
             const buf = Buffer.from(await res.arrayBuffer());
-            if (buf.length < 10_000) continue;
+            if (buf.length < 10_000) {
+              stages.imageTooSmall++;
+              continue;
+            }
             const an = await analyzeAsset(`img:${id}`, "", buf);
             addCost({ visionCalls: 1 });
             if (!an) continue;
             // блок излагает факт — постановке и объяснялке здесь не место
-            const bad = qcReject(an, { factualBeat: need.intent === "EXACT_EVENT" || need.intent === "ENTITY", staged });
+            const bad = qcReject(an, {
+              factualBeat: need.intent === "EXACT_EVENT" || need.intent === "ENTITY",
+              staged,
+              noTalkingHeads: imageLedMode,
+            });
             if (bad) {
               countQcReason(bad);
               continue;
@@ -1112,6 +1170,7 @@ export async function buildAssetPack(
               dims = await probe(rawFile);
             } catch {}
             if (!sourceBigEnough(dims.width, dims.height)) {
+              stages.imageTooSmall++;
               countQcReason(`изображение ${dims.width}×${dims.height} меньше карточки`);
               fs.rmSync(rawFile, { force: true });
               continue;
@@ -1125,6 +1184,7 @@ export async function buildAssetPack(
               continue;
             }
             stages.imagesAccepted++;
+            acceptedForNeed++;
             gotImage = true;
             assets.push({
               id,

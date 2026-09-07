@@ -337,9 +337,16 @@ export type QcOptions = {
    * и снятые сцены — это и есть материал, а не подделка съёмки события.
    */
   staged?: boolean;
+  /**
+   * Объясняющая тема: говорящая голова из чужого ролика — не иллюстрация ни для
+   * какого блока. В «что такое блокчейн» такой кадр прошёл под фразу про банк,
+   * потому что правило про объяснялку действует только для фактических блоков.
+   */
+  noTalkingHeads?: boolean;
 };
 
 export function qcReject(an: AssetAnalysis, opts: QcOptions = {}): string | null {
+  if (opts.noTalkingHeads && an.isStudioExplainer) return "говорящая голова из чужого видео";
   if (an.isScreenshot) return "скриншот страницы, а не съёмка";
   if (an.hasChannelPromo) return "призыв канала в кадре (SUBSCRIBE / THANKS FOR WATCHING)";
   if (an.isTitleOrOutroCard && !opts.staged) return "заставка или финальная карточка, а не съёмка";

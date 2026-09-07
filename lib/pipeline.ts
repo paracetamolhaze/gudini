@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE, getSettings } from "./store";
-import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences, detectBlackNear } from "./ffmpeg";
+import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences, detectBlackNear, type ProbeInfo } from "./ffmpeg";
 import {
   edgesFromSilences,
   mechanicalCuts,
@@ -79,11 +79,21 @@ export async function processProject(id: string): Promise<void> {
     if (!project.rawVideo) throw new Error("Видео ещё не загружено");
 
     const dir = projectDir(id);
-    const raw = project.rawVideo;
+    let raw = project.rawVideo;
 
     setStep(id, "Анализ видео", 3);
-    const info = await probe(path.join(dir, raw));
+    let info = await probe(path.join(dir, raw));
     if (!info.hasAudio) throw new Error("В видео нет звуковой дорожки — запишите с микрофоном");
+
+    // Запись из браузера (телесуфлёр) приводится к обычному файлу: постоянные 30 fps, честные
+    // метки времени, AAC 48 кГц. Safari отдаёт mp4 с мусорной длительностью контейнера
+    // (7 млн секунд) и переменной частотой кадров — на таком файле trim/concat дали чистый
+    // файл на 6899 с, и рендер упал. Файлы с камеры и телефона не трогаются.
+    const normalized = await normalizeBrowserRecording(dir, raw, info, (f) => setStep(id, "Подготовка записи", 3 + Math.round(f * 3)));
+    if (normalized) {
+      raw = normalized;
+      info = await probe(path.join(dir, raw));
+    }
 
     // --- Точная длительность по аудио (метаданным webm с камеры верить нельзя) ---
     setStep(id, "Анализ звука", 6);
@@ -495,6 +505,57 @@ function keepRunLedger(dir: string, status: "done" | "failed"): void {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     fs.copyFileSync(path.join(dir, "pipeline-cost.json"), path.join(runs, `${stamp}-${status}.json`));
   } catch {}
+}
+
+/**
+ * Нужна ли записи нормализация: webm из Chrome, mp4 из Safari с мусорной длительностью
+ * контейнера или переменной частотой кадров. Обычный файл с камеры/телефона: длительность
+ * разумная, частота 24–120 — остаётся как есть.
+ */
+function looksLikeBrowserRecording(raw: string, info: ProbeInfo): boolean {
+  const ext = path.extname(raw).toLowerCase();
+  if (ext === ".webm" || ext === ".mkv") return true;
+  if (!Number.isFinite(info.duration) || info.duration <= 0 || info.duration > 6 * 3600) return true;
+  if (info.fps > 0 && (info.fps < 10 || info.fps > 121)) return true;
+  return false;
+}
+
+/**
+ * Приводит запись из браузера к обычному файлу raw-norm.mp4: постоянные 30 fps, метки
+ * времени заново (+genpts), звук выровнен по времени и в 48 кГц. Делается один раз: пока
+ * исходник не менялся, готовый файл переиспользуется. Возвращает имя файла или null,
+ * если нормализация не нужна.
+ */
+export async function normalizeBrowserRecording(
+  dir: string,
+  raw: string,
+  info: ProbeInfo,
+  onProgress?: (f: number) => void,
+): Promise<string | null> {
+  if (!looksLikeBrowserRecording(raw, info)) return null;
+  const out = "raw-norm.mp4";
+  const src = fs.statSync(path.join(dir, raw));
+  const stamp = `${src.size}:${src.mtimeMs}`;
+  const stampFile = path.join(dir, out + ".stamp");
+  if (fs.existsSync(path.join(dir, out)) && fs.existsSync(stampFile) && fs.readFileSync(stampFile, "utf8") === stamp) return out;
+  console.log(`Запись из браузера: ${raw} (${info.duration.toFixed(1)} с по контейнеру, ${info.fps.toFixed(2)} fps) — нормализую в ${out}`);
+  const audioSec = (await probeDuration(path.join(dir, "audio_full.wav")).catch(() => 0)) || 0;
+  await runFfmpeg(
+    [
+      "-fflags", "+genpts",
+      "-i", raw,
+      "-vf", "fps=30",
+      "-fps_mode", "cfr",
+      "-af", "aresample=async=1:first_pts=0",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-ar", "48000", "-b:a", "192k",
+      "-movflags", "+faststart",
+      out,
+    ],
+    { cwd: dir, totalDurationSec: audioSec || undefined, onProgress },
+  );
+  fs.writeFileSync(stampFile, stamp, "utf8");
+  return out;
 }
 
 /**

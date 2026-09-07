@@ -214,7 +214,10 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         }
         setReview({ blob, url: URL.createObjectURL(blob) });
       };
-      recorder.start(1000);
+      // Safari (mp4) нельзя резать на куски по секунде: склейка фрагментов даёт контейнер
+      // с мусорной длительностью, и монтаж падает. Один блок на стоп; webm в Chrome — по секунде.
+      if (mimeType.startsWith("video/mp4")) recorder.start();
+      else recorder.start(1000);
       recorderRef.current = recorder;
       setSeconds(0);
       setRecording(true);

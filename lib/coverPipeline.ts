@@ -20,7 +20,7 @@ import { recordCoverRun } from "./coverStats";
 
 export type CoverPipelineResult = {
   ok: boolean;
-  file?: string; // имя финального файла в папке проекта (только при PASS)
+  file?: string; // имя финального файла в папке проекта (при PASS — прошедшая проверку; при COVER_FAILED — отклонённая, чтобы её можно было увидеть)
   status: "PASS" | "COVER_FAILED" | "ERROR";
   qc: CoverQcStatus | "NONE";
   cost: { generation: number; qc: number; total: number };
@@ -110,8 +110,20 @@ export async function buildCover(
 
     if (!qc.pass) {
       console.warn("Cover: COVER_FAILED — автоматическая повторная генерация не выполняется");
+      // Отклонённая обложка всё равно собирается в cover.jpg: пользователь видит её,
+      // причину отказа и сам решает — оставить или перегенерировать (одна платная генерация
+      // на нажатие). Раньше при отказе не было ни картинки, ни причины на сайте.
+      let file: string | undefined;
+      try {
+        const finished = await d.finish(dir, raw, path.join(dir, "cover-final.png"));
+        await d.encodeFinal(dir, finished, path.join(dir, COVER_FILE));
+        file = COVER_FILE;
+      } catch (e: any) {
+        console.warn("Cover: отклонённую обложку не удалось собрать для показа:", String(e?.message ?? e).slice(0, 120));
+      }
       return finalize({
         status: "COVER_FAILED",
+        file,
         reason: qc.reasons.join("; ") || "обложка не прошла контроль качества",
       });
     }

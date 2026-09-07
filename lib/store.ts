@@ -46,6 +46,7 @@ export type Project = {
   subtitlesSource?: "scribe" | "whisper" | "script";
   cover?: string | null; // cover.jpg — Full-AI обложка, прошедшая QC (иначе null)
   coverStatus?: CoverStatus; // failed — генерация не прошла QC, нужна ручная перегенерация
+  coverReason?: string; // почему проверка отклонила обложку (показывается пользователю)
   coverOffsetSec?: number; // устарело: кадр из видео больше не используется как обложка
   brollCount?: number; // сколько б-ролл перебивок вошло в монтаж
   meta: ProjectMeta | null;

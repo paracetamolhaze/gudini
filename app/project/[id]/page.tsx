@@ -16,6 +16,7 @@ type Project = {
   subtitlesSource?: string;
   cover?: string | null;
   coverStatus?: "ok" | "failed" | "headline_failed";
+  coverReason?: string;
   brollCount?: number;
   meta: Meta | null;
   publications: Publication[];
@@ -449,17 +450,49 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
   }
 
   if (project.cover) {
+    const rejected = project.coverStatus === "failed";
     return (
       <div style={{ textAlign: "center", marginTop: 10 }}>
         <img
           src={`/api/projects/${project.id}/video?which=cover&t=${Date.now()}`}
           alt="Обложка"
-          style={{ maxWidth: 160, borderRadius: 10, border: "1px solid var(--border)" }}
+          style={{ maxWidth: 160, borderRadius: 10, border: `1px solid ${rejected ? "var(--danger, #e5484d)" : "var(--border)"}` }}
         />
-        <p className="hint">Обложка (ИИ, прошла контроль качества)</p>
-        <button className="btn btn-secondary" onClick={() => regenerate()} style={{ marginTop: 6 }}>
-          Перегенерировать обложку
-        </button>
+        {rejected ? (
+          <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>
+            Проверка отклонила обложку{project.coverReason ? `: ${project.coverReason}` : ""}. Можно оставить как есть или перегенерировать.
+          </p>
+        ) : (
+          <p className="hint">Обложка (ИИ, прошла контроль качества)</p>
+        )}
+        {editing ? (
+          <div style={{ maxWidth: 320, margin: "8px auto 0" }}>
+            <input
+              className="input"
+              value={headline}
+              onChange={(e) => setHeadline(e.target.value)}
+              placeholder="Короткий заголовок, 2–4 слова"
+              maxLength={40}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
+              <button className="btn" disabled={!headline.trim()} onClick={() => regenerate(headline)}>
+                Сгенерировать
+              </button>
+              <button className="btn btn-secondary" onClick={() => setEditing(false)}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
+            <button className={rejected ? "btn" : "btn btn-secondary"} onClick={() => regenerate()}>
+              Перегенерировать обложку
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditing(true)}>
+              Изменить заголовок
+            </button>
+          </div>
+        )}
         {error && <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>{error}</p>}
       </div>
     );

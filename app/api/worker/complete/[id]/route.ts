@@ -34,6 +34,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     updateProject(id, {
       processedVideo: "out.mp4",
       cover: hasCover ? "cover.jpg" : null,
+      // статус и причина отказа проверки приходят от воркера: без них отклонённая
+      // обложка выглядела на сайте как «обложки нет», без объяснения
+      coverStatus: body.coverStatus === "ok" || body.coverStatus === "failed" || body.coverStatus === "headline_failed"
+        ? body.coverStatus
+        : hasCover ? "ok" : "failed",
+      coverReason: body.coverReason ? String(body.coverReason).slice(0, 300) : undefined,
       coverOffsetSec: Number(body.coverOffsetSec) || 1,
       subtitlesSource: body.subtitlesSource,
       brollCount: Number(body.brollCount) || 0,

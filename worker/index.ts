@@ -229,6 +229,8 @@ async function runJob(id: string): Promise<void> {
         subtitlesSource: done.subtitlesSource,
         brollCount: done.brollCount ?? 0,
         coverOffsetSec: done.coverOffsetSec ?? 1,
+        coverStatus: done.coverStatus,
+        coverReason: done.coverReason,
         meta: done.meta,
         research: done.research,
       };

@@ -113,6 +113,7 @@ export function buildCoverImagePromptFull(concept: CoverConcept): string {
 
   const story =
     `Story: exactly one main story object — ${concept.scene.storyObject} — in one environment: ${concept.scene.environment}. ` +
+    "If that object would naturally carry writing (a sign, screen, ticket, poster, label, banner), show it with NO readable letters at all: blank, blurred, turned away or abstract. " +
     "The background must look like a believable photographed place: slightly out of focus, detailed enough " +
     "to understand the story, but never sharper or visually louder than the face. No clutter, no extra symbols.";
 
@@ -191,6 +192,7 @@ export function buildFullCoverPrompt(concept: CoverConcept): string {
 
   const story =
     `Story: exactly one main story object — ${concept.scene.storyObject} — in one environment: ${concept.scene.environment}. ` +
+    "If that object would naturally carry writing (a sign, screen, ticket, poster, label, banner), show it with NO readable letters at all: blank, blurred, turned away or abstract. " +
     "The background must read as a believable photographed place, slightly out of focus, never louder than the face.";
 
   const composition =

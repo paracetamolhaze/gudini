@@ -514,7 +514,7 @@ export async function makeCover(
   title?: string | null,
   headlineOverride?: string | null,
   manual = false,
-): Promise<{ cover: string | null; coverStatus: CoverStatus }> {
+): Promise<{ cover: string | null; coverStatus: CoverStatus; coverReason?: string }> {
   // FULL_AI_COVER=false — обложки просто НЕ создаются (это выключатель, а не фолбэк
   // на другой способ: подменных обложек в системе не существует)
   if (!fullAiCoverEnabled()) {
@@ -529,6 +529,13 @@ export async function makeCover(
   // а генерация стоит денег. Пересоздать её можно кнопкой «Перегенерировать».
   if (!manual && fs.existsSync(path.join(dir, "cover.jpg"))) {
     console.log("Cover: обложка уже есть — повторная генерация не нужна");
+    // отклонённая проверкой обложка остаётся отклонённой: без автоматической оплаты новой
+    try {
+      const mode = JSON.parse(fs.readFileSync(path.join(dir, "cover-mode.json"), "utf8"));
+      if (mode?.status && mode.status !== "PASS") {
+        return { cover: "cover.jpg", coverStatus: "failed", coverReason: String(mode.reason ?? "обложка не прошла проверку") };
+      }
+    } catch {}
     return { cover: "cover.jpg", coverStatus: "ok" };
   }
   try {
@@ -569,7 +576,9 @@ export async function makeCover(
     console.log(
       `Cover: status=${r.status} qc=${r.qc} generations=1 cost=$${r.cost.total}${manual ? " (ручная перегенерация)" : ""}`,
     );
-    return r.ok ? { cover: r.file ?? null, coverStatus: "ok" } : { cover: null, coverStatus: "failed" };
+    return r.ok
+      ? { cover: r.file ?? null, coverStatus: "ok" }
+      : { cover: r.file ?? null, coverStatus: "failed", coverReason: r.reason };
   } catch (e: any) {
     console.warn("Cover:", String(e?.message ?? e).slice(0, 200));
     return { cover: null, coverStatus: "failed" };
@@ -582,8 +591,16 @@ function keepRunLedger(dir: string, status: "done" | "failed"): void {
   try {
     const runs = path.join(dir, "cost-runs");
     fs.mkdirSync(runs, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    fs.copyFileSync(path.join(dir, "pipeline-cost.json"), path.join(runs, `${stamp}-${status}.json`));
+    // Имя копии — по времени создания самого леджера, а не по «сейчас»: разница в
+    // миллисекунды делала копию и pipeline-cost.json «разными прогонами» в журнале.
+    const source = path.join(dir, "pipeline-cost.json");
+    let createdAt = new Date().toISOString();
+    try {
+      const c = JSON.parse(fs.readFileSync(source, "utf8"))?.createdAt;
+      if (typeof c === "string" && !Number.isNaN(Date.parse(c))) createdAt = c;
+    } catch {}
+    const stamp = createdAt.replace(/[:.]/g, "-");
+    fs.copyFileSync(source, path.join(runs, `${stamp}-${status}.json`));
   } catch {}
 }
 

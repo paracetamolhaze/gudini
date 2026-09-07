@@ -119,18 +119,42 @@ export function readSpendLog(file = SPEND_FILE): SpendRun[] {
   return Array.isArray(json.runs) ? json.runs : [];
 }
 
-/** Добавляет прогоны, пропуская уже известные runId; возвращает, сколько добавлено. */
+/**
+ * Один и тот же прогон, пришедший под разными runId: копия леджера в cost-runs и
+ * pipeline-cost.json отличались временем создания на миллисекунды, и журнал считал их
+ * двумя прогонами, удваивая итоги дня. Совпадение по проекту, статусу, сумме и времени
+ * (в пределах 15 с) — это один прогон.
+ */
+export function sameSpendRun(a: SpendRun, b: SpendRun): boolean {
+  if (a.runId === b.runId) return true;
+  if (a.projectId !== b.projectId || a.status !== b.status || (a.label ?? "") !== (b.label ?? "")) return false;
+  if (Math.abs(a.total - b.total) > 0.0005) return false;
+  const ta = Date.parse(a.at);
+  const tb = Date.parse(b.at);
+  return Number.isFinite(ta) && Number.isFinite(tb) && Math.abs(ta - tb) <= 15_000;
+}
+
+/** Убирает дубли одного прогона, оставляя первый по времени. */
+export function dedupeSpendRuns(runs: SpendRun[]): SpendRun[] {
+  const out: SpendRun[] = [];
+  for (const r of [...runs].sort((a, b) => a.at.localeCompare(b.at))) {
+    if (!out.some((k) => sameSpendRun(k, r))) out.push(r);
+  }
+  return out;
+}
+
+/** Добавляет прогоны, пропуская уже известные (по runId или по содержимому); возвращает, сколько добавлено. */
 export function appendSpendRuns(runs: SpendRun[], file = SPEND_FILE): { added: number; total: number } {
-  const existing = readSpendLog(file);
-  const known = new Set(existing.map((r) => r.runId));
+  const stored = readSpendLog(file);
+  const existing = dedupeSpendRuns(stored);
+  const cleaned = existing.length !== stored.length;
   let added = 0;
   for (const r of runs) {
-    if (known.has(r.runId)) continue;
-    known.add(r.runId);
+    if (existing.some((k) => sameSpendRun(k, r))) continue;
     existing.push(r);
     added++;
   }
-  if (added) {
+  if (added || cleaned) {
     existing.sort((a, b) => a.at.localeCompare(b.at));
     writeJsonAtomic(file, { runs: existing });
   }

@@ -159,9 +159,11 @@ test("ГЛАВНОЕ: при QC FAIL число генераций РОВНО 1 
   assert.equal(calls.qc, 1, "QC вызывается один раз — по одной картинке");
   assert.equal(r.status, "COVER_FAILED");
   assert.equal(r.ok, false);
-  assert.equal(r.file, undefined);
-  assert.equal(calls.encoded, 0, "финального файла без PASS не существует");
-  assert.equal(fs.existsSync(path.join(dir, "cover.jpg")), false);
+  // отклонённая обложка собирается для показа пользователю (с причиной и кнопкой
+  // перегенерации) — но БЕЗ новой генерации: это локальная сборка уже оплаченной картинки
+  assert.equal(r.file, "cover.jpg");
+  assert.equal(calls.encoded, 1, "отклонённая картинка собрана для показа, генерация не повторялась");
+  assert.equal(fs.existsSync(path.join(dir, "cover.jpg")), true);
   assert.equal(r.cost.total, 0.07, "оплачена ровно одна генерация");
   const mode = JSON.parse(fs.readFileSync(path.join(dir, "cover-mode.json"), "utf8"));
   assert.equal(mode.generations, 1);
@@ -237,7 +239,9 @@ test("QC недоступен — это FAIL, а не пропуск прове
   const r = await buildCover(dir, TIGER(), deps);
   assert.equal(r.status, "COVER_FAILED");
   assert.equal(calls.generated.length, 1);
-  assert.equal(calls.encoded, 0);
+  // картинка собирается для показа с причиной «проверка недоступна»; генерация одна
+  assert.equal(calls.encoded, 1);
+  assert.match(String(r.reason), /нет ключа/);
 });
 
 test("Артефакты одной попытки", async () => {

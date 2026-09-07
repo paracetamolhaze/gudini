@@ -31,7 +31,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const hadCover = !!project.cover && fs.existsSync(coverFile);
   if (hadCover) fs.copyFileSync(coverFile, backup);
 
-  const { cover, coverStatus } = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Обложка (ручная)" }, () =>
+  const { cover, coverStatus, coverReason } = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Обложка (ручная)" }, () =>
     makeCover(
       dir,
       project.topic,
@@ -41,16 +41,18 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       true, // действие пользователя: одна оплаченная генерация
     ),
   );
-  if (!cover && hadCover) {
+  // Новая не прошла проверку, а прежняя была принята — прежняя остаётся, новая не
+  // подменяет её. Если прежней принятой не было, отклонённая новая показывается с причиной.
+  if (coverStatus !== "ok" && hadCover && project.coverStatus === "ok") {
     fs.copyFileSync(backup, coverFile);
     fs.rmSync(backup, { force: true });
-    updateProject(id, { cover: project.cover, coverStatus: project.coverStatus ?? "ok" });
+    updateProject(id, { cover: project.cover, coverStatus: "ok", coverReason: undefined });
     return NextResponse.json(
-      { error: `Новая обложка не прошла проверку (${coverStatus}) — оставлена прежняя` },
+      { error: `Новая обложка не прошла проверку${coverReason ? `: ${coverReason}` : ` (${coverStatus})`} — оставлена прежняя` },
       { status: 409 },
     );
   }
   fs.rmSync(backup, { force: true });
-  const updated = updateProject(id, { cover, coverStatus });
+  const updated = updateProject(id, { cover, coverStatus, coverReason });
   return NextResponse.json(updated ?? project);
 }

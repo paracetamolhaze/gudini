@@ -18,6 +18,8 @@ export type ProbeInfo = {
   hasAudio: boolean;
   fps: number;
   audioDuration: number;
+  /** длительность именно видеодорожки: у записи из браузера она может оборваться раньше звука */
+  videoDuration: number;
 };
 
 /** Точная длительность файла (для webm с камеры метаданные врут — мерим по аудио). */
@@ -58,6 +60,7 @@ export async function probe(file: string): Promise<ProbeInfo> {
     hasAudio: Boolean(audio),
     fps: den ? num / den : 0,
     audioDuration: audio ? parseFloat(audio.duration ?? json.format?.duration ?? "0") || 0 : 0,
+    videoDuration: parseFloat(video.duration ?? json.format?.duration ?? "0") || 0,
   };
 }
 

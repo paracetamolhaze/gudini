@@ -1,8 +1,10 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE, getSettings } from "./store";
 import { probe, probeDuration, runFfmpeg, extractAudio, detectSilences, detectBlackNear, measureRmsWindows, type ProbeInfo } from "./ffmpeg";
 import { analyzeLevel, levelGateError, analysisGainDb, transcriptGateError } from "./speechGate";
+import { trackMismatchError } from "./ingestGate";
 import {
   edgesFromSilences,
   mechanicalCuts,
@@ -57,8 +59,25 @@ const smartSpeechCleanup = () => process.env.SMART_SPEECH_CLEANUP !== "false";
  */
 const montageV3 = () => process.env.MONTAGE_V3 !== "false";
 
+const stepClock = new Map<string, { step: string; at: number }>();
+/** Стадия в проект + в журнал воркера длительность предыдущей: видно, куда уходит время. */
 function setStep(id: string, step: string, progress: number) {
+  const prev = stepClock.get(id);
+  const now = Date.now();
+  if (prev && prev.step !== step) console.log(`⏱ ${prev.step}: ${((now - prev.at) / 1000).toFixed(0)} с → ${step}`);
+  stepClock.set(id, { step, at: now });
   updateProject(id, { processing: { state: "running", step, progress } });
+}
+
+/**
+ * Потоки x264 для итогового рендера. Кап в 4 потока появился при OOM в контейнере
+ * с малой памятью; на 12 ядрах он растягивал рендер вдвое. Берём ядра минус два
+ * (сайт и воркер рядом), не меньше 4 и не больше 12; RENDER_THREADS задаёт явно.
+ */
+function renderThreads(): number {
+  const env = Number(process.env.RENDER_THREADS);
+  if (Number.isFinite(env) && env >= 1) return Math.round(env);
+  return Math.min(12, Math.max(4, os.cpus().length - 2));
 }
 
 /**
@@ -95,6 +114,10 @@ export async function processProject(id: string): Promise<void> {
       raw = normalized;
       info = await probe(path.join(dir, raw));
     }
+    // Видео короче звука — кадры камеры оборвались (Safari на iPhone: 8 с видео при 87 с звука).
+    // Контейнер сырой записи это скрывает, нормализованный файл — нет. Стоп до платных стадий.
+    const mismatch = process.env.SPEECH_GATE === "off" ? null : trackMismatchError(info.videoDuration, info.audioDuration);
+    if (mismatch) throw new Error(mismatch);
 
     // --- Точная длительность по аудио (метаданным webm с камеры верить нельзя) ---
     setStep(id, "Анализ звука", 6);
@@ -711,7 +734,7 @@ export async function renderPlan(
       ...brolls.flatMap((b) => ["-loop", "1", "-framerate", "30", "-t", (b.end - b.start).toFixed(3), "-i", b.file!]),
       "-filter_complex", `${chain};${audioChain}`,
       "-map", "[v]", "-map", "[a]",
-      "-threads", "4",
+      "-threads", String(renderThreads()),
       // CRF 18 / medium вместо 21 / veryfast: ~8–9 Мбит/с на 1080×1920 — запас под
       // пережатие площадками; рендер дольше на десятки секунд, денег не стоит
       "-c:v", "libx264", "-preset", "medium", "-crf", "18",
@@ -743,6 +766,13 @@ async function selfCheck(dir: string, expectedDur: number, cutPoints: number[] =
     throw new Error(`Проверка: разрешение ${info.width}×${info.height} вместо 1080×1920`);
   }
   if (!info.hasAudio) throw new Error("Проверка: в результате нет звука");
+  // длительность контейнера берётся по самой длинной дорожке: видео на 8.7 с при звуке
+  // на 73 с проходило как «73 с», и ролик с застывшим кадром ловила только сверка с планом
+  if (info.videoDuration > 0 && info.videoDuration < expectedDur - 1.5) {
+    throw new Error(
+      `Проверка: видеодорожка ${info.videoDuration.toFixed(1)}с при звуке ${info.audioDuration.toFixed(1)}с — кадры исходника оборвались`,
+    );
+  }
   if (Math.abs(info.fps - 30) > 1) throw new Error(`Проверка: fps ${info.fps.toFixed(2)} вместо ~30`);
   if (info.audioDuration > 0 && Math.abs(info.audioDuration - info.duration) > 1.0) {
     throw new Error(

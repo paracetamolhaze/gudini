@@ -11,7 +11,7 @@ import { verifySource } from "./storyAssets";
 import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
 import { taste } from "./montageTaste";
-import { frameHash, groupScenes } from "./sceneHash";
+import { frameHash, hashFromGray, HASH_VF, groupScenes } from "./sceneHash";
 import { CARD_FILTER, sourceBigEnough, GOOD_SOURCE } from "./topInset";
 import { hasBlackBars } from "./blackBars";
 
@@ -446,6 +446,21 @@ export type SectionSource = { duration: number; sections: { index: number; start
  * Окна для стоп-кадров: одна формула и для целого файла, и для скачивания
  * кусками — индексы кадров в кэше зрения (seg:{video}:{i}) совпадают.
  */
+/** Сколько кадров одного видео снимать одновременно (каждый — короткий ffmpeg). */
+const FRAME_PARALLEL = Math.max(1, Number(process.env.FRAME_PARALLEL) || 4);
+
+/** Выполняет fn над элементами не более чем limit одновременно; порядок результатов — за вызывающим. */
+async function runPool<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const k = next++;
+      await fn(items[k], k);
+    }
+  });
+  await Promise.all(workers);
+}
+
 export function planWindows(duration: number, wanted: number): { samples: number; windows: { index: number; at: number }[] } {
   const samples = Math.min(wanted, Math.max(3, Math.floor(duration / 8)));
   const windows = Array.from({ length: samples }, (_, i) => ({ index: i, at: ((i + 0.5) / samples) * Math.max(0, duration - SEGMENT_WINDOW) }));
@@ -491,30 +506,50 @@ export async function cutSegments(
   // могла быть чужая финальная карточка с «SUBSCRIBE» — так она и попала в ролик.
   const WINDOW = SEGMENT_WINDOW;
   const OFFSETS = WINDOW_OFFSETS;
-  const shots: { at: number; frame: string; buffer: Buffer; hash: bigint | null; sample: number; part: number }[] = [];
-  for (const { index: i, at } of windows) {
-    for (const [p, frac] of OFFSETS.entries()) {
-      const t = Math.min(at + WINDOW * frac, Math.max(0, duration - 0.05));
-      const src = frameSrc(t, i);
-      const frame = path.join(dir, `probe-${videoId}-${i}-${p}.jpg`);
+  type Shot = { at: number; frame: string; buffer: Buffer; hash: bigint | null; sample: number; part: number };
+  const shots: Shot[] = [];
+  // Раньше на каждый кадр запускались два ffmpeg подряд (кадр, потом отдельный прогон
+  // под хэш) строго по очереди: 760 кадров на медиатеку — 1500 процессов, минуты
+  // ожидания на 12 ядрах. Теперь один запуск на кадр с двумя выводами (jpg для модели
+  // и 9×8 серого для хэша) и FRAME_PARALLEL кадров одновременно. Порядок кадров
+  // сохраняется по индексу, состав медиатеки от скорости дисков не зависит.
+  const jobs = windows.flatMap(({ index: i, at }) =>
+    OFFSETS.map((frac, p) => ({ i, at, p, t: Math.min(at + WINDOW * frac, Math.max(0, duration - 0.05)) })),
+  );
+  const grabbed: (Shot | null)[] = new Array(jobs.length).fill(null);
+  await runPool(jobs, FRAME_PARALLEL, async (job, k) => {
+    const src = frameSrc(job.t, job.i);
+    const frame = path.join(dir, `probe-${videoId}-${job.i}-${job.p}.jpg`);
+    const gray = path.join(dir, `probe-${videoId}-${job.i}-${job.p}.gray`);
+    try {
+      // Кадр для контроля качества нужен модели только чтобы понять, что на нём.
+      // Полное разрешение здесь — деньги на ветер: токенов в разы больше, а
+      // «SUBSCRIBE» и заставка одинаково видны на уменьшенной копии.
+      await runFfmpeg(
+        [
+          "-ss", src.t.toFixed(2), "-i", path.basename(src.file),
+          "-frames:v", "1", "-vf", `scale=${QC_FRAME_WIDTH}:-2`, "-q:v", "6", path.basename(frame),
+          "-frames:v", "1", "-vf", HASH_VF, "-f", "rawvideo", "-pix_fmt", "gray", path.basename(gray),
+        ],
+        { cwd: dir },
+      );
+      stages.framesSampled++;
+      let hash: bigint | null = null;
       try {
-        // Кадр для контроля качества нужен модели только чтобы понять, что на нём.
-        // Полное разрешение здесь — деньги на ветер: токенов в разы больше, а
-        // «SUBSCRIBE» и заставка одинаково видны на уменьшенной копии.
-        await runFfmpeg(
-          [
-            "-ss", src.t.toFixed(2), "-i", path.basename(src.file), "-frames:v", "1",
-            "-vf", `scale=${QC_FRAME_WIDTH}:-2`, "-q:v", "6", path.basename(frame),
-          ],
-          { cwd: dir },
-        );
-        stages.framesSampled++;
-        shots.push({ at, frame, buffer: fs.readFileSync(frame), hash: await frameHash(frame, dir), sample: i, part: p });
-      } catch (e: any) {
-        failures.push(String(e?.message ?? e).slice(0, 120));
+        hash = hashFromGray(fs.readFileSync(gray));
+      } catch {
+        hash = await frameHash(frame, dir);
       }
+      grabbed[k] = { at: job.at, frame, buffer: fs.readFileSync(frame), hash, sample: job.i, part: job.p };
+    } catch (e: any) {
+      failures.push(String(e?.message ?? e).slice(0, 120));
+    } finally {
+      try {
+        fs.rmSync(gray, { force: true });
+      } catch {}
     }
-  }
+  });
+  for (const g of grabbed) if (g) shots.push(g);
 
   // 2) один запрос на всё видео вместо запроса на каждый кадр
   let analyses: (Awaited<ReturnType<typeof analyzeFrames>>[number])[] = [];

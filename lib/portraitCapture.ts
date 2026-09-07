@@ -34,7 +34,16 @@ export function attachCamera(video: HTMLVideoElement, stream: MediaStream, signa
   });
 }
 
-export type PortraitCapture = { stream: MediaStream; isLive: () => boolean; dispose: () => void };
+export type PortraitCapture = {
+  stream: MediaStream;
+  isLive: () => boolean;
+  /** Кадров нарисовано за последнюю секунду: 0 — камера не отдаёт кадры. */
+  fps: () => number;
+  dispose: () => void;
+};
+
+/** Если кадры не приходят дольше этого, камера считается остановившейся (запись прерывается). */
+export const FRAME_STALL_MS = 3000;
 
 export function createPortraitCapture(
   video: HTMLVideoElement,
@@ -50,15 +59,37 @@ export function createPortraitCapture(
   let disposed = false;
   let callback = 0;
   let last = -Infinity;
-  const useVideoFrames = typeof video.requestVideoFrameCallback === "function";
+  // Safari на iPhone перестаёт вызывать requestVideoFrameCallback через несколько секунд
+  // записи (дубль: 8 с видео при 87 с звука). Поэтому rVFC — только источник точных
+  // кадров; сторож рисует сам, если кадры перестали приходить, и переводит цикл на
+  // requestAnimationFrame насовсем. Если и сам поток камеры застыл — это ошибка записи.
+  let useVideoFrames = typeof video.requestVideoFrameCallback === "function";
+  let lastDrawAt = performance.now();
+  let lastMediaTime = -1;
+  let lastAdvanceAt = performance.now();
+  const drawTimes: number[] = [];
   const draw = () => {
     const crop = portraitCrop(video.videoWidth, video.videoHeight);
     // No CSS mirroring: these exact, unmirrored pixels are shown and recorded.
     context.drawImage(video, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
+    const now = performance.now();
+    lastDrawAt = now;
+    drawTimes.push(now);
+    while (drawTimes.length && drawTimes[0] < now - 1000) drawTimes.shift();
   };
   draw(); // Fail before enabling Record if the first frame cannot be drawn.
   const stream = canvas.captureStream(PORTRAIT_FRAME.fps);
   source.getAudioTracks().forEach((track) => stream.addTrack(track));
+  const fail = (error: unknown) => {
+    if (disposed) return;
+    disposed = true;
+    clearInterval(watchdog);
+    stream.getVideoTracks().forEach((track) => track.stop());
+    onError(error instanceof Error ? error : new Error(String(error)));
+  };
+  const schedule = () => {
+    callback = useVideoFrames ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
+  };
   const tick = (now: number) => {
     if (disposed) return;
     try {
@@ -66,19 +97,43 @@ export function createPortraitCapture(
         draw();
         last = now;
       }
-      callback = useVideoFrames ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
+      schedule();
     } catch (error) {
-      disposed = true;
-      stream.getVideoTracks().forEach((track) => track.stop());
-      onError(error instanceof Error ? error : new Error(String(error)));
+      fail(error);
     }
   };
-  callback = useVideoFrames ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
+  schedule();
+  const watchdog = setInterval(() => {
+    if (disposed) return;
+    try {
+      const now = performance.now();
+      if (video.paused && !video.ended) void video.play().catch(() => {});
+      if (video.currentTime !== lastMediaTime) {
+        lastMediaTime = video.currentTime;
+        lastAdvanceAt = now;
+      }
+      if (now - lastDrawAt > (2000 / PORTRAIT_FRAME.fps) * 2 && video.readyState >= 2 && !video.paused) {
+        if (useVideoFrames) {
+          video.cancelVideoFrameCallback(callback);
+          useVideoFrames = false;
+          schedule();
+        }
+        draw();
+      }
+      if (now - lastAdvanceAt > FRAME_STALL_MS && now - lastDrawAt > FRAME_STALL_MS) {
+        fail(new Error("Камера перестала отдавать кадры. Запись остановлена — проверьте дубль или откройте камеру заново."));
+      }
+    } catch (error) {
+      fail(error);
+    }
+  }, 100);
   return {
     stream,
     isLive: () => !disposed && [...source.getTracks(), ...stream.getTracks()].every((track) => track.readyState === "live" && !track.muted),
+    fps: () => (disposed ? 0 : drawTimes.filter((t) => t >= performance.now() - 1000).length),
     dispose() {
       disposed = true;
+      clearInterval(watchdog);
       if (useVideoFrames) video.cancelVideoFrameCallback(callback);
       else cancelAnimationFrame(callback);
       // The owner releases camera + microphone; only this track belongs to us.

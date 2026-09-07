@@ -22,28 +22,35 @@ export const SAME_SCENE_DISTANCE = 12;
  * ярче предыдущего». Устойчив к сжатию, размытию и смене яркости, чувствителен
  * к смене плана.
  */
+/** Видеофильтр, дающий 9×8 серых пикселей для dHash (сырой gray-вывод ffmpeg). */
+export const HASH_VF = "scale=9:8,format=gray";
+
+/** dHash по 72 байтам серого 9×8 (вывод HASH_VF в -f rawvideo -pix_fmt gray). */
+export function hashFromGray(buf: Buffer): bigint | null {
+  if (buf.length < 72) return null;
+  let hash = 0n;
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const left = buf[row * 9 + col];
+      const right = buf[row * 9 + col + 1];
+      hash = (hash << 1n) | (right > left ? 1n : 0n);
+    }
+  }
+  return hash;
+}
+
 export async function frameHash(file: string, tmpDir: string): Promise<bigint | null> {
   const raw = path.join(tmpDir, `hash-${path.basename(file)}.gray`);
   try {
     await runFfmpeg([
       "-i", file,
       "-frames:v", "1",
-      "-vf", "scale=9:8,format=gray",
+      "-vf", HASH_VF,
       "-f", "rawvideo",
       "-pix_fmt", "gray",
       raw,
     ]);
-    const buf = fs.readFileSync(raw);
-    if (buf.length < 72) return null;
-    let hash = 0n;
-    for (let row = 0; row < 8; row++) {
-      for (let col = 0; col < 8; col++) {
-        const left = buf[row * 9 + col];
-        const right = buf[row * 9 + col + 1];
-        hash = (hash << 1n) | (right > left ? 1n : 0n);
-      }
-    }
-    return hash;
+    return hashFromGray(fs.readFileSync(raw));
   } catch {
     return null;
   } finally {

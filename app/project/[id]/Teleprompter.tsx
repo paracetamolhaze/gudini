@@ -30,6 +30,8 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
   // пришёл на −57 дБ, и это выяснилось только после платного монтажа.
   const [micDb, setMicDb] = useState<number | null>(null);
   const [micWarn, setMicWarn] = useState("");
+  // Кадров камеры в секунду: iPhone Safari может перестать отдавать кадры молча.
+  const [camFps, setCamFps] = useState<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
@@ -58,10 +60,12 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
     let capture: PortraitCapture | null = null;
     let removeTrackListeners = () => {};
     let meterTimer = 0;
+    let fpsTimer = 0;
     setReady(false);
     setError("");
     setMicDb(null);
     setMicWarn("");
+    setCamFps(null);
 
     const interrupt = (message: string) => {
       if (abort.signal.aborted) return;
@@ -145,6 +149,10 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
           track.removeEventListener("unmute", onUnmute);
         });
         setReady(capture.isLive());
+        fpsTimer = window.setInterval(() => {
+          const c = captureRef.current;
+          setCamFps(c ? c.fps() : null);
+        }, 500);
         // Индикатор уровня микрофона: анализатор слушает ту же дорожку, в запись не вмешивается.
         try {
           const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -201,6 +209,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       document.removeEventListener("visibilitychange", onVisibility);
       removeTrackListeners();
       window.clearInterval(meterTimer);
+      window.clearInterval(fpsTimer);
       void audioCtxRef.current?.close().catch(() => {});
       audioCtxRef.current = null;
       const recorder = recorderRef.current;
@@ -303,6 +312,11 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
             🎤 {micDb.toFixed(0)} дБ
           </span>
         )}
+        {!review && camFps !== null && ready && (
+          <span className={`tp-mic ${camFps >= 20 ? "tp-mic--ok" : camFps >= 10 ? "tp-mic--quiet" : "tp-mic--silent"}`} title="Кадров камеры в секунду">
+            🎥 {camFps} к/с
+          </span>
+        )}
         {!review && <>
           <label className="tp-speed">
             <span>Скорость</span>
@@ -323,6 +337,9 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       </div>
       {error && <div className="error-box tp-error" role="alert">{error}</div>}
       {!error && micWarn && <div className="tp-warn" role="status">{micWarn}</div>}
+      {!error && !micWarn && recording && camFps !== null && camFps < 10 && (
+        <div className="tp-warn" role="status">Камера отдаёт {camFps} кадров/с — ролик будет дёрганым. Если счётчик на нуле, остановите запись и откройте камеру заново.</div>
+      )}
       <div className="tp-bar tp-bottom">
         <p className="tp-frame-note">{review ? "Это сохранённый дубль. Монтаж сохранит его кадрирование." : "В запись попадёт кадр внутри рамки. Текст и кнопки не записываются."}</p>
         {review ? <>

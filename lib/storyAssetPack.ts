@@ -477,6 +477,8 @@ export type SectionSource = { duration: number; sections: { index: number; start
  */
 /** Сколько кадров одного видео снимать одновременно (каждый — короткий ffmpeg). */
 const FRAME_PARALLEL = Math.max(1, Number(process.env.FRAME_PARALLEL) || 4);
+/** Сколько картинок-кандидатов одного блока скачивать и проверять одновременно. */
+const IMAGE_PARALLEL = Math.max(1, Number(process.env.IMAGE_PARALLEL) || 4);
 
 /** Выполняет fn над элементами не более чем limit одновременно; порядок результатов — за вызывающим. */
 async function runPool<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
@@ -1031,12 +1033,13 @@ export async function buildAssetPack(
   // ---------- BEAT: добор под блоки. VIDEO-FIRST: видео ищется раньше картинок ----------
   const T = taste();
   const ordered = [...needs].sort((a, b) => rank(a.importance) - rank(b.importance));
+  const foundForNeed = new Map<string, boolean>();
   const seenImage = new Set<string>();
 
-  const processNeed = async (need: MediaResearchNeed): Promise<void> => {
+  const processNeed = async (need: MediaResearchNeed, opts: { queries?: string[]; imagesOnly?: boolean } = {}): Promise<void> => {
     if (assets.length >= T.max_total_assets) return;
     const covered = () => assets.some((a) => a.compatibleBeatIds.includes(need.beatId));
-    const queries = beatQueries(research, need);
+    const queries = opts.queries ?? beatQueries(research, need);
 
     // Порядок поиска задаёт сам блок сценария. Для человека, портрета или
     // статичного факта хорошее проверенное фото лучше, чем целый видеосюжет:
@@ -1113,15 +1116,18 @@ export async function buildAssetPack(
       let acceptedForNeed = 0;
       for (const q of queries.slice(0, imageQueries)) {
         if (acceptedForNeed >= T.max_items_per_beat) break;
-        for (const im of (await braveImages(q)).slice(0, perQuery)) {
-          if (assets.length >= T.max_total_assets || acceptedForNeed >= T.max_items_per_beat) break;
+        // Кандидаты одного запроса проверяются по IMAGE_PARALLEL сразу: скачивание и
+        // зрение — это ожидание сети, по одному это занимало до 5 с на картинку.
+        const candidates = (await braveImages(q)).slice(0, perQuery);
+        await runPool(candidates, IMAGE_PARALLEL, async (im) => {
+          if (assets.length >= T.max_total_assets || acceptedForNeed >= T.max_items_per_beat) return;
           stages.imageResults++;
           const key = im.imageUrl.split("?")[0];
-          if (seenImage.has(key)) continue;
+          if (seenImage.has(key)) return;
           const src = verifySource({ title: im.title, description: im.description, sourceUrl: im.url }, research);
           if (!src.ok) {
             if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
-            continue;
+            return;
           }
           stages.imageVerifyPass++;
           seenImage.add(key);
@@ -1141,25 +1147,30 @@ export async function buildAssetPack(
             }).catch(() => null);
             if (!res || !res.ok) {
               stages.imageFetchFailed++;
-              continue;
+              return;
             }
             const buf = Buffer.from(await res.arrayBuffer());
             if (buf.length < 10_000) {
               stages.imageTooSmall++;
-              continue;
+              return;
             }
             const an = await analyzeAsset(`img:${id}`, "", buf);
             addCost({ visionCalls: 1 });
-            if (!an) continue;
+            if (!an) return;
             // блок излагает факт — постановке и объяснялке здесь не место
+            // постер фильма и обложка — это и есть материал, крупный текст на них уместен;
+            // в «Одиссее» Нолана постеры отбраковывались за «вшитый текст», и блок про
+            // сам фильм остался без картинки
+            const posterLike = staged && /poster|постер|cover art|title card|logo/i.test(need.visualDescription);
             const bad = qcReject(an, {
               factualBeat: need.intent === "EXACT_EVENT" || need.intent === "ENTITY",
               staged,
               noTalkingHeads: imageLedMode,
+              textIsTheSubject: posterLike,
             });
             if (bad) {
               countQcReason(bad);
-              continue;
+              return;
             }
             // Реальный размер файла проверяется ПОСЛЕ скачивания: миниатюра
             // выглядит картинкой, но на карточке 900×506 превращается в мыло.
@@ -1173,7 +1184,7 @@ export async function buildAssetPack(
               stages.imageTooSmall++;
               countQcReason(`изображение ${dims.width}×${dims.height} меньше карточки`);
               fs.rmSync(rawFile, { force: true });
-              continue;
+              return;
             }
             // единая геометрия карточки — та же, что у стоп-кадров и у рендера
             await runFfmpeg(["-i", rawFile, "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", file]);
@@ -1181,7 +1192,7 @@ export async function buildAssetPack(
             if (await hasBlackBars(file, mediaDir)) {
               countQcReason("чёрные полосы внутри кадра");
               fs.rmSync(file, { force: true });
-              continue;
+              return;
             }
             stages.imagesAccepted++;
             acceptedForNeed++;
@@ -1200,18 +1211,22 @@ export async function buildAssetPack(
               verification: { sourceVerified: true, visualVerified: true, version: PACK_VERSION },
             });
           } catch {}
-        }
+        });
       }
     };
 
     // Порядок определяется блоком сценария, а не общей квотой на видео.
-    if (imageFirst) {
+    if (opts.imagesOnly) {
+      await searchImages();
+    } else if (imageFirst) {
       await searchImages();
       if (!gotImage) await searchVideo();
     } else {
       await searchVideo();
       await searchImages();
     }
+    if (gotImage || gotVideo) foundForNeed.set(need.beatId, true);
+    else if (!foundForNeed.has(need.beatId)) foundForNeed.set(need.beatId, false);
   };
   // Блоки — партиями по PARALLEL в порядке важности. Одно и то же видео два блока
   // не скачают: пометка в seenVideo ставится синхронно до первого await.
@@ -1222,6 +1237,24 @@ export async function buildAssetPack(
         processNeed(need).catch((e) => console.log(`  блок ${need.beatId}: ${String(e?.message ?? e).slice(0, 100)}`)),
       ),
     );
+  }
+
+  // ---------- добор: блоки, под которые не нашлось ничего ----------
+  // Блоки сценария иногда просят несуществующее («инфографика бюджета рядом с
+  // постером»); пустой блок рядом с двумя другими давал 10 с без материала, и
+  // монтаж останавливался уже после оплаты медиатеки. Для таких блоков ищутся
+  // общие кадры темы: постер, официальный кадр, тема плюс суть блока.
+  const empty = ordered.filter((n) => foundForNeed.get(n.beatId) === false);
+  if (empty.length && assets.length < T.max_total_assets) {
+    const title = research.entities.find((e) => e.type === "EVENT")?.name || research.entities[0]?.name || research.topic;
+    console.log(`  добор: блоков без материала ${empty.length} — общие кадры темы «${title}»`);
+    for (const need of empty) {
+      const gist = need.visualDescription.split(" ").slice(0, 6).join(" ");
+      await processNeed(need, {
+        imagesOnly: true,
+        queries: [`${gist} ${title}`, `${title} official still`, `${title} poster`],
+      }).catch((e) => console.log(`  добор ${need.beatId}: ${String(e?.message ?? e).slice(0, 100)}`));
+    }
   }
 
   // ---------- сопоставление с блоками ----------

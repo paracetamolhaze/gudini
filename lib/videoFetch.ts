@@ -116,7 +116,7 @@ async function viaExtractor(pageUrl: string, out: string): Promise<FetchResult> 
         "-o", out,
         pageUrl,
       ],
-      { timeout: 360_000, maxBuffer: 8 * 1024 * 1024 },
+      { timeout: 300_000, maxBuffer: 8 * 1024 * 1024 },
     );
     if (!fs.existsSync(out) || fs.statSync(out).size < 20_000) return { ok: false, reason: "экстрактор ничего не отдал" };
     return { ok: true, file: out, method: "extractor" };
@@ -191,7 +191,7 @@ export async function probeVideo(pageUrl: string): Promise<ProbeInfo> {
         "--user-agent", UA,
         pageUrl,
       ],
-      { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 },
+      { timeout: 45_000, maxBuffer: 4 * 1024 * 1024 },
     );
     const [extractor, dur, formats, title] = String(stdout).trim().split("\n")[0].split("\t");
     const info: ProbeInfo = {
@@ -268,7 +268,9 @@ export async function fetchVideoSections(
         "-o", template,
         pageUrl,
       ],
-      { timeout: 360_000, maxBuffer: 8 * 1024 * 1024 },
+      // окна по 3 с не должны качаться дольше: если YouTube душит скорость, партия из трёх
+      // роликов ждала одного до 6 минут — быстрее пропустить и взять следующий
+      { timeout: 150_000, maxBuffer: 8 * 1024 * 1024 },
     );
     const produced = fs
       .readdirSync(dir)

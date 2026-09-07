@@ -20,7 +20,12 @@ export const FRAME = { w: 1080, h: 1920 } as const;
 export const CARD = { w: 900, h: 506, x: 90, y: 120 } as const;
 
 /** Минимальный исходник: мельче — это уже мыло на экране. */
-export const MIN_SOURCE = { w: CARD.w, h: CARD.h } as const;
+/**
+ * Минимальный исходник: карточка 900×506, увеличение до 1.3× на телефоне незаметно.
+ * Строгий порог «не меньше карточки» отбраковывал 43 из 98 проверенных веб-картинок
+ * в «Одиссее» Нолана — портретные фото актёров 800×1200 не проходили по ширине.
+ */
+export const MIN_SOURCE = { w: Math.round(CARD.w / 1.3), h: Math.round(CARD.h / 1.3) } as const;
 /** Желательный исходник. */
 export const GOOD_SOURCE = { w: 1280, h: 720 } as const;
 

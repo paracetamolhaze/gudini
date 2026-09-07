@@ -282,7 +282,21 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       const recorder = new MediaRecorder(recordStream, {
         mimeType, videoBitsPerSecond: 12_000_000, audioBitsPerSecond: 192_000,
       });
-      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+      // Safari на iPhone дважды переставал писать видео на 8-й и 13-й секунде, а звук
+      // шёл до конца — без единого события от браузера. Живой кусок 1080p весит сотни
+      // килобайт в секунду, кусок с одним звуком — десятки: два лёгких куска подряд
+      // после тяжёлых означают смерть видео, запись останавливается сразу.
+      const chunkKB: number[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+        chunkKB.push(event.data.size / 1024);
+        const n = chunkKB.length;
+        if (n >= 3 && chunkKB.slice(0, n - 2).some((kb) => kb >= 150) && chunkKB[n - 1] < 60 && chunkKB[n - 2] < 60) {
+          const died = chunkKB.findIndex((kb, i) => i > 0 && kb < 60 && chunkKB[i - 1] >= 150);
+          setError(`Браузер перестал записывать видео на ${Math.max(1, died)}-й секунде, дальше в файле только звук. Запись остановлена — этот дубль не годится. Откройте /diag/record и пришлите отчёт.`);
+          stop();
+        }
+      };
       recorder.onerror = () => {
         setError("Браузер прервал запись. Проверьте сохранённый дубль.");
         stop();
@@ -299,10 +313,10 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         }
         setReview({ blob, url: URL.createObjectURL(blob) });
       };
-      // Safari (mp4) нельзя резать на куски по секунде: склейка фрагментов даёт контейнер
-      // с мусорной длительностью, и монтаж падает. Один блок на стоп; webm в Chrome — по секунде.
-      if (mimeType.startsWith("video/mp4")) recorder.start();
-      else recorder.start(1000);
+      // Куски по секунде во всех браузерах: по их размеру видно, живо ли видео.
+      // Мусорную длительность контейнера Safari при склейке кусков снимает
+      // нормализация записи на входе конвейера (raw-norm.mp4).
+      recorder.start(1000);
       recorderRef.current = recorder;
       setSeconds(0);
       setRecording(true);

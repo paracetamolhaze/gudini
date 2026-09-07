@@ -1331,9 +1331,12 @@ export async function buildAssetPack(
       const before = assets.length;
       console.log(`  вторая волна: слабо закрытых блоков ${weak.length} — поиск по описанию нужного кадра`);
       for (const need of weak) {
+        // длинное предложение — плохой поисковый запрос: берём суть (первые 6 слов) и сущности
+        const gist = need.visualDescription.replace(/^(photo|image|picture|close-up|shot|illustration|graphic)\s+(of\s+)?/i, "").split(" ").slice(0, 6).join(" ");
+        const ents = need.entities.slice(0, 2).join(" ");
         await processNeed(need, {
           imagesOnly: true,
-          queries: [need.visualDescription, `${need.visualDescription} photo`, `${need.visualDescription} illustration`],
+          queries: [gist, `${gist} photo`, ents ? `${ents} ${gist}` : `${gist} illustration`],
         }).catch((e) => console.log(`  вторая волна ${need.beatId}: ${String(e?.message ?? e).slice(0, 100)}`));
       }
       const fresh = assets.slice(before);

@@ -228,8 +228,13 @@ export function packDistribution(
   const visual = beats.filter((b) => b.visualNeed !== "NONE");
   const per = duration / Math.max(1, visual.length);
   const best = (b: { id: string }) => pack.coverage.find((c) => c.beatId === b.id)?.bestScore ?? 0;
-  // честным считаем блок с оценкой 2 и выше: «сойдёт как обстановка» провалов не закрывает
-  const covered = visual.map((b) => best(b) >= 2);
+  // Честным считаем блок с оценкой 2 и выше. Для блоков-обстановки (CONTEXT) и общих
+  // понятий (GENERAL) кадр-обстановка с оценкой 1 — тоже честное покрытие: под фразу
+  // «они составляют весь рынок» в объяснении про растение годится фото растения, и
+  // требовать «точно про этот блок» там нечего. Для события и участника (EXACT_EVENT,
+  // ENTITY) обстановка провала не закрывает — это чужой кадр под конкретный факт.
+  const lenient = (b: { visualNeed: string }) => b.visualNeed === "CONTEXT" || b.visualNeed === "GENERAL";
+  const covered = visual.map((b) => best(b) >= 2 || (lenient(b) && best(b) >= 1));
   // Дыра — блок, под который нет ВООБЩЕ ничего: уплотнение после режиссёра ставит
   // в слабый блок (оценка 1) карточку-обстановку, и экран не пустует. Проект
   // «Мстителей» упирался в два соседних слабых блока при 80% сильного покрытия.

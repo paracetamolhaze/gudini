@@ -216,7 +216,8 @@ async function runJob(id: string): Promise<void> {
       scriptHash: textHash(project.script ?? ""),
     };
     const pending = readDelivery(id);
-    if (pending && canRedeliver(pending, now) && fs.existsSync(path.join(projectDir(id), "out.mp4"))) {
+    const filmPlanOnly = project.montageStyle === "ai_film" && (project.aiFilm?.request ?? "plan") === "plan";
+    if (!filmPlanOnly && pending && canRedeliver(pending, now) && fs.existsSync(path.join(projectDir(id), "out.mp4"))) {
       console.log("  ролик уже смонтирован и проверен — только доставка, платные стадии не запускаются");
       upsertProject({ ...getProject(id)!, ...(pending.project as Partial<Project>), processing: { state: "done", step: "Готово", progress: 100 } });
     } else {
@@ -224,7 +225,11 @@ async function runJob(id: string): Promise<void> {
     }
 
     const done = getProject(id)!;
-    if (done.processing.state === "done") {
+    if (done.processing.state === "done" && !done.processedVideo && done.aiFilm?.plan) {
+      // план AI-фильма: видео нет, сайт показывает план и цену, генерация — после подтверждения
+      await api(`/api/worker/complete/${id}`, { method: "POST", body: JSON.stringify({ aiFilm: done.aiFilm, research: done.research }) });
+      console.log(`✔ Задача ${id}: план AI-фильма отправлен (оценка $${done.aiFilm.plan.estimatedCost.toFixed(2)})`);
+    } else if (done.processing.state === "done") {
       const deliverable = {
         subtitlesSource: done.subtitlesSource,
         brollCount: done.brollCount ?? 0,
@@ -233,6 +238,7 @@ async function runJob(id: string): Promise<void> {
         coverReason: done.coverReason,
         meta: done.meta,
         research: done.research,
+        ...(done.aiFilm ? { aiFilm: done.aiFilm } : {}),
       };
       writeDelivery(id, {
         at: new Date().toISOString(),

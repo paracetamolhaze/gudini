@@ -21,6 +21,24 @@ type Project = {
   brollCount?: number;
   meta: Meta | null;
   publications: Publication[];
+  montageStyle?: "cards" | "ai_film";
+  aiFilm?: {
+    request?: "plan" | "generate";
+    status?: "planned" | "generated" | "failed";
+    spent?: number;
+    generatedAt?: string;
+    plan?: {
+      duration: number;
+      model: string;
+      totalSeconds: number;
+      estimatedCost: number;
+      calls: number;
+      estimatedMinutes: number;
+      bible: { visualStyle: string; mood: string; mainCharacter: { description: string } | null; locations: string[]; storyArc: string };
+      episodes: { id: string; start: number; end: number; meaning: string; visualAction: string; location: string }[];
+      sequences: { index: number; start: number; end: number; seconds: number; scenes: { id: string }[] }[];
+    };
+  };
 };
 
 const PLATFORMS = [
@@ -517,9 +535,16 @@ function ProcessStep({
     return () => clearInterval(timer);
   }, [processing.state, reload]);
 
-  async function start() {
+  const style = project.montageStyle ?? "cards";
+  const filmPlan = project.aiFilm?.plan;
+
+  async function start(request?: "plan" | "generate") {
     setError("");
-    const res = await fetch(`/api/projects/${project.id}/process`, { method: "POST" });
+    const res = await fetch(`/api/projects/${project.id}/process`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request ? { request } : {}),
+    });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       setError(j.error ?? "Ошибка запуска монтажа");
@@ -528,15 +553,63 @@ function ProcessStep({
     await reload();
   }
 
+  async function chooseStyle(next: "cards" | "ai_film") {
+    if (next === style) return;
+    setError("");
+    const res = await fetch(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ montageStyle: next }),
+    });
+    if (!res.ok) setError("Не удалось переключить стиль");
+    await reload();
+  }
+
+  const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
   return (
     <div className="card">
       <h2>✂️ Автомонтаж</h2>
+      <div className="row" style={{ marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+        <button className={`btn ${style === "cards" ? "" : "btn-secondary"}`} onClick={() => chooseStyle("cards")} disabled={processing.state === "running"}>
+          🃏 Карточки
+        </button>
+        <button className={`btn ${style === "ai_film" ? "" : "btn-secondary"}`} onClick={() => chooseStyle("ai_film")} disabled={processing.state === "running"}>
+          🎬 AI-фильм
+        </button>
+      </div>
       <p className="hint" style={{ marginBottom: 14 }}>
-        Гудини кадрирует видео в 9:16 (1080×1920), нормализует громкость, добавит крупные «горящие» субтитры по
-        словам и сгенерирует описание с хэштегами.
+        {style === "ai_film"
+          ? "Сверху — цельный AI-фильм по смыслу речи (Veo), снизу — ты с субтитрами и своим звуком. Сначала собирается план с ценой; генерация только после подтверждения."
+          : "Гудини кадрирует видео в 9:16 (1080×1920), нормализует громкость, добавит крупные «горящие» субтитры по словам, карточки-иллюстрации и сгенерирует описание с хэштегами."}
       </p>
 
       {!project.rawVideo && <div className="error-box">Сначала загрузи видео на шаге «Съёмка»</div>}
+
+      {style === "ai_film" && filmPlan && processing.state !== "running" && (
+        <div style={{ marginBottom: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
+          <b>План фильма</b>
+          <p className="hint" style={{ margin: "6px 0" }}>
+            Стиль: {filmPlan.bible.visualStyle}. {filmPlan.bible.mainCharacter ? `Герой: ${filmPlan.bible.mainCharacter.description}. ` : ""}
+            {filmPlan.bible.storyArc}
+          </p>
+          <ol style={{ margin: "6px 0 8px 18px", padding: 0 }}>
+            {filmPlan.episodes.map((e) => (
+              <li key={e.id} style={{ marginBottom: 4 }}>
+                <span className="hint">{fmtTime(e.start)}–{fmtTime(e.end)}</span> {e.meaning}
+                <div className="hint" style={{ opacity: 0.8 }}>{e.visualAction}</div>
+              </li>
+            ))}
+          </ol>
+          <p className="hint">
+            Последовательностей: {filmPlan.sequences.length} · вызовов Veo: {filmPlan.calls} · секунд фильма: {filmPlan.totalSeconds} ·
+            оценка <b>${filmPlan.estimatedCost.toFixed(2)}</b> · примерно {filmPlan.estimatedMinutes} мин · модель {filmPlan.model}
+          </p>
+          {project.aiFilm?.status === "generated" && (
+            <p className="hint">Фильм сгенерирован{typeof project.aiFilm.spent === "number" ? ` · потрачено в последнем запуске $${project.aiFilm.spent.toFixed(2)}` : ""}. Повторный запуск возьмёт готовые сцены из кэша.</p>
+          )}
+        </div>
+      )}
 
       {processing.state === "running" ? (
         <>
@@ -550,10 +623,27 @@ function ProcessStep({
           <p className="hint">{processing.progress}%</p>
         </>
       ) : (
-        <div className="row">
-          <button className="btn" onClick={start} disabled={!project.rawVideo}>
-            🪄 Смонтировать видео
-          </button>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+          {style === "ai_film" ? (
+            filmPlan ? (
+              <>
+                <button className="btn" onClick={() => start("generate")} disabled={!project.rawVideo}>
+                  🎬 Сгенерировать фильм и смонтировать (~${filmPlan.estimatedCost.toFixed(2)})
+                </button>
+                <button className="btn btn-secondary" onClick={() => start("plan")} disabled={!project.rawVideo}>
+                  Пересобрать план
+                </button>
+              </>
+            ) : (
+              <button className="btn" onClick={() => start("plan")} disabled={!project.rawVideo}>
+                📝 Собрать план фильма (Veo не вызывается)
+              </button>
+            )
+          ) : (
+            <button className="btn" onClick={() => start()} disabled={!project.rawVideo}>
+              🪄 Смонтировать видео
+            </button>
+          )}
           {project.processedVideo && (
             <>
               {project.coverStatus === "ok" || !project.coverStatus ? (

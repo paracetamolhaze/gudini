@@ -41,10 +41,14 @@ services:
     environment:
       # воркер ходит на сайт по внутренней сети Docker, исходник не гоняется через интернет
       GUDINI_URL: http://gudini-site:3000
+      # AI-фильм: Veo на Vertex AI через учётные данные gcloud (application-default login);
+      # ключей в .env нет, файл смонтирован только для чтения
+      GOOGLE_APPLICATION_CREDENTIALS: /app/gcp-adc.json
     depends_on:
       - gudini-site
     volumes:
       - gudini-worker-data:/app/data
+      - ${GCLOUD_ADC_FILE:-./data/gcp-adc-missing.json}:/app/gcp-adc.json:ro
 
   # --- публичный HTTPS: включается профилем `public`, когда домен и проброс порта готовы ---
   caddy:

@@ -18,6 +18,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   // исследование истории можно записать отдельно, не трогая уже начитанный сценарий
   if (body.research && typeof body.research === "object") patch.research = body.research;
   if (typeof body.sourceUrl === "string") patch.sourceUrl = body.sourceUrl;
+  if (body.montageStyle === "cards" || body.montageStyle === "ai_film") patch.montageStyle = body.montageStyle;
   if (body.meta && typeof body.meta === "object") {
     patch.meta = {
       title: String(body.meta.title ?? ""),

@@ -23,6 +23,9 @@ import { checkRenderConformance } from "./renderConformance";
 import { pauseCut } from "./speechCleanupPlan";
 import { snapCutsToWords, leftoverLongGaps, leftoverRepeats, verifyCleanSpeech } from "./speechVerify";
 import { buildAss } from "./subtitles";
+import { runAiFilmStage } from "./aiFilm/run";
+import { renderFilmComposite } from "./aiFilm/composite";
+import { checkFilmAlive } from "./aiFilm/check";
 import { CARD, CARD_FILTER } from "./topInset";
 import { applyScriptFormatting } from "./scriptFormat";
 import { attachScriptPunctuation } from "./scriptPunctuation";
@@ -265,7 +268,9 @@ export async function processProject(id: string): Promise<void> {
     // Блоки сценария и медиатека зависят только от сценария и исследования: они идут
     // параллельно с чисткой речи (Claude, ~2 мин) и перекодированием, а не после них.
     // Ошибка сборки не теряется: она поднимается на стадии монтажа, где её ждут.
-    const libraryPromise: Promise<PreparedLibrary | { error: unknown } | null> = montageV3()
+    // AI-фильму медиатека карточек не нужна — поиск и зрение для него не оплачиваются
+    const aiFilmStyle = project.montageStyle === "ai_film";
+    const libraryPromise: Promise<PreparedLibrary | { error: unknown } | null> = montageV3() && !aiFilmStyle
       ? researchPromise
           .then((r) => (r ? prepareLibrary(r, project.script ?? "", dir) : null))
           .catch((e: unknown) => ({ error: e }))
@@ -387,7 +392,31 @@ export async function processProject(id: string): Promise<void> {
     // ПРОИЗВОДСТВЕННЫЙ ПУТЬ V3: история → блоки сценария → медиатека → режиссёр → валидатор.
     // Отката на старый планировщик нет ни на одном шаге: молчаливая подмена монтажа
     // однажды уже дала ролик, собранный непонятно чем, и разбираться было дороже.
-    if (montageV3()) {
+    // ВТОРОЙ СТИЛЬ — AI-фильм: сверху цельный сгенерированный фильм (Veo), снизу автор.
+    // Медиатека, режиссёр карточек и сверка карточек не запускаются. Фаза «план»
+    // заканчивается здесь без рендера; «генерация» идёт только по подтверждённому плану.
+    let filmFile: string | null = null;
+    let filmSpent = 0;
+    if (aiFilmStyle) {
+      const film = await runAiFilmStage({
+        id, dir, project, words, duration: effDur, research: researchPromise,
+        setStep: (step, p) => setStep(id, step, p),
+      });
+      if (film.kind === "plan") {
+        writeLedger(dir);
+        keepRunLedger(dir, "done");
+        console.log(`Стоимость плана AI-фильма (переменные API): $${summarize().totals.variableApiCost.toFixed(4)}`);
+        updateProject(id, {
+          aiFilm: { ...(project.aiFilm ?? {}), request: "plan", plan: film.plan, status: "planned", error: undefined },
+          processing: { state: "done", step: "План фильма готов", progress: 100 },
+        });
+        return;
+      }
+      filmFile = film.file;
+      filmSpent = film.spent;
+      plan = { version: 1, duration: effDur, events: [], captionStyle: { ...DEFAULT_CAPTION_STYLE } };
+      fs.writeFileSync(path.join(dir, "edit-plan.json"), JSON.stringify(plan, null, 2), "utf8");
+    } else if (montageV3()) {
       let research = getProject(id)?.research;
       if (!research) {
         // Сценарий написан обычной генерацией по теме, без исследования. Медиатека
@@ -445,9 +474,17 @@ export async function processProject(id: string): Promise<void> {
 
     // --- Рендер по плану ---
     setStep(id, "Монтаж видео", 38);
-    await renderPlan(dir, source, plan, effDur, (f) =>
-      setStep(id, "Монтаж видео", 38 + Math.round(f * 52)),
-    );
+    if (filmFile) {
+      const src = await probe(path.isAbsolute(source) ? source : path.join(dir, source));
+      await renderFilmComposite(dir, source, filmFile, effDur, (f) => setStep(id, "Монтаж видео", 38 + Math.round(f * 52)), {
+        threads: renderThreads(),
+        fit: authorFitFilter(src.displayWidth, src.displayHeight),
+      });
+    } else {
+      await renderPlan(dir, source, plan, effDur, (f) =>
+        setStep(id, "Монтаж видео", 38 + Math.round(f * 52)),
+      );
+    }
 
     // --- Self-check результата (+ чёрные кадры вокруг монтажных точек) ---
     setStep(id, "Проверка результата", 92);
@@ -461,7 +498,11 @@ export async function processProject(id: string): Promise<void> {
     // картинка, автор под ней не перекрыт, карточка неподвижна. Раньше проверка жила
     // только в ручных скриптах, и в продакшене ролик выходил без неё. Всё локально
     // (ffmpeg и арифметика), ни одного платного вызова. RENDER_CONFORMANCE=off отключает.
-    if (process.env.RENDER_CONFORMANCE !== "off") {
+    if (filmFile) {
+      // верх ролика — фильм: он должен жить, застывший или чёрный верх — ошибка сборки
+      setStep(id, "Проверка фильма", 94);
+      await checkFilmAlive(dir);
+    } else if (process.env.RENDER_CONFORMANCE !== "off") {
       setStep(id, "Сверка с планом", 94);
       const conf = await checkRenderConformance(dir, path.join(dir, "out.mp4"), plan);
       fs.writeFileSync(path.join(dir, "conformance.json"), JSON.stringify(conf, null, 2), "utf8");
@@ -502,6 +543,9 @@ export async function processProject(id: string): Promise<void> {
       coverStatus,
       brollCount: plan.events.filter((e) => e.type === "B_ROLL").length,
       meta,
+      ...(filmFile
+        ? { aiFilm: { ...(project.aiFilm ?? {}), request: "generate" as const, status: "generated" as const, generatedAt: new Date().toISOString(), spent: filmSpent, error: undefined } }
+        : {}),
       processing: { state: "done", step: "Готово", progress: 100 },
     });
   } catch (e: any) {

@@ -5,11 +5,22 @@ import { workerActive, WORKER_QUEUED_STEP } from "@/lib/workerState";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function POST(_req: NextRequest, { params }: Ctx) {
+export async function POST(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
-  const project = getProject(id);
+  let project = getProject(id);
   if (!project) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
   if (!project.rawVideo) return NextResponse.json({ error: "Сначала загрузите видео" }, { status: 400 });
+
+  // AI-фильм идёт в две фазы: план (без Veo) → подтверждение пользователем → генерация.
+  // Платная генерация без плана не запускается — это правило, а не настройка.
+  const body = await req.json().catch(() => ({}));
+  if (project.montageStyle === "ai_film") {
+    const request = body?.request === "generate" ? "generate" : "plan";
+    if (request === "generate" && !project.aiFilm?.plan) {
+      return NextResponse.json({ error: "Сначала соберите план фильма и подтвердите его" }, { status: 400 });
+    }
+    project = updateProject(id, { aiFilm: { ...(project.aiFilm ?? {}), request, error: undefined } })!;
+  }
 
   if (project.processing.state === "running") {
     // зависшую задачу (без обновлений > 15 минут) можно перезапустить

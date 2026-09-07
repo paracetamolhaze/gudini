@@ -48,6 +48,10 @@ export const STAGE_PROVIDERS: Record<CostStage, CostProvider[]> = {
   "Cover Concept": ["anthropic"],
   "Cover Generation": ["openrouter"],
   "Cover QC": ["anthropic"],
+  // AI-фильм: история — рассуждение (Anthropic); видео — только Veo на Vertex AI (Google).
+  // Видео автора в Google не уходит: стадия получает промпты и то, что сама сгенерировала.
+  "AI Film Story": ["anthropic"],
+  "AI Film Generation": ["google"],
 };
 
 /** Стадии обложки. OpenRouter разрешён только генерации изображения. */

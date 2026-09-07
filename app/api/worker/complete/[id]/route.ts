@@ -26,6 +26,17 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     );
   }
 
+  // план AI-фильма: видео ещё нет, пользователь смотрит план и цену и решает
+  if (body.aiFilm && typeof body.aiFilm === "object" && body.aiFilm.plan && !body.aiFilm.generatedAt) {
+    return NextResponse.json(
+      updateProject(id, {
+        ...(research ? { research } : {}),
+        aiFilm: { ...(project.aiFilm ?? {}), ...body.aiFilm, request: "plan", status: "planned" },
+        processing: { state: "idle", step: "План фильма готов", progress: 0 },
+      }),
+    );
+  }
+
   const hasOut = fs.existsSync(path.join(projectDir(id), "out.mp4"));
   if (!hasOut) return NextResponse.json({ error: "out.mp4 не загружен" }, { status: 400 });
   const hasCover = fs.existsSync(path.join(projectDir(id), "cover.jpg"));
@@ -45,6 +56,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       brollCount: Number(body.brollCount) || 0,
       meta: body.meta ?? project.meta,
       ...(research ? { research } : {}),
+      ...(body.aiFilm && typeof body.aiFilm === "object" ? { aiFilm: { ...(project.aiFilm ?? {}), ...body.aiFilm } } : {}),
       processing: { state: "done", step: "Готово", progress: 100 },
     }),
   );

@@ -25,9 +25,11 @@ export type CostStage =
   | "Transcription"
   | "Cover Concept"
   | "Cover Generation"
-  | "Cover QC";
+  | "Cover QC"
+  | "AI Film Story"
+  | "AI Film Generation";
 
-export type CostProvider = "anthropic" | "openrouter" | "brave" | "elevenlabs" | "openai" | "local";
+export type CostProvider = "anthropic" | "openrouter" | "brave" | "elevenlabs" | "openai" | "google" | "local";
 
 export type CostEntry = {
   stage: CostStage;
@@ -99,6 +101,17 @@ let priorCost = 0;
 export function resetLedger(): void {
   entries = [];
   reservations.clear();
+  runLimitOverride = null;
+}
+
+/**
+ * Предел этого запуска, заданный стадией (AI-фильм: бюджет фильма вместо $2 на карточки).
+ * Действует и вместо предела проекта: прошлые прогоны карточек не должны запрещать фильм,
+ * который пользователь только что подтвердил с ценой. Сбрасывается resetLedger.
+ */
+let runLimitOverride: number | null = null;
+export function setRunCostLimit(usd: number | null): void {
+  runLimitOverride = usd != null && Number.isFinite(usd) && usd > 0 ? usd : null;
 }
 
 export function setPriorProjectCost(usd: number): void {
@@ -439,8 +452,10 @@ export function projectRequestCost(args: {
  * она относится к прошлым запускам и повторно не тратится.
  */
 export function assertBudget(stage: CostStage, projectedCost = 0): void {
-  const { max, hardLimit } = costGuard();
-  const projectMax = projectGuard();
+  const guard = costGuard();
+  const max = runLimitOverride ?? guard.max;
+  const hardLimit = runLimitOverride != null ? true : guard.hardLimit;
+  const projectMax = runLimitOverride != null ? priorCost + runLimitOverride : projectGuard();
   if (!hardLimit && !projectMax) return;
   const spent = summarize().totals.variableApiCost;
   const reserved = inFlightCost();

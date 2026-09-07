@@ -22,6 +22,7 @@ const GROUPS: { title: string; stages: CostStage[] }[] = [
   { title: "MEDIA ANALYSIS", stages: ["Source Verification", "Vision Verification", "Beat Matching"] },
   { title: "MONTAGE", stages: ["Creative Director", "Metadata"] },
   { title: "COVER", stages: ["Cover Concept", "Cover Generation", "Cover QC"] },
+  { title: "AI FILM", stages: ["AI Film Story", "AI Film Generation"] },
 ];
 
 const ASSET_PACK_STAGES: CostStage[] = [

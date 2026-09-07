@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type { StoryResearchPack } from "./storyResearch";
+import type { AiFilmState } from "./aiFilm/types";
 import type { ScriptBeat } from "./ai";
 
 export type Platform = "tiktok" | "youtube" | "instagram";
@@ -56,6 +57,10 @@ export type Project = {
   /** ссылка на новость, если пользователь дал её сам */
   sourceUrl?: string;
   scriptBeats?: ScriptBeat[];
+  /** стиль монтажа: карточки (по умолчанию) или AI-фильм сверху */
+  montageStyle?: "cards" | "ai_film";
+  /** AI-фильм: запрошенная фаза, план с ценой, итог генерации */
+  aiFilm?: AiFilmState;
 };
 
 export type YoutubeTokens = { access_token: string; refresh_token?: string; expires_at?: number };

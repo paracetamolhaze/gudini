@@ -2,6 +2,7 @@ import { mediaComplete } from "./mediaLlm";
 import { getSettings, ProjectMeta } from "./store";
 import type { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
+import { readSpeechProfile, rhythmLine } from "./speechProfile";
 
 /** Блок сценария со ссылкой на факты, которые его подтверждают. */
 export type ScriptBeat = { text: string; factIds: string[] };
@@ -126,12 +127,14 @@ export function todayBrief(research?: StoryResearchPack | null): string {
 export async function generateScript(topic: string, research?: StoryResearchPack | null): Promise<{ script: string; demo: boolean }> {
   if (!haveKey()) return { script: demoScript(topic), demo: true };
   const brief = todayBrief(research);
+  // ритм автора из профиля подачи (темп и длина фраз) — чтобы текст ложился на его речь
+  const rhythm = rhythmLine(readSpeechProfile());
   const script = await mediaComplete({
     model: MODEL_SCRIPT,
     maxTokens: 16000,
     stage: "Script Generation",
     system: SCRIPT_SYSTEM,
-    user: `${todayLine()}\n${brief ? `${brief}\n\n` : ""}Напиши сценарий видео на тему: «${topic}»`,
+    user: `${todayLine()}\n${rhythm ? `${rhythm}\n` : ""}${brief ? `${brief}\n\n` : ""}Напиши сценарий видео на тему: «${topic}»`,
   });
   return { script, demo: false };
 }

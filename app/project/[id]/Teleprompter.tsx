@@ -35,6 +35,25 @@ export default function Teleprompter({ script, onClose, onRecorded, onRecordingS
   const [speed, setSpeed] = useState(55);
   const speedRef = useRef(speed);
   speedRef.current = speed;
+  // Скорость текста по умолчанию — под темп автора из профиля подачи (слов в минуту):
+  // высота текста делится на время его чтения. Пока пользователь не трогал ползунок.
+  const speedTouchedRef = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/speech-profile")
+      .then((r) => r.json())
+      .then((p: { wordsPerMinute?: number }) => {
+        if (!alive || !p?.wordsPerMinute || speedTouchedRef.current) return;
+        const el = textRef.current;
+        const words = script.split(/\s+/).filter(Boolean).length;
+        if (!el || !words) return;
+        const readSec = (words / p.wordsPerMinute) * 60;
+        const pxPerSec = el.scrollHeight / Math.max(10, readSec);
+        setSpeed(Math.max(20, Math.min(120, Math.round(pxPerSec))));
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [script]);
   const [error, setError] = useState("");
   const [seconds, setSeconds] = useState(0);
   const [review, setReview] = useState<{ blob: Blob; url: string } | null>(null);
@@ -398,7 +417,7 @@ export default function Teleprompter({ script, onClose, onRecorded, onRecordingS
         {!review && <>
           <label className="tp-speed">
             <span>Скорость</span>
-            <input aria-label="Скорость текста" type="range" min={20} max={120} value={speed} onChange={(event) => setSpeed(Number(event.target.value))} />
+            <input aria-label="Скорость текста" type="range" min={20} max={120} value={speed} onChange={(event) => { speedTouchedRef.current = true; setSpeed(Number(event.target.value)); }} />
           </label>
           <button className="btn btn-secondary btn-sm" onClick={() => setScrolling((value) => !value)}>{scrolling ? "⏸ Текст" : "▶ Текст"}</button>
           <button aria-label="Текст сначала" className="btn btn-secondary btn-sm" onClick={resetText}>⏮</button>

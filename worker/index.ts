@@ -16,7 +16,8 @@ import path from "path";
 import { getProject, upsertProject, projectDir, Project, UPLOADS_DIR } from "../lib/store";
 import { runFromLedgerFile, ledgerStamp, SpendRun } from "../lib/spendLog";
 import { processProject } from "../lib/pipeline";
-import { fileFingerprint } from "../lib/fileFingerprint";
+import { fileFingerprint, textHash } from "../lib/fileFingerprint";
+import { canRedeliver, readDelivery, writeDelivery, clearDelivery } from "../lib/deliveryMarker";
 
 // --- .env ---
 try {
@@ -105,16 +106,24 @@ async function uploadResult(id: string, file: string, which: "out" | "cover"): P
     const chunk = data.subarray(offset, Math.min(offset + CHUNK, data.length));
     let attempt = 0;
     for (;;) {
-      const res = await fetch(`${SITE}/api/worker/result/${id}?file=${which}`, {
-        method: "PUT",
-        headers: {
-          Authorization: AUTH,
-          "Content-Type": "application/octet-stream",
-          "x-offset": String(offset),
-          "x-file-size": String(data.length),
-        },
-        body: new Uint8Array(chunk),
-      });
+      let res: Response;
+      try {
+        res = await fetch(`${SITE}/api/worker/result/${id}?file=${which}`, {
+          method: "PUT",
+          headers: {
+            Authorization: AUTH,
+            "Content-Type": "application/octet-stream",
+            "x-offset": String(offset),
+            "x-file-size": String(data.length),
+          },
+          body: new Uint8Array(chunk),
+        });
+      } catch (e: any) {
+        // сетевое исключение раньше вылетало из цикла, и следующий запуск монтировал заново
+        if (++attempt >= 6) throw new Error(`Загрузка ${file}: сеть — ${String(e?.message ?? e).slice(0, 120)}`);
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+        continue;
+      }
       const json: any = await res.json().catch(() => ({}));
       if (res.ok) {
         offset = json.done ? data.length : typeof json.received === "number" ? json.received : offset + chunk.length;
@@ -124,7 +133,7 @@ async function uploadResult(id: string, file: string, which: "out" | "cover"): P
         offset = json.received;
         break;
       }
-      if (++attempt >= 3) throw new Error(`Загрузка ${file}: ${res.status} ${json.error ?? ""}`);
+      if (++attempt >= 5) throw new Error(`Загрузка ${file}: ${res.status} ${json.error ?? ""}`);
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
@@ -199,23 +208,40 @@ async function runJob(id: string): Promise<void> {
   try {
     await downloadRaw(project);
     await syncFace();
-    await processProject(id);
+
+    // Готовый, но не доставленный ролик (сбой сети при отправке) — только досылка:
+    // ошибка доставки и ошибка монтажа — разные вещи, и платить за вторую из-за первой нельзя.
+    const now = {
+      rawFingerprint: fileFingerprint(path.join(projectDir(id), project.rawVideo!)),
+      scriptHash: textHash(project.script ?? ""),
+    };
+    const pending = readDelivery(id);
+    if (pending && canRedeliver(pending, now) && fs.existsSync(path.join(projectDir(id), "out.mp4"))) {
+      console.log("  ролик уже смонтирован и проверен — только доставка, платные стадии не запускаются");
+      upsertProject({ ...getProject(id)!, ...(pending.project as Partial<Project>), processing: { state: "done", step: "Готово", progress: 100 } });
+    } else {
+      await processProject(id);
+    }
 
     const done = getProject(id)!;
     if (done.processing.state === "done") {
+      const deliverable = {
+        subtitlesSource: done.subtitlesSource,
+        brollCount: done.brollCount ?? 0,
+        coverOffsetSec: done.coverOffsetSec ?? 1,
+        meta: done.meta,
+        research: done.research,
+      };
+      writeDelivery(id, {
+        at: new Date().toISOString(),
+        ...now,
+        project: { ...deliverable, cover: done.cover, coverStatus: done.coverStatus, processedVideo: done.processedVideo },
+      });
       phase = { step: "Отправка результата", progress: 99 };
       await uploadResult(id, "out.mp4", "out");
       await uploadResult(id, "cover.jpg", "cover");
-      await api(`/api/worker/complete/${id}`, {
-        method: "POST",
-        body: JSON.stringify({
-          subtitlesSource: done.subtitlesSource,
-          brollCount: done.brollCount ?? 0,
-          coverOffsetSec: done.coverOffsetSec ?? 1,
-          meta: done.meta,
-          research: done.research,
-        }),
-      });
+      await api(`/api/worker/complete/${id}`, { method: "POST", body: JSON.stringify(deliverable) });
+      clearDelivery(id);
       console.log(`✔ Задача ${id} готова`);
     } else {
       await api(`/api/worker/complete/${id}`, {

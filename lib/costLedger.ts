@@ -90,9 +90,46 @@ export const IMAGE_PRICES: Record<string, number> = {
 };
 
 let entries: CostEntry[] = [];
+/** Запросы, которые уже отправлены, но ещё не учтены: их оценка держит место в бюджете. */
+const reservations = new Map<number, number>();
+let reservationSeq = 0;
+/** Расходы прошлых прогонов этого проекта (cost-runs): для суммарного предела проекта. */
+let priorCost = 0;
 
 export function resetLedger(): void {
   entries = [];
+  reservations.clear();
+}
+
+export function setPriorProjectCost(usd: number): void {
+  priorCost = Number.isFinite(usd) && usd > 0 ? usd : 0;
+}
+
+export function inFlightCost(): number {
+  let sum = 0;
+  for (const v of reservations.values()) sum += v;
+  return sum;
+}
+
+/** Сумма переменных расходов прошлых прогонов проекта по сохранённым леджерам. */
+export function priorProjectCost(dir: string): number {
+  const runs = path.join(dir, "cost-runs");
+  const files: string[] = [];
+  try {
+    files.push(...fs.readdirSync(runs).filter((f) => f.endsWith(".json")).map((f) => path.join(runs, f)));
+  } catch {}
+  if (!files.length) {
+    const single = path.join(dir, "pipeline-cost.json");
+    if (fs.existsSync(single)) files.push(single);
+  }
+  let total = 0;
+  for (const f of files) {
+    try {
+      const j = JSON.parse(fs.readFileSync(f, "utf8"));
+      total += Number(j?.summary?.totals?.variableApiCost ?? 0) || 0;
+    } catch {}
+  }
+  return total;
 }
 
 export function record(e: CostEntry): void {
@@ -316,15 +353,42 @@ export class CostLimitError extends Error {
     readonly limit: number,
     readonly stage: CostStage,
     readonly projected = 0,
+    readonly reserved = 0,
   ) {
     super(
       `Лимит расходов задачи исчерпан: потрачено ${spent.toFixed(4)}$` +
+        (reserved ? ` плюс ${reserved.toFixed(4)}$ за запросы, которые ещё выполняются` : "") +
         (projected ? `, следующий запрос оценён в ${projected.toFixed(4)}$` : "") +
         ` при пределе ${limit}$. Стадия «${stage}» остановлена ДО отправки платного запроса. ` +
         "Поднимите MEDIA_JOB_MAX_COST_USD или снимите MEDIA_JOB_HARD_LIMIT.",
     );
     this.name = "CostLimitError";
   }
+}
+
+/** Суммарные расходы проекта (все прогоны) упёрлись в предел. */
+export class ProjectCostLimitError extends Error {
+  constructor(
+    readonly prior: number,
+    readonly spent: number,
+    readonly limit: number,
+    readonly stage: CostStage,
+    readonly projected = 0,
+  ) {
+    super(
+      `Суммарные расходы проекта ${(prior + spent + projected).toFixed(2)}$ (прошлые прогоны ${prior.toFixed(2)}$, ` +
+        `этот ${spent.toFixed(2)}$` + (projected ? `, следующий запрос ${projected.toFixed(2)}$` : "") + ") " +
+        `превысили предел проекта MEDIA_PROJECT_MAX_COST_USD=${limit}$. Стадия «${stage}» остановлена ДО платного запроса. ` +
+        "Поднимите предел, если монтаж этого проекта действительно нужен.",
+    );
+    this.name = "ProjectCostLimitError";
+  }
+}
+
+/** Предел на проект целиком: сумма всех прогонов. 0 — выключен. */
+export function projectGuard(): number {
+  const v = Number(process.env.MEDIA_PROJECT_MAX_COST_USD ?? 6);
+  return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 /**
@@ -376,9 +440,43 @@ export function projectRequestCost(args: {
  */
 export function assertBudget(stage: CostStage, projectedCost = 0): void {
   const { max, hardLimit } = costGuard();
-  if (!hardLimit || !Number.isFinite(max) || max <= 0) return;
+  const projectMax = projectGuard();
+  if (!hardLimit && !projectMax) return;
   const spent = summarize().totals.variableApiCost;
-  if (spent + projectedCost > max) throw new CostLimitError(spent, max, stage, projectedCost);
+  const reserved = inFlightCost();
+  // предел одного запуска: потрачено + запросы в полёте + этот запрос
+  if (hardLimit && Number.isFinite(max) && max > 0 && spent + reserved + projectedCost > max) {
+    throw new CostLimitError(spent, max, stage, projectedCost, reserved);
+  }
+  // предел проекта: то же плюс прошлые прогоны (три неудачи подряд на одном проекте стоили $1.71)
+  if (projectMax && priorCost + spent + reserved + projectedCost > projectMax) {
+    throw new ProjectCostLimitError(priorCost, spent + reserved, projectMax, stage, projectedCost);
+  }
+}
+
+/**
+ * Резерв на время запроса. Раньше проверка смотрела только на учтённые вызовы:
+ * три параллельных запроса зрения проходили её по одному и тому же остатку и
+ * вместе перескакивали предел. Резерв снимается, когда запрос учтён или упал.
+ */
+export function reserveBudget(stage: CostStage, projectedCost = 0): number {
+  assertBudget(stage, projectedCost);
+  const id = ++reservationSeq;
+  reservations.set(id, projectedCost);
+  return id;
+}
+
+export function releaseBudget(id: number): void {
+  reservations.delete(id);
+}
+
+export async function withBudget<T>(stage: CostStage, projectedCost: number, fn: () => Promise<T>): Promise<T> {
+  const id = reserveBudget(stage, projectedCost);
+  try {
+    return await fn();
+  } finally {
+    releaseBudget(id);
+  }
 }
 
 /** Проверяет накопленную сумму и называет стадию-виновника. Решение принимает вызывающий. */

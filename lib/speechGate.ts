@@ -88,7 +88,7 @@ export function transcriptGateError(
   const lastEnd = words.reduce((m, w) => Math.max(m, w.end), 0);
   const where = `речь слышна до ${lastEnd.toFixed(1)} с из ${duration.toFixed(0)} с записи`;
   if (n < TRANSCRIPT_MIN_WORDS) {
-    return `Распознано только ${n} слов (${where}). В записи нет читаемой речи — проверьте микрофон и перезапишите дубль. Платные стадии не запускались.`;
+    return `Распознано только ${n} слов (${where}). В записи нет читаемой речи — проверьте микрофон и перезапишите дубль. Распознавание речи уже оплачено; исследование, медиатека и режиссёр не запускались.`;
   }
   const scriptWords = countScriptWords(script);
   const ratio = envNumber("TRANSCRIPT_MIN_SCRIPT_RATIO", TRANSCRIPT_MIN_SCRIPT_RATIO);
@@ -97,7 +97,7 @@ export function transcriptGateError(
     return (
       `Распознано ${n} слов из ~${scriptWords} в сценарии (${pct}%): ${where}. ` +
       `Дальше звук слишком тихий или его нет — перезапишите дубль или загрузите файл с камеры. ` +
-      `Платные стадии не запускались (порог TRANSCRIPT_MIN_SCRIPT_RATIO=${ratio}).`
+      `Распознавание речи уже оплачено; исследование, медиатека и режиссёр не запускались (порог TRANSCRIPT_MIN_SCRIPT_RATIO=${ratio}).`
     );
   }
   return null;

@@ -63,21 +63,40 @@ export type VisualRelevanceScore = {
 /** Для этих намерений «просто похожий по теме» сток не годится. */
 const SPECIFIC_INTENTS = new Set(["PERSON", "TEAM_MATCHUP", "SPECIFIC_EVENT"]);
 
-const ANALYSIS_FILE = path.join(process.cwd(), "data", "broll-cache", "analysis.json");
+const analysisFile = () => process.env.ANALYSIS_CACHE_FILE || path.join(process.cwd(), "data", "broll-cache", "analysis.json");
 
-function readAnalysisCache(): Record<string, AssetAnalysis> {
+export function readAnalysisCache(): Record<string, AssetAnalysis> {
   try {
-    return JSON.parse(fs.readFileSync(ANALYSIS_FILE, "utf8"));
+    return JSON.parse(fs.readFileSync(analysisFile(), "utf8"));
   } catch {
     return {};
   }
 }
 
-function writeAnalysisCache(cache: Record<string, AssetAnalysis>) {
-  try {
-    fs.mkdirSync(path.dirname(ANALYSIS_FILE), { recursive: true });
-    fs.writeFileSync(ANALYSIS_FILE, JSON.stringify(cache, null, 2));
-  } catch {}
+let cacheWrites: Promise<void> = Promise.resolve();
+
+/**
+ * Дописывает записи в кэш, не теряя чужих. Раньше каждый разбор кадров читал
+ * кэш до запроса к зрению и после ответа записывал свою копию целиком: при трёх
+ * параллельных разборах последний затирал результаты соседей, и при следующей
+ * сборке медиатеки они оплачивались заново. Теперь запись — это перечитать
+ * актуальный файл, добавить своё и записать атомарно; записи идут по очереди.
+ */
+export function mergeAnalysisCache(entries: Record<string, AssetAnalysis>): Promise<void> {
+  const keys = Object.keys(entries);
+  if (!keys.length) return cacheWrites;
+  cacheWrites = cacheWrites.then(() => {
+    try {
+      const file = analysisFile();
+      const current = readAnalysisCache();
+      for (const k of keys) current[k] = entries[k];
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(current, null, 2));
+      fs.renameSync(tmp, file);
+    } catch {}
+  });
+  return cacheWrites;
 }
 
 /**
@@ -144,9 +163,7 @@ export async function analyzeAsset(
       hasLargeWatermark: json.hasLargeWatermark === true,
       updatedAt: new Date().toISOString(),
     };
-    const fresh = readAnalysisCache();
-    fresh[cacheKey] = analysis;
-    writeAnalysisCache(fresh);
+    await mergeAnalysisCache({ [cacheKey]: analysis });
     return analysis;
   } catch {
     return null;
@@ -394,6 +411,7 @@ export async function analyzeFrames(
 
   const json = JSON.parse(raw);
   const frames = Array.isArray(json.frames) ? json.frames : [];
+  const added: Record<string, AssetAnalysis> = {};
   for (const f of frames) {
     const pos = Number(f.i) - 1;
     const target = todo[pos];
@@ -417,8 +435,8 @@ export async function analyzeFrames(
     };
     if (!analysis.description) continue;
     out[target] = analysis;
-    cache[keys[target]] = analysis;
+    added[keys[target]] = analysis;
   }
-  writeAnalysisCache(cache);
+  await mergeAnalysisCache(added);
   return out;
 }

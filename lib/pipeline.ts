@@ -15,7 +15,7 @@ import {
 } from "./speechCleanupPlan";
 import { planSpeechCleanup } from "./speechCleanupPlanner";
 import { planCleanupCuts } from "./speechCleanupRun";
-import { recordFlat, AUDIO_PRICES } from "./costLedger";
+import { recordFlat, AUDIO_PRICES, assertBudget, setPriorProjectCost, priorProjectCost } from "./costLedger";
 import { runMontageV3 } from "./montageV3Pipeline";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { fileFingerprint, textHash } from "./fileFingerprint";
@@ -104,6 +104,10 @@ export async function processProject(id: string): Promise<void> {
     setStep(id, "Анализ видео", 3);
     let info = await probe(path.join(dir, raw));
     if (!info.hasAudio) throw new Error("В видео нет звуковой дорожки — запишите с микрофоном");
+    // Предел на проект целиком: прошлые прогоны (cost-runs) плюс этот. Три неудачи
+    // подряд на одном проекте стоили $1.71 — четвёртую без явного решения не начинать.
+    setPriorProjectCost(priorProjectCost(dir));
+    assertBudget("Media Research", 0);
 
     // Запись из браузера (телесуфлёр) приводится к обычному файлу: постоянные 30 fps, честные
     // метки времени, AAC 48 кГц. Safari отдаёт mp4 с мусорной длительностью контейнера
@@ -148,16 +152,6 @@ export async function processProject(id: string): Promise<void> {
     const silences = await detectSilences("audio_full.wav", dir, duration);
     const edges = edgesFromSilences(silences, duration);
 
-    // Исследование истории не зависит от речи: оно идёт параллельно с распознаванием,
-    // чисткой и перекодированием, а нужно только к сборке медиатеки. Ошибка
-    // обрабатывается там, где результат используется.
-    const researchPromise: Promise<StoryResearchPack | null> = project.research
-      ? Promise.resolve(project.research)
-      : buildStoryResearchPack(project.topic, project.sourceUrl).catch((e) => {
-          console.warn("Исследование истории не построено:", String(e?.message ?? e).slice(0, 160));
-          return null;
-        });
-
     // --- Распознавание речи ДО вырезки (на полном таймлайне) ---
     setStep(id, "Распознавание речи", 10);
     const wav = path.join(dir, "audio_full.wav");
@@ -187,6 +181,7 @@ export async function processProject(id: string): Promise<void> {
       // одна повторная попытка только на сетевой сбой: это копейки, а не оплаченный ответ
       for (let attempt = 1; attempt <= 2 && !rawWords; attempt++) {
         try {
+          assertBudget("Transcription", (AUDIO_PRICES["elevenlabs/scribe"] ?? 0) * (duration / 60));
           rawWords = await scribeTranscribe(wav);
           if (rawWords) subtitlesSource = "scribe";
           else {
@@ -205,6 +200,7 @@ export async function processProject(id: string): Promise<void> {
     }
     if (!rawWords) {
       try {
+        assertBudget("Transcription", (AUDIO_PRICES["openai/whisper-1"] ?? 0) * (duration / 60));
         rawWords = await whisperTranscribe(wav);
         if (rawWords) subtitlesSource = "whisper";
         else asrErrors.push("Whisper: не задан ключ OPENAI_API_KEY");
@@ -249,6 +245,22 @@ export async function processProject(id: string): Promise<void> {
       const transcriptError = transcriptGateError(rawWords, duration, project.script);
       if (transcriptError) throw new Error(transcriptError);
     }
+
+    // Исследование истории запускается только после проверок речи: раньше оно шло
+    // параллельно с распознаванием и оплачивалось даже для записи, которую конвейер
+    // потом отклонял. Дальше оно идёт параллельно с чисткой речи и перекодированием,
+    // а результат сохраняется в проект сразу — независимо от исхода следующих стадий.
+    const researchPromise: Promise<StoryResearchPack | null> = project.research
+      ? Promise.resolve(project.research)
+      : buildStoryResearchPack(project.topic, project.sourceUrl)
+          .then((r) => {
+            if (r) updateProject(id, { research: r });
+            return r;
+          })
+          .catch((e) => {
+            console.warn("Исследование истории не построено:", String(e?.message ?? e).slice(0, 160));
+            return null;
+          });
 
     // --- Speech Cleanup: запинки/повторы/фальстарты + умные паузы (только при реальном ASR) ---
     setStep(id, "Чистка речи", 16);
@@ -406,13 +418,8 @@ export async function processProject(id: string): Promise<void> {
       setStep(id, "Монтаж видео", 38 + Math.round(f * 52)),
     );
 
-    // --- Обложка: ТОЛЬКО Full-AI (Gemini Flash рисует всё) + QC. Фолбэков нет:
-    // не прошла QC за 3 попытки → COVER_FAILED и кнопка «Перегенерировать» в интерфейсе.
-    setStep(id, "Обложка", 92);
-    const { cover, coverStatus } = await makeCover(dir, project.topic, project.script, meta.title);
-
     // --- Self-check результата (+ чёрные кадры вокруг монтажных точек) ---
-    setStep(id, "Проверка результата", 97);
+    setStep(id, "Проверка результата", 92);
     const checkPoints = [
       ...plan.events.filter((e) => e.type === "B_ROLL").flatMap((e) => [e.start, e.end]),
       ...segments.slice(1).map((_, i) => segments.slice(0, i + 1).reduce((s, x) => s + (x.end - x.start), 0)),
@@ -424,7 +431,7 @@ export async function processProject(id: string): Promise<void> {
     // только в ручных скриптах, и в продакшене ролик выходил без неё. Всё локально
     // (ffmpeg и арифметика), ни одного платного вызова. RENDER_CONFORMANCE=off отключает.
     if (process.env.RENDER_CONFORMANCE !== "off") {
-      setStep(id, "Сверка с планом", 98);
+      setStep(id, "Сверка с планом", 94);
       const conf = await checkRenderConformance(dir, path.join(dir, "out.mp4"), plan);
       fs.writeFileSync(path.join(dir, "conformance.json"), JSON.stringify(conf, null, 2), "utf8");
       console.log(
@@ -441,6 +448,13 @@ export async function processProject(id: string): Promise<void> {
         throw new Error(`Сверка с планом: провалов ${conf.failed}, ошибок ${conf.errored} из ${conf.expected} точек — ${reasons}`);
       }
     }
+
+    // Обложка — после проверок ролика: она платная, а неисправный результат раньше
+    // сначала получал обложку ($0.10) и только потом отклонялся сверкой с планом.
+    // --- Обложка: ТОЛЬКО Full-AI (Gemini Flash рисует всё) + QC. Фолбэков нет:
+    // не прошла QC за 3 попытки → COVER_FAILED и кнопка «Перегенерировать» в интерфейсе.
+    setStep(id, "Обложка", 96);
+    const { cover, coverStatus } = await makeCover(dir, project.topic, project.script, meta.title);
 
     // Деньги: леджер реальных вызовов (модель, токены, цена) пишется в pipeline-cost.json
     // и печатается в лог воркера. Старые счётчики не видели вызовов через mediaLlm и

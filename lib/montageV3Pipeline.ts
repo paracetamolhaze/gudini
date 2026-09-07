@@ -3,7 +3,9 @@ import path from "path";
 import { StoryResearchPack } from "./storyResearch";
 import { buildScriptBeats, ScriptBeat } from "./scriptBeats";
 import { buildAssetPack, StoryAssetPackV2 } from "./storyAssetPack";
-import { directMontage, MontagePlan } from "./creativeDirector";
+import { directMontage, MontagePlan, DIRECTOR_PROMPT_VERSION } from "./creativeDirector";
+import { textHash } from "./fileFingerprint";
+import { taste } from "./montageTaste";
 import { refineMontage } from "./montageRefine";
 import { validateMontage, packReady, montagePreflight, PackDistribution } from "./montageValidator";
 import { EditPlan, EditEvent, DEFAULT_CAPTION_STYLE } from "./editPlan";
@@ -30,6 +32,8 @@ export type MontageV3Result = {
   beatsReused: boolean;
   /** медиатека взята готовой, деньги на поиск и зрение не потрачены */
   packReused: boolean;
+  /** режиссёрский план взят из director-plan.json — режиссёр не оплачивался */
+  directorReused: boolean;
   /** как визуал распределён по ролику: одной цифры покрытия недостаточно */
   distribution: PackDistribution;
   warnings: string[];
@@ -59,6 +63,54 @@ export function toEditEvents(montage: MontagePlan, pack: StoryAssetPackV2, media
     });
   }
   return out;
+}
+
+export const DIRECTOR_PLAN_FILE = "director-plan.json";
+
+/**
+ * Ключ режиссёрского плана: всё, от чего зависит ответ модели. Совпал — план
+ * берётся из файла, и повтор после ошибки рендера, проверки или доставки не
+ * платит режиссёру второй раз. Одного наличия файла недостаточно.
+ */
+export function directorPlanKey(args: {
+  research: StoryResearchPack;
+  beats: ScriptBeat[];
+  pack: StoryAssetPackV2;
+  words: Word[];
+  duration: number;
+  speechCuts: number[];
+}): string {
+  const { research, beats, pack, words, duration, speechCuts } = args;
+  return textHash(
+    JSON.stringify({
+      v: DIRECTOR_PROMPT_VERSION,
+      story: research.storyId ?? research.canonicalEvent,
+      facts: research.facts.map((f) => f.id),
+      beats,
+      pack: [pack.fingerprint ?? "", pack.createdAt ?? "", pack.assets.map((a) => [a.id, a.compatibleBeatIds, a.role, a.beatScores ?? null])],
+      words: words.map((w) => [w.word, Math.round(w.start * 100), Math.round(w.end * 100)]),
+      duration: Math.round(duration * 100),
+      cuts: speechCuts.map((c) => Math.round(c * 100)),
+      taste: taste(),
+      model: process.env.MEDIA_LLM_MODEL ?? "",
+    }),
+  );
+}
+
+export function loadDirectorPlan(dir: string, key: string): MontagePlan | null {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, DIRECTOR_PLAN_FILE), "utf8"));
+    if (j?.key === key && Array.isArray(j?.plan?.events)) return j.plan as MontagePlan;
+  } catch {}
+  return null;
+}
+
+export function saveDirectorPlan(dir: string, key: string, plan: MontagePlan): void {
+  fs.writeFileSync(
+    path.join(dir, DIRECTOR_PLAN_FILE),
+    JSON.stringify({ key, createdAt: new Date().toISOString(), plan }, null, 2),
+    "utf8",
+  );
 }
 
 /**
@@ -103,7 +155,11 @@ export async function runMontageV3(args: {
     throw err;
   }
 
-  const directed = await directMontage(research, beats, pack, words, duration, speechCuts);
+  const planKey = directorPlanKey({ research, beats, pack, words, duration, speechCuts });
+  const savedPlan = loadDirectorPlan(dir, planKey);
+  const directorReused = Boolean(savedPlan);
+  if (directorReused) console.log("Режиссёрский план переиспользован — режиссёр не оплачивался");
+  const directed = savedPlan ?? (await directMontage(research, beats, pack, words, duration, speechCuts));
   if (!directed) throw new Error("Режиссёр монтажа не вернул план");
 
   // Уплотнение по блокам: режиссёр отдаёт валидный, но грубый темп (вставки по 6 с
@@ -125,6 +181,8 @@ export async function runMontageV3(args: {
     throw new Error(`Монтажный план не прошёл проверку: ${check.errors.join("; ")}`);
   }
   warnings.push(...check.warnings);
+  // сохраняется только план, прошедший проверку: негодный план не должен переиспользоваться
+  if (!directorReused) saveDirectorPlan(dir, planKey, directed);
 
   const events = toEditEvents(montage, pack, path.join(dir, "story-assets"));
   const plan: EditPlan = {
@@ -134,5 +192,5 @@ export async function runMontageV3(args: {
     captionStyle: { ...DEFAULT_CAPTION_STYLE },
   };
 
-  return { plan, montage, pack, beats, beatsReused: Boolean(beatsReused), packReused, distribution: pre.distribution, warnings };
+  return { plan, montage, pack, beats, beatsReused: Boolean(beatsReused), packReused, directorReused, distribution: pre.distribution, warnings };
 }

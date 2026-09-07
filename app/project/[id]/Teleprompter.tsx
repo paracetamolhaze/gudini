@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { attachCamera, createPortraitCapture, PORTRAIT_FRAME, type PortraitCapture } from "@/lib/portraitCapture";
 
+const isMobileDevice = () => /iPhone|iPad|Android/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+
 export default function Teleprompter({ script, onClose, onRecorded }: {
   script: string;
   onClose: () => void;
@@ -33,6 +35,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
   // Кадров камеры в секунду: iPhone Safari может перестать отдавать кадры молча.
   const [camFps, setCamFps] = useState<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const sourceRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -89,7 +92,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         const canvas = canvasRef.current;
         if (!video || !canvas) return;
         if (typeof canvas.captureStream !== "function") throw new Error("Этот браузер не поддерживает запись кадра 9:16.");
-        const mobile = /iPhone|iPad|Android/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+        const mobile = isMobileDevice();
         // Constraints use the camera's primary orientation; the decoded video can be portrait.
         // Prefer an uncropped source and do the ONE visible crop on our recording canvas.
         const nativeSize: MediaTrackConstraints = {
@@ -131,6 +134,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
           interrupt(err.message);
         });
         captureRef.current = capture;
+        sourceRef.current = source;
         const onMute = () => interrupt("Камера или микрофон приостановлены. Проверьте дубль или откройте камеру заново.");
         const onEnded = () => interrupt("Камера или микрофон отключены. Откройте камеру заново.");
         const onUnmute = () => {
@@ -222,6 +226,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       recorderRef.current = null;
       capture?.dispose();
       captureRef.current = null;
+      sourceRef.current = null;
       source?.getTracks().forEach((track) => track.stop());
       if (videoRef.current) videoRef.current.srcObject = null;
     };
@@ -261,7 +266,20 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         (mime) => MediaRecorder.isTypeSupported(mime),
       );
       if (!mimeType) throw new Error("Браузер не поддерживает формат записи. Попробуйте Safari или Chrome.");
-      const recorder = new MediaRecorder(capture.stream, {
+      // На телефоне запись идёт с дорожки камеры напрямую, минуя холст: в Safari на
+      // iPhone холст переставал получать кадры через 8 с, и в файле оставался звук без
+      // видео. Дорожка телефона и есть кадр 9:16, который показывает превью (обрезки
+      // нет), так что «как снимаю, так и в ролике» сохраняется. Другие пропорции — холст.
+      const camVideo = videoRef.current;
+      const src = sourceRef.current;
+      const camTrack = src?.getVideoTracks()[0];
+      const direct = Boolean(
+        camTrack && camVideo && isMobileDevice() &&
+        camVideo.videoWidth > 0 && camVideo.videoHeight > 0 &&
+        Math.abs(camVideo.videoWidth / camVideo.videoHeight - 9 / 16) < 0.03,
+      );
+      const recordStream = direct && src && camTrack ? new MediaStream([camTrack, ...src.getAudioTracks()]) : capture.stream;
+      const recorder = new MediaRecorder(recordStream, {
         mimeType, videoBitsPerSecond: 12_000_000, audioBitsPerSecond: 192_000,
       });
       recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };

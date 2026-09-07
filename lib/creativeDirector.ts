@@ -4,6 +4,9 @@ import { StoryResearchPack } from "./storyResearch";
 import { ScriptBeat } from "./scriptBeats";
 import { StoryAssetPackV2, PackAsset } from "./storyAssetPack";
 import { taste } from "./montageTaste";
+
+/** Версия промпта режиссёра: поднимать при изменении текста промпта, иначе сохранённый план переиспользуется. */
+export const DIRECTOR_PROMPT_VERSION = 1;
 import { addCost } from "./pipelineCost";
 
 /**

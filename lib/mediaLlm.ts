@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
-import { recordTokens, assertBudget, projectRequestCost, CostStage, CostProvider } from "./costLedger";
+import { recordTokens, withBudget, projectRequestCost, CostStage, CostProvider } from "./costLedger";
 import { assertProvider, ProviderPolicyError } from "./providerPolicy";
 
 /**
@@ -237,8 +237,9 @@ async function completeOnce(
   // Политика проверяется ДО обращения к API: запрещённая пара не должна
   // успеть потратить деньги, а потом быть замеченной при учёте.
   assertProvider(stage, "anthropic");
-  assertBudget(stage, projectRequestCost({ model, promptChars: system.length + user.length, maxTokens }));
-
+  // Оценка запроса держит место в бюджете, пока провайдер не ответил: параллельные
+  // вызовы больше не проходят проверку по одному и тому же остатку.
+  return withBudget(stage, projectRequestCost({ model, promptChars: system.length + user.length, maxTokens }), async () => {
   if (transport === "openrouter") {
     const r = await openrouterChat(stage, model, maxTokens, system, user);
     recordOpenRouterClaude(stage, model, r.usage, false, isRetry);
@@ -277,6 +278,7 @@ async function completeOnce(
     throw new Error(`Anthropic вернул пустой ответ (stop_reason=${response.stop_reason}, блоки: ${kinds})`);
   }
   return text;
+  });
 }
 
 export type VisionImage = { base64: string; mediaType: string } | { url: string };
@@ -314,11 +316,10 @@ async function visionOnce(
   const model = transportModelId(modelOverride || process.env.MEDIA_VISION_MODEL || mediaModel());
   mediaProvider();
   assertProvider(stage, "anthropic");
-  assertBudget(
+  return withBudget(
     stage,
     projectRequestCost({ model, promptChars: system.length + user.length, images: frames.length, imageTokensEach, maxTokens }),
-  );
-
+    async () => {
   if (transport === "openrouter") {
     const parts: OpenRouterPart[] = [
       ...frames.map((f): OpenRouterPart => ({
@@ -367,6 +368,8 @@ async function visionOnce(
     .trim();
   if (!text) throw new Error("Anthropic vision вернул пустой ответ");
   return text;
+    },
+  );
 }
 
 /** Снимает markdown-ограждение и парсит JSON. Ошибка разбора — это ошибка стадии. */

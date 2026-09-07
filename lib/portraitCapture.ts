@@ -42,8 +42,27 @@ export type PortraitCapture = {
   dispose: () => void;
 };
 
-/** Если кадры не приходят дольше этого, камера считается остановившейся (запись прерывается). */
+/** Если кадры камеры не приходят дольше этого, камера считается остановившейся (запись прерывается). */
 export const FRAME_STALL_MS = 3000;
+
+export type CaptureHealth = { stalled: boolean; switchToRaf: boolean };
+
+/**
+ * Решение сторожа. Кадром камеры считается только НОВЫЙ кадр (вызов
+ * requestVideoFrameCallback или рост currentTime), а не перерисовка холста:
+ * холст, рисующий один и тот же застывший кадр, исправности камеры не подтверждает.
+ */
+export function captureHealth(
+  now: number,
+  s: { lastCameraFrameAt: number; lastTickAt: number; useVideoFrames: boolean },
+  stallMs = FRAME_STALL_MS,
+  fps: number = PORTRAIT_FRAME.fps,
+): CaptureHealth {
+  return {
+    stalled: now - s.lastCameraFrameAt > stallMs,
+    switchToRaf: s.useVideoFrames && now - s.lastTickAt > (1000 / fps) * 4,
+  };
+}
 
 export function createPortraitCapture(
   video: HTMLVideoElement,
@@ -59,23 +78,27 @@ export function createPortraitCapture(
   let disposed = false;
   let callback = 0;
   let last = -Infinity;
-  // Safari на iPhone перестаёт вызывать requestVideoFrameCallback через несколько секунд
-  // записи (дубль: 8 с видео при 87 с звука). Поэтому rVFC — только источник точных
-  // кадров; сторож рисует сам, если кадры перестали приходить, и переводит цикл на
-  // requestAnimationFrame насовсем. Если и сам поток камеры застыл — это ошибка записи.
+  // Safari на iPhone перестал отдавать кадры через 8 с записи (в файле 255 кадров при
+  // 87 с звука). Что именно замолчало — requestVideoFrameCallback, поток камеры или
+  // захват холста — журналы не показывают, поэтому сторож считает только НОВЫЕ кадры
+  // камеры: rVFC вызывается на каждый новый кадр, без rVFC растёт currentTime.
+  // Если rVFC замолчал, а поток жив — цикл насовсем переводится на requestAnimationFrame.
+  // Если новых кадров нет FRAME_STALL_MS — захват останавливается с ошибкой, и
+  // телесуфлёр сохраняет записанную часть, а не пишет звук без видео.
   let useVideoFrames = typeof video.requestVideoFrameCallback === "function";
-  let lastDrawAt = performance.now();
-  let lastMediaTime = -1;
-  let lastAdvanceAt = performance.now();
-  const drawTimes: number[] = [];
+  let lastCameraFrameAt = performance.now();
+  let lastTickAt = performance.now();
+  let lastMediaTime = video.currentTime;
+  const cameraFrames: number[] = [];
+  const noteCameraFrame = (now: number) => {
+    lastCameraFrameAt = now;
+    cameraFrames.push(now);
+    while (cameraFrames.length && cameraFrames[0] < now - 1000) cameraFrames.shift();
+  };
   const draw = () => {
     const crop = portraitCrop(video.videoWidth, video.videoHeight);
     // No CSS mirroring: these exact, unmirrored pixels are shown and recorded.
     context.drawImage(video, crop.x, crop.y, crop.width, crop.height, 0, 0, canvas.width, canvas.height);
-    const now = performance.now();
-    lastDrawAt = now;
-    drawTimes.push(now);
-    while (drawTimes.length && drawTimes[0] < now - 1000) drawTimes.shift();
   };
   draw(); // Fail before enabling Record if the first frame cannot be drawn.
   const stream = canvas.captureStream(PORTRAIT_FRAME.fps);
@@ -90,9 +113,15 @@ export function createPortraitCapture(
   const schedule = () => {
     callback = useVideoFrames ? video.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
   };
-  const tick = (now: number) => {
+  const tick = (now: number, metadata?: VideoFrameCallbackMetadata) => {
     if (disposed) return;
     try {
+      lastTickAt = now;
+      const t = video.currentTime;
+      if (metadata || t !== lastMediaTime) {
+        lastMediaTime = t;
+        noteCameraFrame(now);
+      }
       if (video.readyState >= 2 && (useVideoFrames || now - last >= 1000 / PORTRAIT_FRAME.fps - 1)) {
         draw();
         last = now;
@@ -108,19 +137,18 @@ export function createPortraitCapture(
     try {
       const now = performance.now();
       if (video.paused && !video.ended) void video.play().catch(() => {});
-      if (video.currentTime !== lastMediaTime) {
-        lastMediaTime = video.currentTime;
-        lastAdvanceAt = now;
+      const t = video.currentTime;
+      if (t !== lastMediaTime) {
+        lastMediaTime = t;
+        noteCameraFrame(now);
       }
-      if (now - lastDrawAt > (2000 / PORTRAIT_FRAME.fps) * 2 && video.readyState >= 2 && !video.paused) {
-        if (useVideoFrames) {
-          video.cancelVideoFrameCallback(callback);
-          useVideoFrames = false;
-          schedule();
-        }
-        draw();
+      const health = captureHealth(now, { lastCameraFrameAt, lastTickAt, useVideoFrames });
+      if (health.switchToRaf) {
+        video.cancelVideoFrameCallback(callback);
+        useVideoFrames = false;
+        schedule();
       }
-      if (now - lastAdvanceAt > FRAME_STALL_MS && now - lastDrawAt > FRAME_STALL_MS) {
+      if (health.stalled) {
         fail(new Error("Камера перестала отдавать кадры. Запись остановлена — проверьте дубль или откройте камеру заново."));
       }
     } catch (error) {
@@ -130,7 +158,7 @@ export function createPortraitCapture(
   return {
     stream,
     isLive: () => !disposed && [...source.getTracks(), ...stream.getTracks()].every((track) => track.readyState === "live" && !track.muted),
-    fps: () => (disposed ? 0 : drawTimes.filter((t) => t >= performance.now() - 1000).length),
+    fps: () => (disposed ? 0 : cameraFrames.filter((t) => t >= performance.now() - 1000).length),
     dispose() {
       disposed = true;
       clearInterval(watchdog);

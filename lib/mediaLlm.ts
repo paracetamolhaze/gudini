@@ -147,7 +147,7 @@ async function openrouterChat(
   maxTokens: number,
   system: string,
   user: string | OpenRouterPart[],
-): Promise<{ text: string; truncated: boolean; finish: string; usage: any }> {
+): Promise<{ text: string; truncated: boolean; finish: string; usage: any; reasoningTokens: number }> {
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -187,7 +187,10 @@ async function openrouterChat(
   ).trim();
   const finish = String(choice?.finish_reason ?? "");
   const truncated = finish === "length" || String(choice?.native_finish_reason ?? "") === "max_tokens";
-  return { text, truncated, finish, usage: json?.usage ?? {} };
+  // выходные токены, ушедшие в скрытые размышления модели, а не в текст: разбор истории
+  // однажды упёрся в 6000 токенов с пустым текстом, и причина была не видна
+  const reasoningTokens = Number(json?.usage?.completion_tokens_details?.reasoning_tokens ?? 0) || 0;
+  return { text, truncated, finish, usage: json?.usage ?? {}, reasoningTokens };
 }
 
 export type CompleteArgs = {
@@ -245,7 +248,8 @@ async function completeOnce(
     recordOpenRouterClaude(stage, model, r.usage, false, isRetry);
     if (r.truncated) {
       throw new Error(
-        `Claude через OpenRouter: ответ обрезан по лимиту ${maxTokens} токенов (стадия «${stage}», текста ${r.text.length} символов) — увеличьте maxTokens или сократите запрос`,
+        `Claude через OpenRouter: ответ обрезан по лимиту ${maxTokens} токенов (стадия «${stage}», текста ${r.text.length} символов` +
+          `${r.reasoningTokens ? `, из них ${r.reasoningTokens} токенов ушло в размышления модели` : ""}) — увеличьте maxTokens или сократите запрос`,
       );
     }
     if (!r.text) throw new Error(`Claude через OpenRouter вернул пустой ответ (finish_reason=${r.finish || "нет"})`);

@@ -157,7 +157,8 @@ export async function analyzeStory(args: {
     `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
     `Сценарий (что автор хотел сказать):\n${args.script.slice(0, 4000)}\n\n` +
     `Речь автора по предложениям (чистый таймлайн, всего ${sentences[sentences.length - 1].end.toFixed(1)} с):\n${list}`;
-  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 6000, stage: "AI Film Story", system: SYSTEM, user });
+  // 16000, как у чистки речи и режиссёра: на 6000 разбор речи в 108 с упёрся в лимит с пустым текстом
+  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", system: SYSTEM, user });
   const parsed = parseJson<RawStory>(raw, "AI Film Story");
   const bible = normalizeBible(parsed.bible);
   const episodes = episodesFromRaw(parsed.episodes ?? [], sentences);

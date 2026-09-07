@@ -21,6 +21,7 @@ import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from
 import { fileFingerprint, textHash } from "./fileFingerprint";
 import { checkRenderConformance } from "./renderConformance";
 import { pauseCut } from "./speechCleanupPlan";
+import { snapCutsToWords, leftoverLongGaps, leftoverRepeats, verifyCleanSpeech } from "./speechVerify";
 import { buildAss } from "./subtitles";
 import { CARD, CARD_FILTER } from "./topInset";
 import { applyScriptFormatting } from "./scriptFormat";
@@ -296,12 +297,27 @@ export async function processProject(id: string): Promise<void> {
           const run = await planCleanupCuts({ script: project.script, words: rawWords, silences, edges, duration, log: (l) => console.log(l) });
           cuts = run.cuts;
           fs.writeFileSync(planFile, JSON.stringify({ version: 1, cleanupKey, actions: run.actions }, null, 2), "utf8");
-        } catch (e) {
-          console.warn("Speech cleanup недоступен, работаем без него:", e);
+        } catch (e: any) {
+          // раньше отказ модели глотался («работаем без него»), и ролик с необрезанными
+          // паузами и дублями выходил как готовый; чистка — обязательная стадия
+          throw new Error(`Чистка речи не выполнена: ${String(e?.message ?? e).slice(0, 200)}`);
         }
       }
     }
     if (!cuts) cuts = mechanicalCuts(silences, edges); // фолбэк без расшифровки: только механические паузы
+
+    // --- Проверка и починка плана чистки (бесплатно): границы к краям слов, длинные
+    // паузы, незамеченные повторы. То, что останется после склейки, проверяется ниже.
+    if (rawWords) {
+      const snapped = snapCutsToWords(cuts, rawWords);
+      cuts = snapped.cuts;
+      const gaps = leftoverLongGaps(rawWords, cuts);
+      const reps = leftoverRepeats(rawWords, cuts);
+      if (gaps.length || reps.length) cuts = [...cuts, ...gaps, ...reps];
+      if (snapped.snapped || gaps.length || reps.length) {
+        console.log(`Проверка чистки: границ сдвинуто ${snapped.snapped}, пауз укорочено ${gaps.length}, повторов вырезано ${reps.length}`);
+      }
+    }
 
     const segments = segmentsFromCuts(edges, cuts);
     const effDur = segments.reduce((sum, s) => sum + (s.end - s.start), 0);
@@ -332,6 +348,10 @@ export async function processProject(id: string): Promise<void> {
     let words: Word[];
     if (rawWords) {
       words = remapWords(rawWords, segments);
+      // после склейки в речи не должно остаться провалов и повторов — иначе это ошибка
+      // стадии, а не «готово»
+      const problems = verifyCleanSpeech(words);
+      if (problems.length) throw new Error(`Проверка речи после чистки: ${problems.slice(0, 4).join("; ")}`);
     } else {
       if (!project.script) throw new Error("Нет ни распознавания речи, ни сценария для субтитров");
       words = alignScriptToDuration(project.script, effDur);

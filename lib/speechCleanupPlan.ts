@@ -128,10 +128,13 @@ export function validateCleanupActions(
       const end = to < words.length - 1 ? nextStart - Math.min(FRAGMENT_EDGE_KEEP, Math.max(0.02, trailGap / 2)) : Math.min(duration, words[to].end + 0.05);
       if (end - start < 0.12) continue;
       if (end - start > (retake ? maxRetakeSec : MAX_FRAGMENT_SEC)) continue;
-      // хук защищён от вырезки — кроме СТОПРОЦЕНТНЫХ коротких филлеров («эээ», «ну эээ»)
+      // хук защищён от вырезки вслепую — кроме СТОПРОЦЕНТНЫХ коротких филлеров («эээ»)
+      // и дублей, найденных по сценарию: автор начал первую фразу заново — неудачное
+      // первое прочтение вырезается, иначе хук ролика оставался испорченным.
       if (start < HOOK_GUARD_SEC) {
         const shortObviousFiller = reason === "FILLER" && confidence >= 0.92 && end - start <= 1.2;
-        if (!shortObviousFiller) continue;
+        const scriptedRetake = (reason === "RETAKE" || reason === "MID_RETAKE" || reason === "REPEAT") && confidence >= 0.85;
+        if (!shortObviousFiller && !scriptedRetake) continue;
       }
       if (removedTotal + (end - start) > removedCap) continue;
 

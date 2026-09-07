@@ -1,4 +1,6 @@
 import fs from "fs";
+import path from "path";
+import { execFileSync } from "child_process";
 import { getSettings } from "./store";
 import { mediaVision } from "./mediaLlm";
 import { lastRecordedCost } from "./costLedger";
@@ -45,6 +47,8 @@ export type CoverQcRaw = {
   extraText?: unknown;
   /** [{text, sensible}] — мелкие надписи на фоне, отдельно от заметного лишнего текста */
   backgroundText?: unknown;
+  /** false — в размере превью ленты заголовок не читается или лицо не узнать */
+  thumbnailReadable?: unknown;
   textReadable?: unknown;
   identityOk?: unknown;
   anatomyOk?: unknown;
@@ -138,6 +142,10 @@ export function evaluateQc(
     reasons.push("текст на обложке нечитаем");
     return fail("UNREADABLE_TEXT");
   }
+  if (raw.thumbnailReadable === false) {
+    reasons.push("в размере превью ленты заголовок не читается");
+    return fail("UNREADABLE_TEXT");
+  }
   if (!headlineFound) {
     reasons.push(
       `headline не совпал: ожидалось «${headline}», на обложке «${withoutKicker || "— текста не найдено —"}»`,
@@ -176,18 +184,21 @@ export function evaluateQc(
 const QC_SYSTEM =
   "Ты — контролёр качества обложек. Смотри на изображение и отвечай СТРОГО одним JSON-объектом, без пояснений.";
 
-function qcPrompt(headline: string, kicker?: string | null): string {
+function qcPrompt(headline: string, kicker?: string | null, withReference = false): string {
   return (
     `Expected headline:\n"${headline}"\n\n` +
     (kicker ? `Expected optional kicker:\n"${kicker}"\n\n` : "No kicker is expected.\n\n") +
-    "Inspect this cover image.\n\n" +
+    "Image 1 is the cover at full size. Image 2 is the same cover scaled down to feed-thumbnail size — judge thumbnailReadable on it. " +
+    (withReference ? "Image 3 is the REFERENCE PHOTO of the real person — identityOk is false if the person on the cover is clearly not this person. " : "") +
+    "Inspect the cover.\n\n" +
     "Return JSON only:\n" +
     '{"readableText":["<every PROMINENT readable text block, top to bottom, verbatim — large lettering or lettering in the foreground; do NOT list small distant background lettering here>"],' +
     '"headlineMatch":<true if the headline appears with exactly this wording and spelling>,' +
     '"extraText":["<prominent readable text that is NOT part of the headline or kicker: large, in focus, or in the foreground>"],' +
     '"backgroundText":[{"text":"<small, distant or out-of-focus lettering on background signs, screens, posters>","sensible":<true if these are real words in any language, false if a meaningless letter string>}],' +
     '"textReadable":<true if the lettering is clean and legible at thumbnail size>,' +
-    '"identityOk":<false only if the face is clearly a different person or badly distorted>,' +
+    '"identityOk":<false only if the face is clearly a different person than the reference (or badly distorted)>,' +
+    '"thumbnailReadable":<true if on image 2 the headline is still readable and the face recognizable>,' +
     '"anatomyOk":<false only if there is an obvious anatomical defect>,' +
     '"visualArtifacts":["<only severe defects that ruin the cover>"],' +
     '"confidence":<0..1>}\n\n' +
@@ -219,6 +230,7 @@ export async function runCoverQc(
   imageFile: string,
   expectedHeadline: string,
   expectedKicker?: string | null,
+  referenceFace?: string,
 ): Promise<CoverQcResult> {
   const key = getSettings().anthropicKey;
   if (!key) {
@@ -227,14 +239,29 @@ export async function runCoverQc(
   try {
     const buffer = fs.readFileSync(imageFile);
     const media = detectImageMediaType(buffer);
+    // Превью ленты: обложку смотрят в 200 пикселей шириной — заголовок обязан читаться
+    // и там. Референс лица: раньше проверка сходства не видела оригинал и судила вслепую.
+    const images: { base64: string; mediaType: string }[] = [{ base64: buffer.toString("base64"), mediaType: media }];
+    try {
+      const thumb = path.join(path.dirname(imageFile), "cover-thumb-qc.jpg");
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-i", imageFile, "-vf", "scale=216:-2", "-q:v", "4", thumb]);
+      const tb = fs.readFileSync(thumb);
+      images.push({ base64: tb.toString("base64"), mediaType: detectImageMediaType(tb) });
+      fs.rmSync(thumb, { force: true });
+    } catch {}
+    const withReference = Boolean(referenceFace && fs.existsSync(referenceFace) && images.length === 2);
+    if (withReference) {
+      const rb = fs.readFileSync(referenceFace!);
+      images.push({ base64: rb.toString("base64"), mediaType: detectImageMediaType(rb) });
+    }
     const text = (
       await mediaVision({
         model: QC_MODEL,
         maxTokens: 1000,
         stage: "Cover QC",
         system: QC_SYSTEM,
-        image: { base64: buffer.toString("base64"), mediaType: media },
-        user: qcPrompt(expectedHeadline, expectedKicker),
+        images,
+        user: qcPrompt(expectedHeadline, expectedKicker, withReference),
       })
     );
     const match = text.match(/\{[\s\S]*\}/);

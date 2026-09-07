@@ -5,6 +5,7 @@ import { buildFullCoverPrompt } from "./coverPrompt";
 import { runCoverQc, CoverQcResult, CoverQcStatus } from "./coverQc";
 import { generateCoverImage, finishCoverImage, encodeFinalCover, fullAiCoverModel } from "./coverProvider";
 import { recordCoverRun } from "./coverStats";
+import { FACE_FILE, hasFace } from "./store";
 
 /**
  * Production Cover Pipeline — РОВНО ОДНА платная генерация на одно действие пользователя.
@@ -37,7 +38,7 @@ export type CoverDeps = {
 
 const defaultDeps: CoverDeps = {
   generateImage: (prompt, outFile) => generateCoverImage(prompt, outFile),
-  runQc: (file, headline, kicker) => runCoverQc(file, headline, kicker),
+  runQc: (file, headline, kicker) => runCoverQc(file, headline, kicker, hasFace() ? FACE_FILE : undefined),
   finish: finishCoverImage,
   encodeFinal: encodeFinalCover,
 };

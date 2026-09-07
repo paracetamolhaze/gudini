@@ -556,7 +556,11 @@ function ProcessStep({
           </button>
           {project.processedVideo && (
             <>
-              <span className="badge success">Готово ✓</span>
+              {project.coverStatus === "ok" || !project.coverStatus ? (
+                <span className="badge success">Готово ✓</span>
+              ) : (
+                <span className="badge" style={{ background: "rgba(240, 180, 41, 0.15)", color: "#f0b429" }}>Ролик готов · обложка требует внимания</span>
+              )}
               <button className="btn btn-secondary" onClick={onNext}>
                 К публикации →
               </button>
@@ -1075,6 +1079,11 @@ function PublishStep({
     return (
       <div className="card">
         <h2>🚀 Публикация</h2>
+        {project.coverStatus === "failed" && (
+          <p className="hint" style={{ color: "#f0b429" }}>
+            Обложка не прошла проверку{project.coverReason ? `: ${project.coverReason}` : ""} — опубликуется как есть. Проверьте её на шаге «Монтаж».
+          </p>
+        )}
         <div className="error-box">Сначала смонтируй видео на шаге 3</div>
       </div>
     );

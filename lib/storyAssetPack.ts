@@ -750,6 +750,9 @@ EVENT — видно само событие истории;
 PERSON — виден участник вне события;
 CONTEXT — обстановка.
 
+У каждого блока после тире указано, какой кадр под него нужен («нужен кадр: …») — сравнивай
+материал прежде всего с этим описанием, а текст блока используй как контекст.
+
 Отвечай компактно и СТРОГО валидным JSON. Пары с оценкой 0 не перечисляй:
 {"items":[{"a":1,"role":"EVENT","factIds":["f1"],"scores":{"3":3,"7":2}}]}
 где ключ "a" — номер материала, ключи внутри scores — номера блоков.`;
@@ -759,6 +762,7 @@ export async function matchToBeats(
   assets: PackAsset[],
   beats: ScriptBeat[],
   research: StoryResearchPack,
+  needs: MediaResearchNeed[] = [],
 ): Promise<PackAsset[]> {
   if (!assets.length) return assets;
   if (!mediaLlmAvailable()) {
@@ -768,8 +772,15 @@ export async function matchToBeats(
   const visualBeats = beats.filter((b) => b.visualNeed !== "NONE");
   // Участники блока показываются явно: хук «первый футболист, который не провёл на
   // поле ни секунды» не называет героя по имени, и без этого портрет героя получал 0.
+  // Описание нужного кадра — главное, с чем сравнивается материал: по одному русскому
+  // тексту блока «ароматические соединения» макро-фото трихом получало 1 балл, хотя блок
+  // просил именно «macro photo of trichome-covered buds».
+  const needOf = new Map(needs.map((n) => [n.beatId, n]));
   const beatList = visualBeats
-    .map((b, i) => `${i + 1}. (${b.visualNeed}${b.entities.length ? ": " + b.entities.join(", ") : ""}) ${b.text}`)
+    .map((b, i) => {
+      const want = needOf.get(b.id)?.visualDescription;
+      return `${i + 1}. (${b.visualNeed}${b.entities.length ? ": " + b.entities.join(", ") : ""}) ${b.text}${want ? ` — нужен кадр: ${want}` : ""}`;
+    })
     .join("\n");
   const assetList = assets
     .map((a, i) => `${i + 1}. [${a.kind === "VIDEO_SEGMENT" ? "видео" : "фото"}] ${a.description.slice(0, 130)}${a.sourceTitle ? ` (источник: «${a.sourceTitle.slice(0, 70)}»)` : ""}`)
@@ -1308,7 +1319,33 @@ export async function buildAssetPack(
 
   // ---------- сопоставление с блоками ----------
   stages.beforeBeatMatch = assets.length;
-  const matched = await matchToBeats(assets, beats, research);
+  let matched = await matchToBeats(assets, beats, research, needs);
+  // ---------- вторая волна: блоки, закрытые слабо (лучший балл < 2) ----------
+  // Первая волна ищет по общим запросам блока; если под блок не нашлось ничего
+  // сильного, ищем узко — по описанию нужного кадра. Раньше такие дыры в середине
+  // ролика роняли монтаж уже после оплаты медиатеки («закрыто лишь 25% блоков»).
+  {
+    const firstCoverage = computeCoverage(matched.filter((a) => a.compatibleBeatIds.length), beats).coverage;
+    const weak = needs.filter((n) => (firstCoverage.find((c) => c.beatId === n.beatId)?.bestScore ?? 0) < 2).slice(0, 6);
+    if (weak.length && assets.length < T.max_total_assets) {
+      const before = assets.length;
+      console.log(`  вторая волна: слабо закрытых блоков ${weak.length} — поиск по описанию нужного кадра`);
+      for (const need of weak) {
+        await processNeed(need, {
+          imagesOnly: true,
+          queries: [need.visualDescription, `${need.visualDescription} photo`, `${need.visualDescription} illustration`],
+        }).catch((e) => console.log(`  вторая волна ${need.beatId}: ${String(e?.message ?? e).slice(0, 100)}`));
+      }
+      const fresh = assets.slice(before);
+      if (fresh.length) {
+        const rematched = await matchToBeats(fresh, beats, research, needs);
+        matched = [...matched, ...rematched];
+        console.log(`  вторая волна: +${fresh.length} материалов`);
+      } else {
+        console.log("  вторая волна: ничего нового не нашлось");
+      }
+    }
+  }
   const usable = matched.filter((a) => a.compatibleBeatIds.length);
   stages.beatCompatible = usable.length;
   if (assets.length > 0 && usable.length === 0) {

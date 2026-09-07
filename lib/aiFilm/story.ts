@@ -14,11 +14,20 @@ import type { StoryBible, FilmEpisode } from "./types";
  */
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
-export const STORY_VERSION = 1;
+export const STORY_VERSION = 2;
 
 export type Sentence = { index: number; start: number; end: number; text: string };
 
-/** Предложения из слов чистого таймлайна: по знакам конца предложения, иначе по паузе ≥0.7 с. */
+/** Фраза не длиннее этого — иначе модель не может разбить речь на эпизоды по 5–10 с. */
+export const MAX_PHRASE_SEC = 5;
+export const MAX_PHRASE_WORDS = 14;
+
+/**
+ * Фразы из слов чистого таймлайна: по знакам конца предложения, по паузе ≥0.5 с,
+ * по запятой после 6 слов, и жёстко — по длине (5 с или 14 слов). В расшифровке
+ * знаков мало, и «предложения» выходили по 20 секунд: план на «Думсдей» получил
+ * эпизоды по 16–24 с из одной фразы, которые нельзя было разрезать.
+ */
 export function sentencesFromWords(words: Word[]): Sentence[] {
   const out: Sentence[] = [];
   let cur: Word[] = [];
@@ -30,10 +39,12 @@ export function sentencesFromWords(words: Word[]): Sentence[] {
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     cur.push(w);
-    const endsSentence = /[.!?…]$/.test(w.word);
     const next = words[i + 1];
-    const longPause = next ? next.start - w.end >= 0.7 : false;
-    if (endsSentence || (longPause && cur.length >= 4)) flush();
+    const endsSentence = /[.!?…]$/.test(w.word);
+    const comma = /[,;:—-]$/.test(w.word) && cur.length >= 6;
+    const pause = next ? next.start - w.end >= 0.5 && cur.length >= 4 : false;
+    const tooLong = cur.length >= MAX_PHRASE_WORDS || w.end - cur[0].start >= MAX_PHRASE_SEC;
+    if (endsSentence || comma || pause || tooLong) flush();
   }
   flush();
   return out;
@@ -41,16 +52,17 @@ export function sentencesFromWords(words: Word[]): Sentence[] {
 
 const SYSTEM = `Ты сценарист и художник-постановщик короткого AI-фильма, который идёт в верхней половине вертикального ролика синхронно с речью автора. Автор говорит в нижней половине; фильм НЕ показывает автора и не повторяет его слова буквально — он показывает СМЫСЛ: историю, ситуацию, эмоцию, метафору. Фильм цельный: один визуальный стиль, один главный герой (если история про человека или от лица героя), узнаваемые места и предметы, действие развивается от эпизода к эпизоду.
 
-Тебе дан текст речи как пронумерованные предложения с временем. Раздели речь на эпизоды по смыслу: каждый эпизод 5–10 секунд речи (минимум 4, максимум 12), одна сцена-действие, а не одно предложение. Для каждого эпизода — что происходит в кадре (английский, конкретное действие и обстановка, без текста и надписей в кадре, без логотипов), место, состояние героя и сцены после эпизода (чтобы следующий эпизод продолжался из него) и тип перехода к следующему: "continue" (та же сцена, действие продолжается), "match_cut" (та же история, другой ракурс/место, но узнаваемые детали), "new_sequence" (новая глава истории).
+Тебе дан текст речи как пронумерованные фразы с временем. Раздели речь на эпизоды по смыслу: каждый эпизод 5–10 секунд речи (минимум 4, максимум 10 — эпизод длиннее 10 секунд недопустим, дели его на два действия), одна сцена-действие, а не одна фраза. Для каждого эпизода — что происходит в кадре (английский, конкретное действие и обстановка, без текста и надписей в кадре, без логотипов), место, состояние героя и сцены после эпизода (чтобы следующий эпизод продолжался из него) и тип перехода к следующему: "continue" (та же сцена, действие продолжается), "match_cut" (та же история, другой ракурс/место, но узнаваемые детали), "new_sequence" (новая глава истории).
 
 Story Bible: единый visualStyle (например "cinematic live-action, 35mm film look, natural light, muted warm palette" или "painterly 2D animation"), mainCharacter (если уместен: description, appearance — лицо, возраст, телосложение, причёска; clothes; signature — 1–3 узнаваемые детали, которые должны быть в каждом кадре с героем) либо null, locations, importantObjects, mood, cameraLanguage, storyArc, continuityRules (5–8 коротких правил на английском для художника: как выглядят герой, места, свет, что нельзя менять).
 
 Правила:
 - Никаких реальных известных людей по имени и внешности, никаких брендов, логотипов, текста в кадре, флагов, оружия крупным планом, детей в опасности.
+- В bible и visualAction не пиши названия франшиз, студий, фильмов и персонажей (Marvel, Avengers, Iron Man, Doom и т.п.) — генератор видео их отфильтрует. Описывай своими словами: «a team of heroes in red-gold ruins», «a faceless armored figure».
 - Не показывать говорящего человека крупным планом как диктора — фильм показывает историю.
 - Если речь — рассуждение без сюжета, придумай сквозную визуальную метафору с героем и местом, которая проходит через все эпизоды.
 - Ответь только JSON: {"bible": {...}, "episodes": [{"fromSentence": 1, "toSentence": 2, "meaning": "русский, 1 фраза", "visualAction": "english, 1–3 sentences", "location": "english", "stateAfter": "english", "transition": "continue|match_cut|new_sequence"}]}
-- Эпизоды покрывают ВСЕ предложения по порядку без пропусков и пересечений.`;
+- Эпизоды покрывают ВСЕ фразы по порядку без пропусков и пересечений.`;
 
 type RawEpisode = {
   fromSentence: number;
@@ -85,7 +97,7 @@ function normalizeBible(b: Partial<StoryBible> | undefined): StoryBible {
 /**
  * Эпизоды из ответа модели: границы по предложениям → секунды; пропуски и пересечения
  * чинятся (следующий эпизод начинается там, где закончился прошлый); слишком длинные
- * (>12 с) режутся по предложениям, слишком короткие (<3 с) сливаются с соседом.
+ * (>10 с) режутся по фразам, слишком короткие (<3 с) сливаются с соседом.
  */
 export function episodesFromRaw(raw: RawEpisode[], sentences: Sentence[]): FilmEpisode[] {
   if (!sentences.length) return [];
@@ -107,18 +119,19 @@ export function episodesFromRaw(raw: RawEpisode[], sentences: Sentence[]): FilmE
   if (!items.length) items.push({ from: 1, to: n, e: { fromSentence: 1, toSentence: n, meaning: "", visualAction: "", location: "", stateAfter: "", transition: "continue" } });
   if (cursor <= n) items[items.length - 1].to = n; // хвост без эпизода — к последнему
 
-  // длинные режем по предложениям на части ≤ 12 с
+  // длинные режем по фразам на части ≤ 10 с: набираем фразы, пока часть не выйдет за 10 с
   const split: typeof items = [];
   for (const it of items) {
     const dur = sentences[it.to - 1].end - sentences[it.from - 1].start;
-    if (dur <= 12 || it.to === it.from) { split.push(it); continue; }
-    const parts = Math.ceil(dur / 10);
-    const per = Math.max(1, Math.floor((it.to - it.from + 1) / parts));
+    if (dur <= 10 || it.to === it.from) { split.push(it); continue; }
     let from = it.from;
     while (from <= it.to) {
-      const to = Math.min(it.to, from + per - 1);
-      split.push({ from, to: split.length && to + per > it.to && to < it.to ? it.to : to, e: it.e });
-      from = split[split.length - 1].to + 1;
+      let to = from;
+      while (to + 1 <= it.to && sentences[to].end - sentences[from - 1].start <= 10) to++;
+      // хвост короче 3 с — к этой же части
+      if (to < it.to && sentences[it.to - 1].end - sentences[to].start < 3) to = it.to;
+      split.push({ from, to, e: it.e });
+      from = to + 1;
     }
   }
   // короткие сливаем с предыдущим (или следующим для первого)
@@ -150,13 +163,13 @@ export async function analyzeStory(args: {
   topic?: string;
 }): Promise<{ bible: StoryBible; episodes: FilmEpisode[]; sentences: Sentence[] }> {
   const sentences = sentencesFromWords(args.words);
-  if (sentences.length < 2) throw new Error("AI-фильм: в речи меньше двух предложений — не из чего строить историю");
+  if (sentences.length < 2) throw new Error("AI-фильм: в речи меньше двух фраз — не из чего строить историю");
   const list = sentences.map((s) => `${s.index}. [${s.start.toFixed(1)}–${s.end.toFixed(1)} с] ${s.text}`).join("\n");
   const user =
     `${args.topic ? `Тема ролика: ${args.topic}\n` : ""}` +
     `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
     `Сценарий (что автор хотел сказать):\n${args.script.slice(0, 4000)}\n\n` +
-    `Речь автора по предложениям (чистый таймлайн, всего ${sentences[sentences.length - 1].end.toFixed(1)} с):\n${list}`;
+    `Речь автора по фразам (чистый таймлайн, всего ${sentences[sentences.length - 1].end.toFixed(1)} с):\n${list}`;
   // 16000, как у чистки речи и режиссёра: на 6000 разбор речи в 108 с упёрся в лимит с пустым текстом
   const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", system: SYSTEM, user });
   const parsed = parseJson<RawStory>(raw, "AI Film Story");

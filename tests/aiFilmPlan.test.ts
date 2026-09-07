@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { sentencesFromWords, episodesFromRaw } from "../lib/aiFilm/story";
-import { buildFilmPlan, groupSequences, scenePrompt, sceneKey } from "../lib/aiFilm/plan";
+import { buildFilmPlan, groupSequences, scenePrompt, sceneKey, contiguousEpisodes } from "../lib/aiFilm/plan";
 import type { FilmEpisode, StoryBible } from "../lib/aiFilm/types";
 
 const words = (text: string, secPerWord = 0.4) =>
@@ -106,4 +106,28 @@ test("ключ сцены включает источник: правка сце
   assert.notEqual(ka, kb1);
   assert.notEqual(kb1, kb2);
   assert.equal(sceneKey(a, plan.model, null), ka);
+});
+
+test("эпизоды и последовательности встык: с нуля, без пауз между ними, до конца ролика", () => {
+  const eps = [ep("E1", 0.7, 4.4), ep("E2", 4.6, 14.5, "new_sequence"), ep("E3", 15.0, 31.7), ep("E4", 31.9, 56.0)];
+  const c = contiguousEpisodes(eps, 60);
+  assert.equal(c[0].start, 0);
+  assert.equal(c[1].start, c[0].end);
+  assert.equal(c[3].end, 60);
+  const plan = buildFilmPlan(bible, eps, 60, { key: "k" });
+  assert.equal(plan.sequences[0].start, 0);
+  for (let i = 1; i < plan.sequences.length; i++) assert.equal(plan.sequences[i].start, plan.sequences[i - 1].end);
+  assert.equal(plan.sequences[plan.sequences.length - 1].end, 60);
+  const covered = plan.sequences.reduce((a, s) => a + (s.end - s.start), 0);
+  assert.ok(Math.abs(covered - 60) < 1e-6, "фильм покрывает ролик целиком");
+});
+
+test("фразы для модели не длиннее 5 с и 14 слов даже без знаков препинания", () => {
+  const w = words(Array.from({ length: 80 }, (_, i) => `слово${i}`).join(" "), 0.4); // 32 с без единого знака
+  const s = sentencesFromWords(w);
+  assert.ok(s.length >= 6, `фраз ${s.length}`);
+  for (const x of s) {
+    assert.ok(x.end - x.start <= 5.5, `фраза ${x.index} длиной ${(x.end - x.start).toFixed(1)} с`);
+    assert.ok(x.text.split(" ").length <= 14);
+  }
 });

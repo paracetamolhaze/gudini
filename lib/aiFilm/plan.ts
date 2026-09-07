@@ -14,7 +14,7 @@ import type { AiFilmPlan, FilmEpisode, FilmScene, FilmSequence, StoryBible } fro
  * Фильм генерируется чуть длиннее речи и подрезается при сборке — без растяжения.
  */
 
-export const PLAN_VERSION = 1;
+export const PLAN_VERSION = 2;
 export const VEO_MODEL = process.env.AI_FILM_MODEL || "veo-3.1-fast-generate-001";
 /** цена секунды без звука; уточняется по счёту Google (в консоли), переопределяется env */
 export const VEO_PRICE_PER_SEC = Number(process.env.AI_FILM_PRICE_PER_SEC ?? 0.15);
@@ -93,8 +93,25 @@ export function groupSequences(episodes: FilmEpisode[], maxSeconds = MAX_SEQUENC
   return groups;
 }
 
-export function buildFilmPlan(bible: StoryBible, episodes: FilmEpisode[], duration: number, opts: PlanOptions): AiFilmPlan {
-  if (!episodes.length) throw new Error("AI-фильм: нет эпизодов для плана");
+/**
+ * Эпизоды встык: первый с нуля, каждый следующий начинается там, где кончился прошлый,
+ * последний — до конца ролика. Паузы между фразами иначе выпадали из фильма, и сборка
+ * получала фильм короче речи на сумму пауз.
+ */
+export function contiguousEpisodes(episodes: FilmEpisode[], duration: number): FilmEpisode[] {
+  const sorted = [...episodes].sort((a, b) => a.start - b.start);
+  const out: FilmEpisode[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = i === 0 ? 0 : out[i - 1].end;
+    const end = i === sorted.length - 1 ? Math.max(sorted[i].end, duration) : Math.max(sorted[i].end, start);
+    out.push({ ...sorted[i], start, end });
+  }
+  return out;
+}
+
+export function buildFilmPlan(bible: StoryBible, rawEpisodes: FilmEpisode[], duration: number, opts: PlanOptions): AiFilmPlan {
+  if (!rawEpisodes.length) throw new Error("AI-фильм: нет эпизодов для плана");
+  const episodes = contiguousEpisodes(rawEpisodes, duration);
   const model = opts.model || VEO_MODEL;
   const pricePerSec = opts.pricePerSec ?? VEO_PRICE_PER_SEC;
   const maxSeq = opts.maxSequenceSeconds ?? MAX_SEQUENCE_SECONDS;
@@ -104,8 +121,8 @@ export function buildFilmPlan(bible: StoryBible, episodes: FilmEpisode[], durati
   groups.forEach((g, gi) => {
     const start = g.episodes[0].start;
     const last = g.episodes[g.episodes.length - 1];
-    // последняя последовательность тянется до конца ролика, чтобы фильм не кончился раньше речи
-    const end = gi === groups.length - 1 ? Math.max(last.end, duration) : last.end;
+    // эпизоды уже встык, поэтому и последовательности встык: конец одной — начало следующей
+    const end = last.end;
     const span = Math.max(1, end - start);
     const scenes: FilmScene[] = [];
     let t = 0;

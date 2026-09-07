@@ -44,7 +44,17 @@ export function statusLine(research: Pick<StoryResearchPack, "status" | "statusN
 }
 
 const SCRIPT_SYSTEM = `Ты — сценарист вирусных вертикальных видео (TikTok, YouTube Shorts, Instagram Reels).
-Пишешь сценарии, которые автор читает на камеру. Правила:
+Пишешь сценарии, которые автор читает на камеру ОТ СВОЕГО ЛИЦА. Это его мнение и его голос,
+а не сводка новостей и не пересказ чужих статей. Правила:
+- Первое лицо и позиция: у автора есть отношение к теме, он его высказывает («я считаю»,
+  «по-моему», «меня бесит», «мне нравится»), спорит, иронизирует, даёт оценку. Мнение подаётся
+  как мнение, факт как факт; выдумывать цифры и события нельзя.
+- Никаких названий изданий, «сообщает», «выпустил материал», «собрал список»: источники — не
+  часть речи. Никаких списков статей и «кто что написал». Факты — своими словами, как их
+  рассказал бы человек другу, не более 2–4 самых сильных на ролик.
+- Точные даты и длинные числа только когда они и есть суть; иначе «вчера», «на этой неделе»,
+  «почти сто тысяч».
+- Если задан стиль автора — говори его словами и в его манере, соблюдай его запреты.
 - Длительность чтения: 55–65 секунд (примерно 140–160 слов разговорной русской речи).
 - Первые 3 секунды — мощный хук: интригующий вопрос, шокирующий факт или обещание пользы.
 - Разговорный язык, короткие фразы, обращение на «ты», без канцелярита.
@@ -56,10 +66,13 @@ const SCRIPT_SYSTEM = `Ты — сценарист вирусных вертик
 
 const RESEARCH_SCRIPT_SYSTEM = `${SCRIPT_SYSTEM}
 
-ВАЖНО: тебе дают результаты исследования истории — событие, дату, участников и проверенные факты
-со ссылками. Пиши сценарий ТОЛЬКО по ним. Не добавляй существенных утверждений, которых нет в фактах:
-если детали не было в исследовании, её не должно быть в тексте. Имена, числа, даты и названия
-организаций бери из пакета дословно.
+ВАЖНО: тебе дают результаты исследования — событие, дату, участников и проверенные факты со
+ссылками. Это ОПОРА, а не текст для пересказа: выбери 2–4 самых сильных факта и вплети их в
+позицию автора своими словами. Не добавляй существенных утверждений о реальности, которых нет
+в пакете; мнения, оценки и реакции автора — можно и нужно. Имена, числа и даты бери из пакета
+точно, но не цитируй издания и не перечисляй, кто что опубликовал.
+Структура: хук с позицией автора → 2–4 мысли (тезис автора + факт + его комментарий) →
+вывод-позиция → вопрос зрителю.
 
 Ответь СТРОГО валидным JSON:
 {"script":"полный текст для чтения вслух","beats":[{"text":"предложение из сценария","factIds":["id"]}]}
@@ -67,10 +80,17 @@ beats — разбивка сценария на смысловые блоки �
 подтверждают этот блок (пустой массив для хука, связки или призыва).`;
 
 /** Сценарий из исследования: факты, участники и даты берутся из пакета, а не из памяти модели. */
+/** Строка про автора для промпта: кто он и как говорит (из Настроек). */
+export function authorLine(style?: string | null): string {
+  const t = String(style ?? "").trim();
+  return t ? `Автор и его манера (пиши от его лица, его словами, соблюдай его запреты): ${t.slice(0, 1200)}` : "";
+}
+
 export async function generateScriptFromResearch(
   research: StoryResearchPack,
 ): Promise<{ script: string; beats: ScriptBeat[]; demo: boolean } | null> {
   if (!haveKey()) return null;
+  const author = authorLine(getSettings().authorStyle);
   const facts = research.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");
   const entities = research.entities.map((e) => `${e.name} (${e.type})`).join(", ");
   const response = await mediaComplete({
@@ -80,6 +100,7 @@ export async function generateScriptFromResearch(
     system: RESEARCH_SCRIPT_SYSTEM,
     user:
       `${todayLine()}\n${statusLine(research)}\n` +
+      (author ? `${author}\n` : "") +
       `Событие: ${research.canonicalEvent}\n` +
       (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
       (research.location ? `Место: ${research.location}\n` : "") +
@@ -107,12 +128,13 @@ export async function generateScriptFromResearch(
 
 export async function generateScript(topic: string): Promise<{ script: string; demo: boolean }> {
   if (!haveKey()) return { script: demoScript(topic), demo: true };
+  const author = authorLine(getSettings().authorStyle);
   const script = await mediaComplete({
     model: MODEL_SCRIPT,
     maxTokens: 16000,
     stage: "Script Generation",
     system: SCRIPT_SYSTEM,
-    user: `${todayLine()}\nНапиши сценарий видео на тему: «${topic}»`,
+    user: `${todayLine()}\n${author ? `${author}\n` : ""}Напиши сценарий видео на тему: «${topic}»`,
   });
   return { script, demo: false };
 }

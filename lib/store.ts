@@ -89,6 +89,8 @@ export type Settings = {
   igAppId?: string;
   igAppSecret?: string;
   publicBaseUrl?: string;
+  /** кто автор и как он говорит: сценарист пишет от его лица, а не пересказывает статьи */
+  authorStyle?: string;
   // OAuth-токены АКТИВНОГО аккаунта платформы (именно их читает публикация)
   youtubeTokens?: YoutubeTokens;
   tiktokTokens?: TiktokTokens;

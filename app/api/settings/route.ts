@@ -28,6 +28,7 @@ export async function GET() {
     igAppId: s.igAppId ?? "",
     igAppSecret: mask(s.igAppSecret),
     publicBaseUrl: s.publicBaseUrl ?? "",
+    authorStyle: s.authorStyle ?? "",
     connected: {
       youtube: Boolean(s.youtubeTokens),
       tiktok: Boolean(s.tiktokTokens),
@@ -58,6 +59,7 @@ const FIELDS = [
   "igAppId",
   "igAppSecret",
   "publicBaseUrl",
+  "authorStyle",
 ] as const;
 
 export async function POST(req: NextRequest) {

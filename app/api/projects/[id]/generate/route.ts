@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, updateProject } from "@/lib/store";
-import { generateMeta, generateScript, generateScriptFromResearch } from "@/lib/ai";
+import { generateMeta, generateScript } from "@/lib/ai";
 import { buildStoryResearchPack } from "@/lib/storyResearch";
 import { recordSiteSpend } from "@/lib/spendLog";
 
@@ -35,20 +35,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
           { status: 502 },
         );
       }
-      const written = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Сценарий" }, () =>
-        generateScriptFromResearch(research),
+      // Сценарий пишет прежний сценарист (хук, структура, живой язык), а исследование даёт
+      // ему только дату и справку на сегодня: пересказ выдачи с названиями изданий не нужен.
+      const { script, demo } = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Сценарий" }, () =>
+        generateScript(project.topic, research),
       );
-      if (!written) {
-        return NextResponse.json({ error: "Сценарий по исследованию не сгенерировался" }, { status: 502 });
-      }
-      return NextResponse.json(
-        updateProject(id, {
-          script: written.script,
-          scriptDemo: false,
-          research,
-          scriptBeats: written.beats,
-        }),
-      );
+      return NextResponse.json(updateProject(id, { script, scriptDemo: demo, research, scriptBeats: undefined }));
     }
 
     const { script, demo } = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Сценарий" }, () =>

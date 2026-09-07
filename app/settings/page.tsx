@@ -23,7 +23,6 @@ type SettingsView = {
   igAppId: string;
   igAppSecret: string;
   publicBaseUrl: string;
-  authorStyle: string;
   connected: { youtube: boolean; tiktok: boolean; instagram: boolean };
   accounts: Record<PlatformName, Account[]>;
 };
@@ -326,24 +325,6 @@ function Settings() {
         </p>
         <label>Публичный URL сервера (после деплоя, для Instagram)</label>
         <input type="text" value={s.publicBaseUrl} onChange={(e) => field("publicBaseUrl", e.target.value)} placeholder="https://mysite.com" />
-      </div>
-
-      <div className="card">
-        <h3 style={{ margin: "0 0 4px", fontSize: 15 }}>🎙 Голос автора</h3>
-        <p className="hint">
-          Кто ты и как говоришь: сценарист пишет от твоего лица и с твоим мнением, а факты из
-          исследования берёт только как опору. Например: «Алмаз, 27, торгую криптой пять лет,
-          говорю прямо и с иронией, не люблю хайп, часто говорю „смотри“ и „по-честному“, никогда
-          не даю финансовых советов».
-        </p>
-        <label>О себе и стиль подачи</label>
-        <textarea
-          rows={5}
-          value={s.authorStyle}
-          onChange={(e) => field("authorStyle", e.target.value)}
-          placeholder="Кто ты, о чём канал, тон, любимые обороты, чего никогда не говоришь"
-          style={{ width: "100%", resize: "vertical" }}
-        />
       </div>
 
       <div className="card">

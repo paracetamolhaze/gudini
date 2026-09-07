@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recordSiteSpend } from "@/lib/spendLog";
 import { createProject, listProjects, updateProject } from "@/lib/store";
-import { generateScript, generateScriptFromResearch } from "@/lib/ai";
+import { generateScript } from "@/lib/ai";
 import { buildStoryResearchPack } from "@/lib/storyResearch";
 
 export async function GET() {
@@ -23,14 +23,11 @@ export async function POST(req: NextRequest) {
         buildStoryResearchPack(project.topic),
       );
       if (research) {
-        const written = await recordSiteSpend({ projectId: project.id, topic: project.topic, label: "Сценарий" }, () =>
-          generateScriptFromResearch(research),
+        // прежний сценарист + дата и справка на сегодня из исследования (без пересказа выдачи)
+        const { script, demo } = await recordSiteSpend({ projectId: project.id, topic: project.topic, label: "Сценарий" }, () =>
+          generateScript(project.topic, research),
         );
-        if (written) {
-          return NextResponse.json(
-            updateProject(project.id, { script: written.script, scriptDemo: false, research, scriptBeats: written.beats }),
-          );
-        }
+        return NextResponse.json(updateProject(project.id, { script, scriptDemo: demo, research }));
       }
       console.warn(`Проект ${project.id}: исследование не удалось — сценарий по памяти модели`);
       const { script, demo } = await recordSiteSpend({ projectId: project.id, topic: project.topic, label: "Сценарий" }, () =>

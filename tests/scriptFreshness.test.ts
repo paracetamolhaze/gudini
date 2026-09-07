@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { todayLine, statusLine, authorLine } from "../lib/ai";
+import { todayLine, statusLine, todayBrief } from "../lib/ai";
 
 test("дата передаётся в промпт явно", () => {
   const line = todayLine(new Date("2026-09-07T10:00:00Z"));
@@ -14,8 +14,10 @@ test("статус из исследования формулируется дл
   assert.match(statusLine({}), /не установлен/);
 });
 
-test("стиль автора попадает в промпт, пустой — не мешает", () => {
-  assert.equal(authorLine(""), "");
-  assert.equal(authorLine(undefined), "");
-  assert.match(authorLine("Алмаз, говорю прямо, без финансовых советов"), /от его лица.*Алмаз/);
+test("справка на сегодня: статус и факты без ссылок, пустая без исследования", () => {
+  assert.equal(todayBrief(null), "");
+  const brief = todayBrief({ status: "RELEASED", statusNote: "фильм вышел 17 июля 2026", facts: [{ id: "f1", text: "Бюджет 250 миллионов", sourceUrls: ["https://x"] }] } as any);
+  assert.match(brief, /уже вышел.*17 июля 2026/);
+  assert.match(brief, /- Бюджет 250 миллионов/);
+  assert.ok(!/https/.test(brief));
 });

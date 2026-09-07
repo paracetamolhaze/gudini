@@ -190,33 +190,55 @@ function RecordStep({
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
+  const [uploadNote, setUploadNote] = useState("");
   const [drag, setDrag] = useState(false);
   const [prompterOpen, setPrompterOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Файл и место обрыва держатся в памяти: после ошибки загрузку можно продолжить,
+  // а не записывать дубль заново.
+  const pendingRef = useRef<{ file: File; offset: number } | null>(null);
 
-  async function upload(file: File) {
+  async function upload(file: File, startOffset = 0) {
     setError("");
     setUploading(true);
-    setUploadPct(0);
+    setUploadPct(Math.round((startOffset / file.size) * 100));
     // грузим кусками по 4 МБ: большие тела запросов режутся прокси хостинга
     const CHUNK = 4 * 1024 * 1024;
     const name = file.name || "record.webm";
-    let offset = 0;
+    let offset = startOffset;
+    pendingRef.current = { file, offset };
+    // Телефон гасит экран посреди загрузки, Safari уходит в фон, и соединение рвётся
+    // (у сайта в журнале ECONNRESET на 80-м мегабайте). Пока идёт загрузка — экран не гаснет.
+    let wakeLock: { release: () => Promise<void> } | null = null;
+    try {
+      wakeLock = (await (navigator as any).wakeLock?.request?.("screen")) ?? null;
+    } catch {}
+    const mb = (n: number) => Math.round(n / 1048576);
     try {
       while (offset < file.size) {
         const chunk = file.slice(offset, Math.min(offset + CHUNK, file.size));
         let attempt = 0;
         for (;;) {
-          const res = await fetch(`/api/projects/${project.id}/upload`, {
-            method: "PUT",
-            headers: {
-              // кириллица в имени файла роняла fetch: заголовки только latin-1
-              "x-filename": encodeURIComponent(name),
-              "x-file-size": String(file.size),
-              "x-offset": String(offset),
-            },
-            body: chunk,
-          });
+          let res: Response;
+          try {
+            res = await fetch(`/api/projects/${project.id}/upload`, {
+              method: "PUT",
+              headers: {
+                // кириллица в имени файла роняла fetch: заголовки только latin-1
+                "x-filename": encodeURIComponent(name),
+                "x-file-size": String(file.size),
+                "x-offset": String(offset),
+              },
+              body: chunk,
+            });
+          } catch (e: any) {
+            // сеть оборвалась (экран, фон, Wi-Fi): тот же кусок повторяется, сервер
+            // отличит дубль от продолжения по x-offset
+            if (++attempt >= 6) throw new Error(`сеть оборвалась на ${mb(offset)} МБ из ${mb(file.size)} — ${String(e?.message ?? e)}`);
+            setUploadNote(`сеть оборвалась, повтор ${attempt}…`);
+            await new Promise((r) => setTimeout(r, 2000 * attempt));
+            continue;
+          }
           const json: any = await res.json().catch(() => ({}));
           if (res.ok) {
             offset = typeof json.received === "number" ? json.received : offset + chunk.size;
@@ -227,18 +249,33 @@ function RecordStep({
             offset = json.received; // продолжаем с фактического места
             break;
           }
-          if (++attempt >= 3) throw new Error(json.error ?? `HTTP ${res.status}`);
-          await new Promise((r) => setTimeout(r, 1500));
+          if (++attempt >= 5) throw new Error(json.error ?? `HTTP ${res.status}`);
+          await new Promise((r) => setTimeout(r, 1500 * attempt));
         }
+        pendingRef.current = { file, offset };
         setUploadPct(Math.round((offset / file.size) * 100));
+        setUploadNote(`${mb(offset)} из ${mb(file.size)} МБ`);
       }
+      pendingRef.current = null;
+      setUploadNote("");
       setUploading(false);
       await reload();
       onNext();
     } catch (e: any) {
       setUploading(false);
-      setError(`Ошибка загрузки: ${String(e?.message ?? e)}`);
+      setUploadNote("");
+      setError(`Ошибка загрузки: ${String(e?.message ?? e)}. Файл остался в памяти страницы — нажмите «Продолжить загрузку».`);
+    } finally {
+      try {
+        await wakeLock?.release();
+      } catch {}
     }
+  }
+
+  function resumeUpload() {
+    const pending = pendingRef.current;
+    if (!pending) return;
+    void upload(pending.file, pending.offset);
   }
 
   return (
@@ -250,7 +287,12 @@ function RecordStep({
           текст будет плыть по экрану, пока камера пишет.
         </p>
         <div className="row">
-          <button className="btn" onClick={() => setPrompterOpen(true)}>
+          {!uploading && pendingRef.current && (
+              <button className="btn" onClick={resumeUpload} style={{ marginRight: 8 }}>
+                ⤴ Продолжить загрузку
+              </button>
+            )}
+            <button className="btn" onClick={() => setPrompterOpen(true)}>
             🎙 Записать с телесуфлёром
           </button>
           <span className="hint or">или</span>
@@ -294,7 +336,7 @@ function RecordStep({
             <div className="progress-track">
               <div className="progress-fill" style={{ width: `${uploadPct}%` }} />
             </div>
-            <p className="hint">Загрузка: {uploadPct}%</p>
+            <p className="hint">Загрузка: {uploadPct}%{uploadNote ? ` · ${uploadNote}` : ""}</p>
           </>
         )}
 

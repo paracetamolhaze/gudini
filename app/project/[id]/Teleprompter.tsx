@@ -36,6 +36,8 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
   // Кадров камеры в секунду: iPhone Safari может перестать отдавать кадры молча.
   const [camFps, setCamFps] = useState<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  // экран телефона не должен гаснуть во время записи: гаснет — Safari прерывает запись
+  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const sourceRef = useRef<MediaStream | null>(null);
   // Прямой режим (телефон, поток 9:16): превью — сам элемент камеры, запись — с её
   // дорожки, холст не создаётся вовсе. Диагностика на iPhone (iOS 18.7): рекордер с
@@ -327,6 +329,8 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
         stop();
       };
       recorder.onstop = () => {
+        void wakeLockRef.current?.release().catch(() => {});
+        wakeLockRef.current = null;
         recorderRef.current = null;
         setRecording(false);
         setScrolling(false);
@@ -342,6 +346,7 @@ export default function Teleprompter({ script, onClose, onRecorded }: {
       // Мусорную длительность контейнера Safari при склейке кусков снимает
       // нормализация записи на входе конвейера (raw-norm.mp4).
       recorder.start(1000);
+      void (navigator as any).wakeLock?.request?.("screen").then((lock: { release: () => Promise<void> }) => { wakeLockRef.current = lock; }).catch(() => {});
       recorderRef.current = recorder;
       setSeconds(0);
       setRecording(true);

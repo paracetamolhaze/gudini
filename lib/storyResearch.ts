@@ -58,6 +58,10 @@ export type StoryResearchPack = {
   summary: string;
   eventDate?: string;
   eventYear?: number;
+  /** состояние истории на день исследования: вышел, ещё не вышел, идёт, прошло */
+  status?: "RELEASED" | "UPCOMING" | "ONGOING" | "PAST" | "UNKNOWN";
+  /** одно предложение с датой: «фильм вышел в прокат 17 июля 2026» */
+  statusNote?: string;
   location?: string;
   /** язык оригинальных источников — для запросов на языке события */
   language?: string;
@@ -89,13 +93,18 @@ canonicalEvent — одно предложение на английском, м
 организации, место и год, а не общие слова.
 summary — 2–3 предложения на русском.
 eventDate — YYYY-MM-DD, если известна точно; eventYear — год, если известен.
+status — состояние истории НА СЕГОДНЯ (дата передаётся в запросе; сверяй с датами публикаций):
+RELEASED — фильм, продукт, альбом уже вышли; PAST — событие уже произошло; ONGOING — идёт
+сейчас; UPCOMING — ещё не вышло и не состоялось; UNKNOWN — по источникам не понять.
+statusNote — одно предложение на русском с датой («фильм вышел в прокат 17 июля 2026»).
+Не называй будущим то, что по датам уже случилось.
 entities — участники: люди, организации, команды, места, продукты. aliases — другие написания
 и языковые варианты (латиница/кириллица), они нужны для поиска.
 facts — 5–12 проверяемых утверждений, у каждого sourceUrls из переданных адресов.
 Факт без источника не включай.
 
 Ответь СТРОГО валидным JSON:
-{"kind":"NEWS_EVENT","visualGuide":"...","canonicalEvent":"...","summary":"...","eventDate":"2022-12-04","eventYear":2022,"location":"...",
+{"kind":"NEWS_EVENT","visualGuide":"...","canonicalEvent":"...","summary":"...","eventDate":"2022-12-04","eventYear":2022,"status":"PAST","statusNote":"...","location":"...",
 "language":"en","entities":[{"name":"...","type":"PERSON","aliases":["..."]}],
 "facts":[{"text":"...","sourceUrls":["https://..."]}]}`;
 
@@ -168,7 +177,8 @@ export async function buildStoryResearchPack(
       system: RESEARCH_SYSTEM,
       maxTokens: 8000,
       stage: "Story Research",
-      user: `Тема: ${topic}
+      user: `Сегодня: ${new Date().toISOString().slice(0, 10)}
+Тема: ${topic}
 
 ${originContext}
 Результаты поиска:
@@ -236,6 +246,8 @@ ${list}`,
       summary: String(json.summary ?? "").trim(),
       eventDate: json.eventDate ? String(json.eventDate) : undefined,
       eventYear: Number.isFinite(Number(json.eventYear)) ? Number(json.eventYear) : undefined,
+      status: (["RELEASED", "UPCOMING", "ONGOING", "PAST", "UNKNOWN"] as const).includes(json.status) ? json.status : "UNKNOWN",
+      statusNote: json.statusNote ? String(json.statusNote).slice(0, 200) : undefined,
       location: json.location ? String(json.location) : undefined,
       language: json.language ? String(json.language) : undefined,
       entities,

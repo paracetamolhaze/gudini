@@ -21,13 +21,38 @@ function haveKey(): boolean {
 
 // ===== Сценарий =====
 
+/**
+ * Модель не знает, какой сегодня день, и её память кончается раньше свежих событий:
+ * сценарий про «Одиссею» Нолана обещал премьеру и трейлер через полтора месяца после
+ * выхода фильма в прокат. Дата передаётся в каждый запрос явно.
+ */
+export function todayLine(now = new Date()): string {
+  const d = now.toISOString().slice(0, 10);
+  return `Сегодня ${d}. Всё, что датировано раньше этого дня, уже произошло.`;
+}
+
+/** Статус истории на сегодня из исследования — одной строкой для промпта. */
+export function statusLine(research: Pick<StoryResearchPack, "status" | "statusNote" | "eventDate">): string {
+  const label: Record<string, string> = {
+    RELEASED: "уже вышел / состоялось",
+    PAST: "уже произошло",
+    ONGOING: "идёт сейчас",
+    UPCOMING: "ещё не вышел / не состоялось",
+  };
+  const st = research.status && label[research.status] ? `${label[research.status]}` : "не установлен";
+  return `Статус на сегодня: ${st}${research.statusNote ? ` — ${research.statusNote}` : ""}${research.eventDate ? ` (дата события ${research.eventDate})` : ""}.`;
+}
+
 const SCRIPT_SYSTEM = `Ты — сценарист вирусных вертикальных видео (TikTok, YouTube Shorts, Instagram Reels).
 Пишешь сценарии, которые автор читает на камеру. Правила:
 - Длительность чтения: 55–65 секунд (примерно 140–160 слов разговорной русской речи).
 - Первые 3 секунды — мощный хук: интригующий вопрос, шокирующий факт или обещание пользы.
 - Разговорный язык, короткие фразы, обращение на «ты», без канцелярита.
 - Структура: хук → 3–4 содержательных пункта или история → вывод → призыв к действию (подписка/комментарий).
-- Никаких ремарок, заголовков и пояснений — только чистый текст для чтения вслух.`;
+- Никаких ремарок, заголовков и пояснений — только чистый текст для чтения вслух.
+- Тебе сообщают сегодняшнюю дату и статус темы. О том, что уже вышло или произошло, пиши в
+  прошедшем времени; не обещай премьер, трейлеров и релизов, которые уже были. Не полагайся на
+  свою память о датах и статусах — она может быть старее событий; верь дате и фактам из запроса.`;
 
 const RESEARCH_SCRIPT_SYSTEM = `${SCRIPT_SYSTEM}
 
@@ -54,6 +79,7 @@ export async function generateScriptFromResearch(
     stage: "Script Generation",
     system: RESEARCH_SCRIPT_SYSTEM,
     user:
+      `${todayLine()}\n${statusLine(research)}\n` +
       `Событие: ${research.canonicalEvent}\n` +
       (research.eventDate ? `Дата: ${research.eventDate}\n` : "") +
       (research.location ? `Место: ${research.location}\n` : "") +
@@ -86,7 +112,7 @@ export async function generateScript(topic: string): Promise<{ script: string; d
     maxTokens: 16000,
     stage: "Script Generation",
     system: SCRIPT_SYSTEM,
-    user: `Напиши сценарий видео на тему: «${topic}»`,
+    user: `${todayLine()}\nНапиши сценарий видео на тему: «${topic}»`,
   });
   return { script, demo: false };
 }
@@ -105,7 +131,7 @@ export async function generateMeta(topic: string, script: string): Promise<{ met
     maxTokens: 16000,
     stage: "Metadata",
     system: META_SYSTEM,
-    user: `Тема: ${topic}\n\nСценарий:\n${script}`,
+    user: `${todayLine()}\nТема: ${topic}\n\nСценарий:\n${script}`,
   });
   try {
     const json = JSON.parse(raw.replace(/^```(json)?/m, "").replace(/```$/m, "").trim());

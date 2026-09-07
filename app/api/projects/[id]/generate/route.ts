@@ -20,10 +20,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       );
       return NextResponse.json(updateProject(id, { meta }));
     }
-    // Новый путь: сначала исследуем историю по источникам, затем пишем сценарий
-    // из проверенных фактов. Пакет исследования остаётся в проекте и позже
-    // становится основой медиатеки для монтажа.
-    if (process.env.STORY_ASSET_PIPELINE === "true") {
+    // Сначала исследование по свежим источникам с сегодняшней датой, затем сценарий
+    // из проверенных фактов: без этого модель писала «премьера 17 июля» через полтора
+    // месяца после выхода фильма. Пакет исследования остаётся в проекте и становится
+    // основой медиатеки для монтажа (второй раз не оплачивается).
+    // STORY_RESEARCH_SCRIPT=off возвращает сценарий по памяти модели.
+    if (process.env.STORY_RESEARCH_SCRIPT !== "off") {
       const research = await recordSiteSpend({ projectId: id, topic: project.topic, label: "Исследование" }, () =>
         buildStoryResearchPack(project.topic, project.sourceUrl),
       );

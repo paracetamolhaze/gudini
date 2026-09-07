@@ -28,8 +28,12 @@ export type CoverQcResult = {
   pass: boolean;
   extractedText?: string[];
   extraText?: string[];
+  /** мелкие надписи на фоне (вывески, экраны): допустимы, если это осмысленные слова */
+  backgroundText?: string[];
   visualArtifacts?: string[];
   reasons: string[];
+  /** замечания без отказа: например, бессмысленные буквы на далёкой вывеске */
+  warnings?: string[];
   confidence: number;
   cost?: number;
 };
@@ -39,6 +43,8 @@ export type CoverQcRaw = {
   readableText?: unknown;
   headlineMatch?: unknown;
   extraText?: unknown;
+  /** [{text, sensible}] — мелкие надписи на фоне, отдельно от заметного лишнего текста */
+  backgroundText?: unknown;
   textReadable?: unknown;
   identityOk?: unknown;
   anatomyOk?: unknown;
@@ -90,18 +96,41 @@ export function evaluateQc(
   const withoutKicker = kicker ? joined.split(kicker).join(" ").replace(/\s+/g, " ").trim() : joined;
   const headlineFound = headline.length > 0 && withoutKicker.includes(headline);
 
+  // Мелкие надписи на фоне (вывеска кинотеатра, экран вдали) — не брак: на превью их
+  // почти не видно. Требование к ним одно — осмысленные слова, а не набор букв; это
+  // остаётся замечанием, а не отказом. Заметный лишний текст по-прежнему отклоняется.
+  const background = (Array.isArray(raw.backgroundText) ? raw.backgroundText : [])
+    .map((b: any) => (typeof b === "string" ? { text: b, sensible: true } : { text: String(b?.text ?? ""), sensible: b?.sensible !== false }))
+    .filter((b: { text: string }) => b.text.trim());
+  const backgroundWords = new Set(background.flatMap((b: { text: string }) => words(b.text)));
+  const warnings: string[] = [];
+  if (background.length) {
+    const gibberish = background.filter((b: { sensible: boolean }) => !b.sensible).map((b: { text: string }) => b.text);
+    warnings.push(
+      gibberish.length
+        ? `на фоне бессмысленные буквы: ${gibberish.join(", ")} — допустимо, но промпт просит осмысленные слова`
+        : `на фоне мелкие надписи: ${background.map((b: { text: string }) => b.text).join(", ")} (допустимо)`,
+    );
+  }
+
   const allowed = new Set([...words(expectedHeadline), ...(expectedKicker ? words(expectedKicker) : [])]);
-  const strayWords = readable.flatMap((line) => words(line)).filter((w) => !allowed.has(w));
+  const strayWords = readable
+    .flatMap((line) => words(line))
+    .filter((w) => !allowed.has(w) && !backgroundWords.has(w));
   const modelExtra = Array.isArray(raw.extraText) ? raw.extraText.map(String).filter((t) => t.trim()) : [];
-  const strayList = [...new Set([...strayWords, ...modelExtra.map((t) => normalizeCoverText(t))])].filter(Boolean);
+  const strayList = [...new Set([...strayWords, ...modelExtra.map((t) => normalizeCoverText(t))])]
+    .filter(Boolean)
+    .filter((w) => !backgroundWords.has(w));
 
   const fail = (status: CoverQcStatus): CoverQcResult => ({
     status,
     pass: false,
     extractedText: readable,
     extraText: strayList,
+    backgroundText: background.map((b: { text: string }) => b.text),
     visualArtifacts: artifacts,
     reasons,
+    warnings,
     confidence,
   });
 
@@ -136,8 +165,10 @@ export function evaluateQc(
     pass: true,
     extractedText: readable,
     extraText: [],
+    backgroundText: background.map((b: { text: string }) => b.text),
     visualArtifacts: [],
     reasons: [],
+    warnings,
     confidence,
   };
 }
@@ -151,15 +182,17 @@ function qcPrompt(headline: string, kicker?: string | null): string {
     (kicker ? `Expected optional kicker:\n"${kicker}"\n\n` : "No kicker is expected.\n\n") +
     "Inspect this cover image.\n\n" +
     "Return JSON only:\n" +
-    '{"readableText":["<every clearly readable text block, top to bottom, verbatim>"],' +
+    '{"readableText":["<every PROMINENT readable text block, top to bottom, verbatim — large lettering or lettering in the foreground; do NOT list small distant background lettering here>"],' +
     '"headlineMatch":<true if the headline appears with exactly this wording and spelling>,' +
-    '"extraText":["<any readable text that is NOT part of the headline or kicker>"],' +
+    '"extraText":["<prominent readable text that is NOT part of the headline or kicker: large, in focus, or in the foreground>"],' +
+    '"backgroundText":[{"text":"<small, distant or out-of-focus lettering on background signs, screens, posters>","sensible":<true if these are real words in any language, false if a meaningless letter string>}],' +
     '"textReadable":<true if the lettering is clean and legible at thumbnail size>,' +
     '"identityOk":<false only if the face is clearly a different person or badly distorted>,' +
     '"anatomyOk":<false only if there is an obvious anatomical defect>,' +
     '"visualArtifacts":["<only severe defects that ruin the cover>"],' +
     '"confidence":<0..1>}\n\n' +
-    "Report gibberish or invented pseudo-words as extraText. Ignore tiny illegible texture noise."
+    "Prominent gibberish or invented pseudo-words go to extraText. Small background signage goes to backgroundText " +
+    "with sensible=false when the letters do not form real words. Ignore tiny illegible texture noise."
   );
 }
 

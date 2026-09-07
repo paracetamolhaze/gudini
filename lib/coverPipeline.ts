@@ -106,7 +106,7 @@ export async function buildCover(
     cost.qc += qc.cost ?? 0;
     qcStatus = qc.status;
     fs.writeFileSync(path.join(dir, "cover-qc-1.json"), JSON.stringify(qc, null, 2), "utf8");
-    console.log(`Cover QC: ${qc.status}${qc.reasons.length ? ` — ${qc.reasons.join("; ")}` : ""}`);
+    console.log(`Cover QC: ${qc.status}${qc.reasons.length ? ` — ${qc.reasons.join("; ")}` : ""}${qc.warnings?.length ? ` (замечания: ${qc.warnings.join("; ")})` : ""}`);
 
     if (!qc.pass) {
       console.warn("Cover: COVER_FAILED — автоматическая повторная генерация не выполняется");

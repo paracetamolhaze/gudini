@@ -226,8 +226,10 @@ export function buildFullCoverPrompt(concept: CoverConcept): string {
     "Render these exact Russian words correctly. The line breaks above are preferred, but you may adjust " +
     "the layout as long as every word stays exactly as written. Do not replace words, do not invent " +
     "additional words, do not translate, do not misspell Cyrillic.\n" +
-    "Do not add any other readable words, letters, labels, captions, signs, badges, logos, numbers, " +
-    "fake interface elements or pseudo-text anywhere in the image.";
+    "Do not add any other prominent readable words, letters, labels, captions, badges, logos, numbers, " +
+    "fake interface elements or pseudo-text anywhere in the image. " +
+    "Small, out-of-focus background signage or screens may carry a few REAL words in the language of the place " +
+    "(for example CINEMA, TICKETS, IMAX) — never invented letter strings, never the headline words, never large or in focus.";
 
   const anatomy =
     "Correct human anatomy: no extra, fused or malformed fingers, no extra limbs, no warped eyes, no malformed " +

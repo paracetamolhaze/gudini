@@ -42,6 +42,22 @@ export const GOOD_SOURCE = { w: 1280, h: 720 } as const;
  */
 export const CARD_FILTER = `scale=${CARD.w}:${CARD.h}:force_original_aspect_ratio=increase,crop=${CARD.w}:${CARD.h}:(iw-${CARD.w})/2:(ih-${CARD.h})*0.15`;
 
+/**
+ * Портретная картинка (постер, портрет актёра): целиком по высоте карточки на размытой
+ * копии себя по бокам. Обрезка до 16:9 оставляла от постера середину без названия,
+ * а от портрета — фрагмент.
+ */
+export const PORTRAIT_CARD_FILTER =
+  `split[bg][fg];[bg]scale=${CARD.w}:${CARD.h}:force_original_aspect_ratio=increase,crop=${CARD.w}:${CARD.h},gblur=sigma=24,eq=brightness=-0.08[bgb];` +
+  `[fg]scale=-2:${CARD.h}[fgs];[bgb][fgs]overlay=(W-w)/2:0,setsar=1`;
+export function isPortraitSource(w: number, h: number): boolean {
+  return w > 0 && h > 0 && h > w * 1.15;
+}
+/** Портрет показывается целиком по высоте: ширина может быть заметно меньше карточки. */
+export function portraitBigEnough(w: number, h: number): boolean {
+  return h >= MIN_SOURCE.h && w >= Math.round(MIN_SOURCE.h * 0.55);
+}
+
 /** Область карточки в готовом кадре — для проверки результата. */
 export const CARD_CROP = `crop=${CARD.w}:${CARD.h}:${CARD.x}:${CARD.y}`;
 

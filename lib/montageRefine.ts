@@ -26,9 +26,9 @@ import { isFunctionWord } from "./scriptPunctuation";
  * дословная цитата речи, две соседние карточки всегда разные.
  */
 
-export type RefineBeat = { id: string; text: string; visualNeed: string };
+export type RefineBeat = { id: string; text: string; visualNeed: string; listItem?: boolean };
 export type RefineNeed = { beatId: string; intent?: string; entities?: string[]; visualDescription: string };
-export type RefineSlot = { beatId: string; start: number; end: number; need: string };
+export type RefineSlot = { beatId: string; start: number; end: number; need: string; listItem?: boolean };
 export type RefineResult = { plan: MontagePlan; slots: RefineSlot[]; notes: string[] };
 
 /** Речь ↔ описание кадра: кадр встаёт туда, где о нём говорят. */
@@ -121,7 +121,7 @@ export function refineMontage(args: {
       return;
     }
     if (b.visualNeed === "NONE") return; // блок без визуала: предыдущая карточка продолжается
-    slots.push({ beatId: b.id, start: s, end: duration, need: b.visualNeed });
+    slots.push({ beatId: b.id, start: s, end: duration, need: b.visualNeed, listItem: b.listItem === true });
   });
   if (!slots.length) return { plan: montage, slots, notes: [...notes, "ни один блок не найден в речи — план режиссёра оставлен как есть"] };
   for (let i = 0; i < slots.length; i++) slots[i].end = i + 1 < slots.length ? slots[i + 1].start : duration;
@@ -136,20 +136,23 @@ export function refineMontage(args: {
   // исчезает, а занимает недостающее у соседа, если тот остаётся не короче минимума:
   // сначала у предыдущего (картинка встаёт чуть раньше слов — это естественно),
   // потом у следующего. Только если занять не у кого — сливается с предыдущим.
+  // Элемент перечисления (актёр из списка, страна из списка) держится min_list_item_duration:
+  // иначе пять имён за 5 секунд сливались в одну карточку, и зритель видел одного актёра.
+  const minFor = (sl: RefineSlot) => (sl.listItem ? T.min_list_item_duration : MIN);
   for (let i = 1; i < slots.length; ) {
     const len = slots[i].end - slots[i].start;
-    if (len >= MIN) {
+    if (len >= minFor(slots[i])) {
       i++;
       continue;
     }
-    const need = MIN - len + 0.05;
+    const need = minFor(slots[i]) - len + 0.05;
     const prev = slots[i - 1];
     const next = slots[i + 1];
-    if (prev.end - prev.start - need >= MIN) {
+    if (prev.end - prev.start - need >= minFor(prev)) {
       prev.end -= need;
       slots[i].start = prev.end;
       i++;
-    } else if (next && next.end - next.start - need >= MIN) {
+    } else if (next && next.end - next.start - need >= minFor(next)) {
       next.start += need;
       slots[i].end = next.start;
       i++;

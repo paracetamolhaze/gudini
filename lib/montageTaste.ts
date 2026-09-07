@@ -11,6 +11,8 @@ export type MontageTaste = {
   target_external_coverage: number;
   preferred_video_share: number;
   min_visual_duration: number;
+  /** карточка на элемент перечисления: короче обычной, чтобы успеть показать каждого */
+  min_list_item_duration: number;
   typical_visual_duration: number;
   max_visual_duration: number;
   max_exact_event_duration: number;
@@ -47,6 +49,7 @@ const DEFAULTS: MontageTaste = {
   target_external_coverage: 0.72,
   preferred_video_share: 0.35,
   min_visual_duration: 2.4,
+  min_list_item_duration: 1.0,
   typical_visual_duration: 3.6,
   max_visual_duration: 5.2,
   max_exact_event_duration: 5.2,

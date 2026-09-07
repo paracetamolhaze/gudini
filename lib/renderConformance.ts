@@ -62,6 +62,19 @@ async function grab(file: string, at: number, out: string, still: boolean, vf: s
   }
 }
 
+const CONFORMANCE_PARALLEL = Math.max(1, Number(process.env.CONFORMANCE_PARALLEL) || 4);
+
+async function runPool<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const k = next++;
+      await fn(items[k], k);
+    }
+  });
+  await Promise.all(workers);
+}
+
 /** Три момента внутри вставки: начало, середина, конец. */
 export function checkPointsFor(ev: EditEvent): number[] {
   return [ev.start + 0.15, (ev.start + ev.end) / 2, ev.end - 0.15];
@@ -93,7 +106,11 @@ export async function checkRenderConformance(
   });
 
   try {
-    for (const [i, ev] of inserts.entries()) {
+    // Вставки проверяются по CONFORMANCE_PARALLEL сразу: каждая точка — два коротких
+    // ffmpeg, по одной это занимало 45 с на 15 карточек. Точки складываются в порядке вставок.
+    const perInsert: CheckPoint[][] = inserts.map(() => []);
+    await runPool(inserts, CONFORMANCE_PARALLEL, async (ev, i) => {
+      const points = perInsert[i];
       const file = ev.file!;
       const assetId = path.basename(file).replace(/\.[a-z0-9]+$/i, "");
       const baseOf = (at: number) => ({
@@ -107,11 +124,11 @@ export async function checkRenderConformance(
       // Только картинки: видеофайл в карточке — ошибка плана, а не рендера.
       if (!isStill(file)) {
         for (const at of checkPointsFor(ev)) points.push(fail(baseOf(at), "в карточке видеофайл, а разрешены только картинки"));
-        continue;
+        return;
       }
       if (!fs.existsSync(file)) {
         for (const at of checkPointsFor(ev)) points.push(fail(baseOf(at), "файл материала отсутствует на диске"));
-        continue;
+        return;
       }
 
       // эталон один: сама картинка, приведённая к карточке тем же фильтром, что и в рендере
@@ -120,7 +137,7 @@ export async function checkRenderConformance(
       const refHash = refErr ? null : await frameHash(refFile, tmp);
       if (refErr || refHash === null) {
         for (const at of checkPointsFor(ev)) points.push(fail(baseOf(at), `эталон карточки не снят: ${refErr ?? "не разобран"}`));
-        continue;
+        return;
       }
 
       const cardHashes: bigint[] = [];
@@ -174,7 +191,8 @@ export async function checkRenderConformance(
           }
         }
       }
-    }
+    });
+    points.push(...perInsert.flat());
 
     // после вступления карточка должна быть на КАЖДОЙ контрольной секунде
     const introEnd = opts.introEnd ?? inserts[0]?.start ?? plan.duration;

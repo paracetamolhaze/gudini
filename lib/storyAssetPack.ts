@@ -12,7 +12,7 @@ import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
 import { taste } from "./montageTaste";
 import { frameHash, hashFromGray, HASH_VF, groupScenes } from "./sceneHash";
-import { CARD_FILTER, sourceBigEnough, GOOD_SOURCE } from "./topInset";
+import { CARD_FILTER, PORTRAIT_CARD_FILTER, isPortraitSource, portraitBigEnough, sourceBigEnough, GOOD_SOURCE } from "./topInset";
 import { hasBlackBars } from "./blackBars";
 
 const rank = (i: string) => (i === "HIGH" ? 0 : i === "MEDIUM" ? 1 : 2);
@@ -190,6 +190,8 @@ export type PackAsset = {
   segment?: { start: number; end: number };
   /** реальный размер исходника до приведения к карточке — для контроля качества */
   sourceResolution?: string;
+  /** заголовок страницы-источника: называет людей и цифры, которых нет в описании кадра */
+  sourceTitle?: string;
   description: string;
   role: "EVENT" | "PERSON" | "CONTEXT";
   compatibleBeatIds: string[];
@@ -770,7 +772,7 @@ export async function matchToBeats(
     .map((b, i) => `${i + 1}. (${b.visualNeed}${b.entities.length ? ": " + b.entities.join(", ") : ""}) ${b.text}`)
     .join("\n");
   const assetList = assets
-    .map((a, i) => `${i + 1}. [${a.kind === "VIDEO_SEGMENT" ? "видео" : "фото"}] ${a.description.slice(0, 130)}`)
+    .map((a, i) => `${i + 1}. [${a.kind === "VIDEO_SEGMENT" ? "видео" : "фото"}] ${a.description.slice(0, 130)}${a.sourceTitle ? ` (источник: «${a.sourceTitle.slice(0, 70)}»)` : ""}`)
     .join("\n");
 
   try {
@@ -1207,14 +1209,15 @@ export async function buildAssetPack(
             try {
               dims = await probe(rawFile);
             } catch {}
-            if (!sourceBigEnough(dims.width, dims.height)) {
+            const portrait = isPortraitSource(dims.width, dims.height);
+            if (!(portrait ? portraitBigEnough(dims.width, dims.height) : sourceBigEnough(dims.width, dims.height))) {
               stages.imageTooSmall++;
               countQcReason(`изображение ${dims.width}×${dims.height} меньше карточки`);
               fs.rmSync(rawFile, { force: true });
               return;
             }
             // единая геометрия карточки — та же, что у стоп-кадров и у рендера
-            await runFfmpeg(["-i", rawFile, "-frames:v", "1", "-vf", CARD_FILTER, "-q:v", "2", file]);
+            await runFfmpeg(["-i", rawFile, "-frames:v", "1", "-vf", portrait ? PORTRAIT_CARD_FILTER : CARD_FILTER, "-q:v", "2", file]);
             fs.rmSync(rawFile, { force: true });
             if (await hasBlackBars(file, mediaDir)) {
               countQcReason("чёрные полосы внутри кадра");
@@ -1231,6 +1234,7 @@ export async function buildAssetPack(
               sourceUrl: im.url,
               sourceDomain: domainOf(im.url),
               sourceResolution: `${dims.width}×${dims.height}`,
+              sourceTitle: String(im.title ?? "").slice(0, 120) || undefined,
               description: an.description,
               role: "CONTEXT",
               compatibleBeatIds: [],

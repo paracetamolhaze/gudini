@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { StoryResearchPack } from "./storyResearch";
-import { buildScriptBeats, ScriptBeat } from "./scriptBeats";
+import { buildScriptBeats, ScriptBeat, MediaResearchNeed } from "./scriptBeats";
 import { buildAssetPack, StoryAssetPackV2 } from "./storyAssetPack";
 import { directMontage, MontagePlan, DIRECTOR_PROMPT_VERSION } from "./creativeDirector";
 import { textHash } from "./fileFingerprint";
@@ -117,6 +117,29 @@ export function saveDirectorPlan(dir: string, key: string, plan: MontagePlan): v
  * Полный проход V3. Бросает, если стадия не выполнилась: наверху это означает
  * остановку задачи, а не переход на старый монтаж.
  */
+export type PreparedLibrary = {
+  beats: ScriptBeat[];
+  needs: MediaResearchNeed[];
+  beatsReused: boolean;
+  pack: StoryAssetPackV2;
+  packReused: boolean;
+};
+
+/**
+ * Блоки сценария и медиатека: зависят только от сценария и исследования, поэтому
+ * могут собираться параллельно с чисткой речи и перекодированием (минус ~2 минуты).
+ */
+export async function prepareLibrary(research: StoryResearchPack, script: string, dir: string): Promise<PreparedLibrary> {
+  const { beats, needs, reused: beatsReused } = await buildScriptBeats(script, research, dir);
+  const packFile = path.join(dir, "story-asset-pack.json");
+  const before = fs.existsSync(packFile) ? fs.statSync(packFile).mtimeMs : 0;
+  const pack = await buildAssetPack(research, beats, needs, dir);
+  const after = fs.existsSync(packFile) ? fs.statSync(packFile).mtimeMs : 0;
+  // файл не переписан — значит вернулся готовый пакет, и поиск со зрением не оплачивались
+  const packReused = before > 0 && before === after;
+  return { beats, needs, beatsReused: Boolean(beatsReused), pack, packReused };
+}
+
 export async function runMontageV3(args: {
   research: StoryResearchPack;
   script: string;
@@ -124,18 +147,14 @@ export async function runMontageV3(args: {
   duration: number;
   dir: string;
   speechCuts?: number[];
+  /** медиатека, собранная заранее параллельно с чисткой речи */
+  prepared?: PreparedLibrary;
 }): Promise<MontageV3Result> {
   const { research, script, words, duration, dir, speechCuts = [] } = args;
   const warnings: string[] = [];
 
-  const { beats, needs, reused: beatsReused } = await buildScriptBeats(script, research, dir);
   const packFile = path.join(dir, "story-asset-pack.json");
-  const before = fs.existsSync(packFile) ? fs.statSync(packFile).mtimeMs : 0;
-
-  const pack = await buildAssetPack(research, beats, needs, dir);
-  const after = fs.existsSync(packFile) ? fs.statSync(packFile).mtimeMs : 0;
-  // файл не переписан — значит вернулся готовый пакет, и поиск со зрением не оплачивались
-  const packReused = before > 0 && before === after;
+  const { beats, needs, beatsReused, pack, packReused } = args.prepared ?? (await prepareLibrary(research, script, dir));
 
   const ready = packReady(pack);
   if (!ready.ok) warnings.push(...ready.reasons);
@@ -200,5 +219,5 @@ export async function runMontageV3(args: {
     captionStyle: { ...DEFAULT_CAPTION_STYLE },
   };
 
-  return { plan, montage, pack, beats, beatsReused: Boolean(beatsReused), packReused, directorReused, distribution: pre.distribution, warnings };
+  return { plan, montage, pack, beats, beatsReused, packReused, directorReused, distribution: pre.distribution, warnings };
 }

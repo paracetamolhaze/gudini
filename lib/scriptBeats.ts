@@ -22,6 +22,8 @@ export type ScriptBeat = {
   factIds: string[];
   visualNeed: VisualNeed;
   entities: string[];
+  /** элемент перечисления (актёр из списка, страна из списка): короткая карточка на каждый */
+  listItem?: boolean;
 };
 
 /** Что искать под конкретный блок. Таймкодов здесь нет — это не монтажный план. */
@@ -57,11 +59,25 @@ const BEATS_SYSTEM = `Ты — режиссёр монтажа. Тебе даю�
   Avengers: Doomsday trailer», «Avengers: Endgame poster», а не описание съёмки события;
 - preferredMedia: VIDEO для действий и движения, IMAGE для человека или статичного факта;
   для кино, объяснений и продуктов почти всегда IMAGE — готовых картинок много, видео дороже;
-- importance: HIGH для центральных моментов истории, MEDIUM для поддерживающих, LOW для проходных.
+- importance: HIGH для центральных моментов истории, MEDIUM для поддерживающих, LOW для проходных;
+- listItem: true, если блок — один элемент перечисления (см. ниже), иначе false.
+
+ПЕРЕЧИСЛЕНИЯ. Если текст перечисляет три и больше имён, мест, существ или предметов
+подряд («Том Холланд, Энн Хэтэуэй, Зендея, Роберт Паттинсон», «Греция, Италия, Марокко»,
+«циклоп, сирены, Цирцея»), НЕ делай из этого один блок. Каждый элемент — отдельный блок
+с listItem: true, text — только слова этого элемента, entities — именно он, а
+visualDescription — картинка именно этого элемента: «photo of Tom Holland», «Icelandic
+volcanic coast landscape», «classical painting of Polyphemus the Cyclops». Зритель должен
+видеть каждого, кого называют, в момент, когда его называют.
+
+ЧЕСТНЫЕ ПОТРЕБНОСТИ. Не проси того, чего в интернете нет: инфографики бюджета, графика с
+датой премьеры, коллажа актёров в костюмах ещё не вышедшего фильма. Для цифры и даты проси
+постер или кадр темы — число скажут субтитры. Для существ и сцен ещё не вышедшего фильма
+проси классическую живопись или иллюстрацию мифа, а не «кадр из трейлера».
 
 Ответь СТРОГО валидным JSON:
 {"beats":[{"text":"...","factIds":["f1"],"entities":["Jordan Henderson"],"visualNeed":"EXACT_EVENT",
-"visualDescription":"...","preferredMedia":"VIDEO","importance":"HIGH"}]}`;
+"visualDescription":"...","preferredMedia":"VIDEO","importance":"HIGH","listItem":false}]}`;
 
 const bid = (s: string, i: number) => `b${i}_${crypto.createHash("sha1").update(s).digest("hex").slice(0, 4)}`;
 
@@ -69,7 +85,7 @@ const bid = (s: string, i: number) => `b${i}_${crypto.createHash("sha1").update(
  * Версия разбора сценария на блоки. Меняется вместе с промптом или схемой
  * ответа: тогда сохранённые блоки действительно устарели.
  */
-export const BEATS_VERSION = 1;
+export const BEATS_VERSION = 2;
 
 export type SavedBeats = {
   version: number;
@@ -173,7 +189,7 @@ export async function buildScriptBeats(
       const factIds = (Array.isArray(b.factIds) ? b.factIds.map(String) : []).filter((f: string) => known.has(f));
       const entities = Array.isArray(b.entities) ? b.entities.map(String).filter(Boolean).slice(0, 4) : [];
 
-      beats.push({ id, text, factIds, visualNeed: need, entities });
+      beats.push({ id, text, factIds, visualNeed: need, entities, listItem: b.listItem === true });
       if (need === "NONE") return;
       needs.push({
         beatId: id,

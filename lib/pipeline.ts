@@ -16,7 +16,7 @@ import {
 import { planSpeechCleanup } from "./speechCleanupPlanner";
 import { planCleanupCuts } from "./speechCleanupRun";
 import { recordFlat, AUDIO_PRICES, assertBudget, setPriorProjectCost, priorProjectCost } from "./costLedger";
-import { runMontageV3 } from "./montageV3Pipeline";
+import { runMontageV3, prepareLibrary, type PreparedLibrary } from "./montageV3Pipeline";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { fileFingerprint, textHash } from "./fileFingerprint";
 import { checkRenderConformance } from "./renderConformance";
@@ -261,6 +261,14 @@ export async function processProject(id: string): Promise<void> {
             console.warn("Исследование истории не построено:", String(e?.message ?? e).slice(0, 160));
             return null;
           });
+    // Блоки сценария и медиатека зависят только от сценария и исследования: они идут
+    // параллельно с чисткой речи (Claude, ~2 мин) и перекодированием, а не после них.
+    // Ошибка сборки не теряется: она поднимается на стадии монтажа, где её ждут.
+    const libraryPromise: Promise<PreparedLibrary | { error: unknown } | null> = montageV3()
+      ? researchPromise
+          .then((r) => (r ? prepareLibrary(r, project.script ?? "", dir) : null))
+          .catch((e: unknown) => ({ error: e }))
+      : Promise.resolve(null);
 
     // --- Speech Cleanup: запинки/повторы/фальстарты + умные паузы (только при реальном ASR) ---
     setStep(id, "Чистка речи", 16);
@@ -378,6 +386,8 @@ export async function processProject(id: string): Promise<void> {
         console.log(`Исследование истории построено: сущностей ${research.entities.length}, фактов ${research.facts.length}`);
       }
       setStep(id, "Блоки сценария и медиатека", 26);
+      const prepared = await libraryPromise;
+      if (prepared && "error" in prepared) throw prepared.error;
       const v3 = await runMontageV3({
         research,
         script: project.script ?? "",
@@ -385,6 +395,7 @@ export async function processProject(id: string): Promise<void> {
         duration: effDur,
         dir,
         speechCuts: seamPoints,
+        prepared: prepared ?? undefined,
       });
       console.log(
         `Montage V3: блоков ${v3.beats.length}${v3.beatsReused ? " (переиспользованы)" : ""}, материалов ${v3.pack.assets.length} ` +

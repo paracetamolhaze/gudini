@@ -6,7 +6,7 @@ import { StoryAssetPackV2, PackAsset } from "./storyAssetPack";
 import { taste } from "./montageTaste";
 
 /** Версия промпта режиссёра: поднимать при изменении текста промпта, иначе сохранённый план переиспользуется. */
-export const DIRECTOR_PROMPT_VERSION = 2;
+export const DIRECTOR_PROMPT_VERSION = 3;
 import { addCost } from "./pipelineCost";
 
 /**
@@ -103,6 +103,15 @@ function systemPrompt(): string {
 11. При равной оценке ИЛЛЮСТРАЦИЯ лучше, чем КАДР ВИДЕО: кадр, вырезанный из чужого
     ролика, бери только когда иллюстрации под эту фразу нет. Один и тот же материал
     дважды не ставь даже под разные фразы.
+12. Человека не показывай раньше, чем его впервые назвали по имени. Смотри на роль
+    PERSON и заголовок источника: портрет режиссёра под фразу «билеты раскупили» —
+    ошибка, там нужна обстановка или постер.
+13. Блоки с пометкой СПИСОК — перечисление: на КАЖДЫЙ элемент своя карточка ровно на
+    словах этого элемента, ${T.min_list_item_duration}–1.8 секунды, в порядке называния.
+    Правило 4 о длительности на них не действует. Если под элемент картинки нет —
+    пропусти его, а не тяни соседнюю.
+14. Цифры и даты (бюджет, премьера) иллюстрируй постером или кадром темы: число покажут
+    субтитры. Материал, в заголовке которого есть эта цифра, подходит именно сюда.
 
 Ответь СТРОГО валидным JSON:
 {"placements":[{"assetId":"...","beatId":"...","quote":"дословные слова из транскрипции","seconds":3.6}]}`;
@@ -243,12 +252,15 @@ export async function directMontage(
       const family = a.sceneFamily ? ` сцена:${a.sceneFamily}` : "";
       // происхождение видно режиссёру: иллюстрация с сайта или кадр, вырезанный из чужого ролика
       const origin = a.kind === "VIDEO_SEGMENT" ? "ВИДЕО" : /^still-/.test(a.file) ? "КАДР ВИДЕО" : "ИЛЛЮСТРАЦИЯ";
-      return `id=${a.id} [${origin}/${a.role}]${family} ${scored} — ${a.description.slice(0, 110)}${seg}`;
+      // заголовок источника называет людей и цифры, которых нет в описании кадра
+      // («Nolan's $250M Odyssey…»): без него портрет Нолана шёл под «билеты раскупили»
+      const title = a.sourceTitle ? ` · источник: «${a.sourceTitle.slice(0, 70)}»` : "";
+      return `id=${a.id} [${origin}/${a.role}]${family} ${scored} — ${a.description.slice(0, 110)}${seg}${title}`;
     })
     .join("\n");
   const beatList = beats
     .filter((b) => b.visualNeed !== "NONE")
-    .map((b) => `[${b.id}] (${b.visualNeed}) ${b.text}`)
+    .map((b) => `[${b.id}] (${b.visualNeed}${b.listItem ? ", СПИСОК" : ""}) ${b.text}`)
     .join("\n");
   const transcript = words.map((w) => w.word).join(" ");
 

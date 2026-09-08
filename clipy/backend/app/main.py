@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config, downloader, faces, ffmpeg, hardware, pipeline
-from .engine.facefusion_runner import PRESETS
+from .engine.facefusion_runner import DEFAULT_QUALITY, PRESETS
 from .errors import UserError
 from .jobs import JobQueue, JobStore, new_id, now_iso
 
@@ -137,6 +137,7 @@ def _job_view(job) -> dict:
     d = dict(job.data)
     d["queue_position"] = queue.position(job.id) if d.get("status") == "queued" else 0
     d.pop("source_photos", None)
+    d["assignments"] = [{k: v for k, v in a.items() if k not in ("photos",) and not k.startswith("_")} for a in (d.get("assignments") or [])]
     if d.get("result"):
         d["result"] = {k: v for k, v in d["result"].items() if k not in ("file", "poster")}
         d["result"]["video_url"] = f"{P}/api/jobs/{job.id}/result"
@@ -203,7 +204,7 @@ async def system():
         "ffmpeg": ffmpeg.version() if shutil.which("ffmpeg") else "",
         "ytdlp": downloader.ytdlp_version(),
         "cookies": downloader.cookies_status(),
-        "quality_modes": {k: {"swapper": v.swapper, "pixel_boost": v.pixel_boost, "enhancer": v.enhancer, "mask": v.mask_types} for k, v in PRESETS.items()},
+        "preset": {"swapper": PRESETS[DEFAULT_QUALITY].swapper, "pixel_boost": PRESETS[DEFAULT_QUALITY].pixel_boost, "enhancer": PRESETS[DEFAULT_QUALITY].enhancer},
         "limits": {"max_video_seconds": config.MAX_VIDEO_SECONDS, "max_video_mb": config.MAX_VIDEO_BYTES // (1024 * 1024)},
         "busy_job": queue.current,
     }
@@ -415,13 +416,17 @@ class BackgroundIn(BaseModel):
     background_id: str
 
 
-class JobIn(BaseModel):
-    source_id: str
+class AssignmentIn(BaseModel):
+    """Кого меняем и на кого: человек из видео и фото (или профиль) для его замены."""
+
+    person: str
     face_ids: list[str] = Field(default_factory=list)
     identity_id: Optional[str] = None
-    face_swap: bool = True
-    target_person: str = "auto"
-    quality: str = "balanced"
+
+
+class JobIn(BaseModel):
+    source_id: str
+    assignments: list[AssignmentIn] = Field(default_factory=list)
     background: Optional[BackgroundIn] = None
 
 
@@ -432,19 +437,37 @@ async def create_job(body: JobIn):
         raise UserError("NOT_FOUND", "Видео не найдено.", "Добавьте его ещё раз.", status=404)
     if src.get("status") != "ready":
         raise UserError("SOURCE_NOT_READY", "Видео ещё разбирается." if src.get("status") in ("queued", "processing") else "Видео не удалось подготовить.", "Дождитесь окончания разбора или добавьте видео ещё раз.")
-    if body.quality not in PRESETS:
-        raise UserError("BAD_QUALITY", "Неизвестный режим качества.")
-    face_ids = list(body.face_ids)
-    if body.identity_id:
-        ident = faces.load_identity(body.identity_id)
-        if not ident:
-            raise UserError("NOT_FOUND", "Профиль лица не найден.", status=404)
-        face_ids = ident["face_ids"] + [f for f in face_ids if f not in ident["face_ids"]]
-    photos = faces.photos_for(face_ids)
-    if body.face_swap and not photos:
-        raise UserError("NO_SOURCE_PHOTO", "Сначала загрузите фото своего лица.")
-    if body.face_swap and body.target_person != "auto" and not any(p["id"] == body.target_person for p in src.get("persons", [])):
-        raise UserError("BAD_PERSON", "Выбранный человек в этом видео не найден.")
+
+    persons = src.get("persons") or []
+    assignments: list[dict] = []
+    seen: set[str] = set()
+    # фото копируются в папку задачи: удаление фото в интерфейсе больше не ломает задачу в очереди
+    job_id = new_id("j")
+    job_faces = config.JOBS_DIR / job_id / "faces"
+    for a in body.assignments:
+        person_id = a.person if a.person != "auto" else (persons[0]["id"] if persons else "")
+        if not any(p["id"] == person_id for p in persons):
+            raise UserError("BAD_PERSON", "Выбранный человек в этом видео не найден.")
+        if person_id in seen:
+            raise UserError("DUPLICATE_PERSON", "Одному человеку назначено несколько лиц.", "Оставьте по одному лицу на человека.")
+        seen.add(person_id)
+        face_ids = list(a.face_ids)
+        if a.identity_id:
+            ident = faces.load_identity(a.identity_id)
+            if not ident:
+                raise UserError("NOT_FOUND", "Профиль лица не найден.", status=404)
+            face_ids = ident["face_ids"] + [f for f in face_ids if f not in ident["face_ids"]]
+        photos = faces.photos_for(face_ids)
+        if not photos:
+            raise UserError("NO_SOURCE_PHOTO", "Сначала загрузите фото своего лица.")
+        job_faces.mkdir(parents=True, exist_ok=True)
+        copies = []
+        for k, photo in enumerate(photos):
+            dst = job_faces / f"{len(assignments) + 1}_{k + 1}{photo.suffix.lower()}"
+            shutil.copyfile(photo, dst)
+            copies.append(str(dst))
+        assignments.append({"person": person_id, "face_ids": face_ids, "identity_id": a.identity_id, "photos": copies})
+
     background = None
     if body.background:
         bid = body.background.background_id
@@ -452,10 +475,11 @@ async def create_job(body: JobIn):
         if not matches:
             raise UserError("NOT_FOUND", "Файл фона не найден.", "Загрузите его ещё раз.", status=404)
         background = {"file": str(matches[0]), "kind": "video" if matches[0].suffix.lower() in config.VIDEO_EXTENSIONS else "image", "background_id": bid}
-    if not body.face_swap and not background:
-        raise UserError("NOTHING_TO_DO", "Включите замену лица или замену фона.")
+    if not assignments and not background:
+        raise UserError("NOTHING_TO_DO", "Выберите, чьё лицо заменить, или включите замену фона.")
+
     data = {
-        "id": new_id("j"),
+        "id": job_id,
         "type": "render",
         "created_at": now_iso(),
         "status": "queued",
@@ -464,12 +488,8 @@ async def create_job(body: JobIn):
         "source_id": body.source_id,
         "source": {"kind": src.get("kind"), "url": src.get("url"), "duration": src.get("info", {}).get("duration"), "width": src.get("info", {}).get("width"),
                    "height": src.get("info", {}).get("height"), "fps": src.get("info", {}).get("fps")},
-        "face_ids": face_ids,
-        "identity_id": body.identity_id,
-        "source_photos": [str(p) for p in photos],
-        "face_swap": body.face_swap,
-        "target_person": body.target_person,
-        "quality": body.quality,
+        "assignments": assignments,
+        "quality": DEFAULT_QUALITY,
         "background": background,
     }
     job = store.create(data)

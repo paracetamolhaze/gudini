@@ -35,6 +35,8 @@ _PATTERNS: list[tuple[str, str, str, str]] = [
      "PRIVATE", "Это видео закрытое, скачать его нельзя.", "Подходят только открытые ролики."),
     (r"Unsupported URL|is not a valid URL|Unable to extract|Video unavailable|HTTP Error 404|Not Found|does not exist",
      "DOWNLOAD_FAILED", "Не удалось скачать видео.", "Проверьте, что ссылка открывается в браузере и ролик открытый."),
+    (r"IP address is blocked|blocked from accessing",
+     "IP_BLOCKED", "Площадка заблокировала скачивание с этого адреса.", "Скачайте ролик на телефоне и загрузите файл сюда, либо попробуйте позже."),
     (r"HTTP Error 403|Forbidden|Requested format is not available",
      "DOWNLOAD_BLOCKED", "Площадка не отдала видео.", "Попробуйте позже или загрузите файл MP4 напрямую."),
     (r"ffmpeg|ffprobe",

@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from . import config, downloader, ffmpeg, hardware
 from .engine import background as bg_engine
-from .engine.facefusion_runner import PRESETS, SwapRequest, run_swap
+from .engine.facefusion_runner import DEFAULT_QUALITY, PRESETS, SwapRequest, run_swap
 from .errors import Cancelled, UserError, friendly
 from .jobs import STAGES_RENDER, Job, JobStore, now_iso
 from .procs import run_capture
@@ -211,7 +211,8 @@ def run_analyze_job(store: JobStore, job: Job) -> None:
         # 3. detect people
         stage = "detect"
         tracker.start(stage)
-        samples = 24 if pinfo.duration < 20 else 32 if pinfo.duration < 90 else 48
+        # примерно кадр в секунду: на длинных роликах редкая выборка рвала одного человека на несколько
+        samples = int(max(24, min(120, round(pinfo.duration))))
         analysis = run_analysis_script("video", prepared, sdir / "persons", job.cancel, job.log.write, max_samples=samples)
         persons = analysis.get("persons", [])
         job.log.write(f"Detected people: {len(persons)} (sampled {analysis.get('frames_sampled')} frames)")
@@ -245,15 +246,29 @@ def run_analyze_job(store: JobStore, job: Job) -> None:
 
 # ---------------------------------------------------------------- render
 
+def person_label(person: dict, persons: list[dict]) -> str:
+    """Человек 1, 2, 3… в том же порядке, в каком их видит пользователь."""
+    try:
+        return f"Человек {persons.index(person) + 1}"
+    except ValueError:
+        return person.get("id", "человек")
+
+
 def pick_reference_distance(person: dict, persons: list[dict]) -> float:
-    """Looser matching when the person is alone (keeps profile / blurry frames), tighter when others are close."""
-    # FaceFusion accepts the distance only on a 0.05 grid
-    if len(persons) <= 1:
-        return 0.55
-    intra = float(person.get("intra_distance", 0.3))
-    other = float(person.get("nearest_other_distance", 1.0))
-    mid = (intra + other) / 2.0
-    value = max(0.25, min(0.5, min(mid, other - 0.05)))
+    """Порог совпадения лица: покрыть собственный разброс человека, но не залезть на соседа.
+
+    Раньше порог считался от расстояния до ЛЮБОГО другого кластера, включая случайное лицо на фоне,
+    и опускался до 0.25 при разбросе самого человека 0.27 — треть кадров оставалась без замены.
+    Теперь берём разброс по 85-му перцентилю плюс запас и ограничиваем только заметными людьми.
+    """
+    intra = float(person.get("intra_distance", 0.2))
+    majors = [p for p in persons if p is not person and (float(p.get("coverage", 0)) >= 0.05 or float(p.get("avg_area_ratio", 0)) >= 0.05)]
+    nearest = float(person.get("nearest_other_distance", 1.0)) if majors else 1.0
+    want = intra + (0.25 if not majors else 0.15)
+    if nearest < want + 0.05:
+        want = max(0.30, (intra + nearest) / 2.0)
+    value = min(0.60, max(0.30, want))
+    # FaceFusion принимает порог только с шагом 0.05
     return round(round(value / 0.05) * 0.05, 2)
 
 
@@ -282,78 +297,89 @@ def run_render_job(store: JobStore, job: Job) -> None:
         job.log.write(f"Input: {info['width']}x{info['height']} @ {info['fps']}fps, {info['duration']}s, audio={'yes' if info['has_audio'] else 'no'}")
         tracker.done(stage)
 
-        face_swap = bool(d.get("face_swap", True))
         background = d.get("background") or None
-        if not face_swap and not background:
+        if not (d.get("assignments") or background):
             raise UserError("NOTHING_TO_DO", "Нечего делать: включите замену лица или фона.")
 
         current = prepared  # the video the next stage works on
-        # --- faces
+        # --- кого на кого меняем
         stage = "detect"
         tracker.start(stage)
         persons: list[dict] = src.get("persons") or []
-        target: Optional[dict] = None
-        if face_swap:
+        # копии: служебные поля (_person, _photos) не должны попасть в job.json
+        assignments: list[dict] = [dict(a) for a in (d.get("assignments") or [])]
+        if assignments:
             if not persons:
                 raise UserError("NO_FACE", "В видео не найдено лицо.", "Для замены лица оно должно быть видно. Можно заменить только фон.", status=422)
-            wanted = d.get("target_person") or "auto"
-            target = persons[0] if wanted == "auto" else next((p for p in persons if p["id"] == wanted), None)
-            if target is None:
-                raise UserError("BAD_PERSON", "Выбранный человек в этом видео не найден.", "Выберите человека из списка заново.")
-            job.log.write(f"Detected faces: {len(persons)} | Selected target: {target['id']} (seen in {target['frames_seen']} frames)")
-            tracker.done(stage, f"{len(persons)} people, target {target['id']}")
+            for a in assignments:
+                wanted = a.get("person") or "auto"
+                person = persons[0] if wanted == "auto" else next((p for p in persons if p["id"] == wanted), None)
+                if person is None:
+                    raise UserError("BAD_PERSON", "Выбранный человек в этом видео не найден.", "Выберите человека из списка заново.")
+                a["_person"] = person
+                a["_photos"] = [Path(x) for x in a.get("photos", []) if Path(x).is_file()]
+                if not a["_photos"]:
+                    raise UserError("NO_SOURCE_PHOTO", "Фото лица пропало.", "Загрузите фото ещё раз и запустите задачу заново.")
+            job.log.write(f"Detected faces: {len(persons)} | replacing: " + ", ".join(f"{a['_person']['id']} <- {len(a['_photos'])} photo(s)" for a in assignments))
+            tracker.done(stage, f"людей {len(persons)}, замен {len(assignments)}")
         else:
-            tracker.skip(stage, "face replacement off")
+            tracker.skip(stage, "замена лица выключена")
 
-        # --- tracking parameters
+        # --- порог совпадения для каждой замены
         stage = "track"
-        if face_swap and target:
+        if assignments:
             tracker.start(stage)
-            distance = pick_reference_distance(target, persons)
-            d["tracking"] = {"reference_frame": target["reference_frame"], "reference_position": target["reference_position"], "reference_distance": distance}
-            job.log.write(f"Tracking by identity: reference frame {target['reference_frame']}, position {target['reference_position']}, max distance {distance}")
-            tracker.done(stage, f"ref frame {target['reference_frame']}, distance {distance}")
+            tracking = []
+            for a in assignments:
+                person = a["_person"]
+                a["_distance"] = pick_reference_distance(person, persons)
+                tracking.append({"person": person["id"], "reference_frame": person["reference_frame"], "reference_position": person["reference_position"], "reference_distance": a["_distance"]})
+                job.log.write(f"Tracking {person['id']}: reference frame {person['reference_frame']}, position {person['reference_position']}, spread {person.get('intra_distance')}, max distance {a['_distance']}")
+            d["tracking"] = tracking
+            tracker.done(stage, f"порог {', '.join(str(t['reference_distance']) for t in tracking)}")
         else:
             tracker.skip(stage)
         check_cancel(job)
 
-        # --- swap (+ enhance in the same pass)
+        # --- замена лиц: по проходу на каждого человека, результат каждого идёт в следующий
         stage = "swap"
-        preset = PRESETS[d.get("quality", "balanced")]
-        if face_swap and target:
-            photos = [Path(p) for p in d.get("source_photos", [])]
-            photos = [p for p in photos if p.is_file()]
-            if not photos:
-                raise UserError("NO_SOURCE_PHOTO", "Фото лица пропало.", "Загрузите фото ещё раз.")
-            tracker.start(stage, f"{len(photos)} photo(s), {d.get('quality')}")
-            out_swap = job.temp_dir / "swapped.mp4"
-            job.log.write(f"Face swap started: model={preset.swapper} enhancer={preset.enhancer or 'off'} mask={'+'.join(preset.mask_types)}")
-            result = run_swap(
-                SwapRequest(
-                    source_photos=photos,
-                    target_video=current,
-                    output_video=out_swap,
-                    temp_dir=job.temp_dir / "ff",
-                    quality=d.get("quality", "balanced"),
-                    reference_frame=int(target["reference_frame"]),
-                    reference_position=int(target["reference_position"]),
-                    reference_distance=float(d["tracking"]["reference_distance"]),
-                    hardware=hw,
-                    fps=float(info["fps"]),
-                ),
-                job.log.write,
-                lambda f, n: tracker.progress("swap", f, n),
-                job.cancel,
-            )
-            d["engine"] = {"name": "facefusion", "version": config.ENGINE_VERSION, **result, "swapper": preset.swapper, "enhancer": preset.enhancer}
+        preset = PRESETS[DEFAULT_QUALITY]
+        if assignments:
+            total_passes = len(assignments)
+            tracker.start(stage, f"замен {total_passes}")
+            job.log.write(f"Face swap started: model={preset.swapper} enhancer={preset.enhancer or 'off'} mask={'+'.join(preset.mask_types)} passes={total_passes}")
+            for i, a in enumerate(assignments):
+                person = a["_person"]
+                out_swap = job.temp_dir / f"swapped_{i + 1}.mp4"
+                label = person_label(person, persons)
+                job.log.write(f"pass {i + 1}/{total_passes}: {label} ({person['id']}) <- {len(a['_photos'])} photo(s)")
+                result = run_swap(
+                    SwapRequest(
+                        source_photos=a["_photos"],
+                        target_video=current,
+                        output_video=out_swap,
+                        temp_dir=job.temp_dir / f"ff{i + 1}",
+                        quality=DEFAULT_QUALITY,
+                        reference_frame=int(person["reference_frame"]),
+                        reference_position=int(person["reference_position"]),
+                        reference_distance=float(a["_distance"]),
+                        hardware=hw,
+                        fps=float(info["fps"]),
+                        intermediate=i < total_passes - 1,
+                    ),
+                    job.log.write,
+                    (lambda idx: lambda f, n: tracker.progress("swap", (idx + f) / total_passes, f"{idx + 1} из {total_passes} · {n}"))(i),
+                    job.cancel,
+                )
+                a["engine"] = result
+                current = out_swap
+                check_cancel(job)
+            d["engine"] = {"name": "facefusion", "version": config.ENGINE_VERSION, "passes": total_passes, "swapper": preset.swapper, "enhancer": preset.enhancer}
+            d["assignments"] = [{k: v for k, v in a.items() if not k.startswith("_")} for a in assignments]
             tracker.done(stage)
-            if preset.enhancer:
-                tracker.done("enhance", f"{preset.enhancer} during the swap pass")
-            else:
-                tracker.skip("enhance", "off in Fast mode")
-            current = out_swap
+            tracker.done("enhance", preset.enhancer or "выключено")
         else:
-            tracker.skip(stage, "face replacement off")
+            tracker.skip(stage, "замена лица выключена")
             tracker.skip("enhance")
         check_cancel(job)
 

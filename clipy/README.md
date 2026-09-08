@@ -69,17 +69,21 @@ clipy/
 | POST | `/clipy/api/faces` | multipart фото → проверенное лицо (ровно одно лицо) |
 | POST | `/clipy/api/identities` | `{name, face_ids[]}` → профиль «MY FACE» (до 10 фото) |
 | POST | `/clipy/api/uploads/background` | JPEG/PNG/MP4 фон |
-| POST | `/clipy/api/jobs` | `{source_id, face_ids | identity_id, face_swap, target_person, quality, background}` → `{job_id}` |
+| POST | `/clipy/api/jobs` | `{source_id, assignments: [{person, face_ids | identity_id}], background}` → `{job_id}` |
 | GET | `/clipy/api/jobs/{id}` | `status`, `stage`, `progress`, `stages[]`, `error`, `result` |
 | GET | `/clipy/api/jobs/{id}/result` | result.mp4 |
 | GET | `/clipy/api/jobs/{id}/logs` | строки лога задачи |
 | POST | `/clipy/api/jobs/{id}/cancel` | остановить воркер, убить подпроцессы, освободить temp |
 
-Режимы качества: **Fast** — inswapper_128_fp16, box-маска, без enhancer; **Balanced** — hyperswap_1a_256,
-GFPGAN 1.4 на 50 %, маски box + occlusion (XSeg), трекинг по 5 кадрам; **Best** — hyperswap с pixel boost
-512×512, GFPGAN 70 %, маски box + occlusion + region, трекинг по 7 кадрам. Человек ведётся по эмбеддингу
-(ArcFace) выбранного лица, поэтому замена не перескакивает на других людей и возобновляется, когда лицо
-возвращается в кадр.
+Качество одно, максимальное: hyperswap_1a_256 с прорисовкой 512×512, GFPGAN 1.4 на 70 %, маски
+box + occlusion (XSeg) + region, решение по 9 кадрам подряд. Человек ведётся по отпечатку лица (ArcFace)
+выбранного человека, поэтому замена не перескакивает на других и возобновляется, когда лицо возвращается
+в кадр. Порог совпадения считается из разброса лица самого человека по кадрам и ограничивается только
+заметными другими людьми, случайные лица на фоне на него не влияют.
+
+Замен может быть несколько: каждому человеку в кадре назначается своё лицо, и Clipy делает по проходу
+на каждого, отдавая результат предыдущего прохода в следующий. Промежуточные проходы кодируются почти
+без потерь, время растёт пропорционально числу замен.
 
 ## Instagram и cookies
 

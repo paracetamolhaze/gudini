@@ -37,11 +37,12 @@ class Preset:
     memory_strategy: str = "moderate"
 
 
+# Режим один: максимальное качество. Раньше их было три, но «Быстро» давал мыльное лицо
+# и прямоугольную маску поверх рук и волос, а выбор только путал.
 PRESETS: dict[str, Preset] = {
-    "fast": Preset(["face_swapper"], "inswapper_128_fp16", "128x128", None, 0, ["box"], 0.0, 0, "veryfast", 80, 8, "tolerant"),
-    "balanced": Preset(["face_swapper", "face_enhancer"], "hyperswap_1a_256", "256x256", "gfpgan_1.4", 50, ["box", "occlusion"], 0.25, 2, "medium", 85, 6),
-    "best": Preset(["face_swapper", "face_enhancer"], "hyperswap_1a_256", "512x512", "gfpgan_1.4", 70, ["box", "occlusion", "region"], 0.25, 3, "slow", 90, 4),
+    "best": Preset(["face_swapper", "face_enhancer"], "hyperswap_1a_256", "512x512", "gfpgan_1.4", 70, ["box", "occlusion", "region"], 0.15, 4, "slow", 90, 4),
 }
+DEFAULT_QUALITY = "best"
 
 
 @dataclass
@@ -56,6 +57,8 @@ class SwapRequest:
     reference_distance: float
     hardware: Hardware
     fps: float
+    # промежуточный проход (за ним будет ещё замена): кодируем почти без потерь и быстрее
+    intermediate: bool = False
     extra: dict = field(default_factory=dict)
 
 
@@ -85,7 +88,8 @@ def build_command(req: SwapRequest, preset: Preset, threads: int, pixel_boost: s
         "--face-swapper-pixel-boost", pixel_boost,
         "--face-detector-model", "yolo_face",
         "--face-detector-size", "640x640",
-        "--face-detector-score", "0.5",
+        # 0.35 вместо 0.5: смазанное или полуотвёрнутое лицо тоже находится, иначе замена в этих кадрах пропадает
+        "--face-detector-score", "0.35",
         "--face-landmarker-model", "2dfan4",
         "--face-landmarker-score", "0.5",
         "--face-selector-mode", "reference",
@@ -100,8 +104,8 @@ def build_command(req: SwapRequest, preset: Preset, threads: int, pixel_boost: s
         "--face-mask-blur", "0.3",
         "--face-mask-padding", "0", "0", "0", "0",
         "--output-video-encoder", encoder,
-        "--output-video-preset", preset.preset if encoder == "libx264" else "fast",
-        "--output-video-quality", str(preset.video_quality),
+        "--output-video-preset", ("medium" if req.intermediate else preset.preset) if encoder == "libx264" else "fast",
+        "--output-video-quality", str(95 if req.intermediate else preset.video_quality),
         "--output-audio-encoder", "aac",
         "--output-audio-quality", "90",
         "--execution-providers", *providers,
@@ -121,16 +125,16 @@ def build_command(req: SwapRequest, preset: Preset, threads: int, pixel_boost: s
 
 def run_swap(req: SwapRequest, log: Log, progress: Progress, cancel: threading.Event) -> dict:
     """Returns {'attempts': n, 'pixel_boost': ..., 'threads': ...}. Raises UserError / Cancelled."""
-    preset = PRESETS[req.quality]
+    preset = PRESETS.get(req.quality) or PRESETS[DEFAULT_QUALITY]
     hw = req.hardware
     threads = preset.threads
     pixel_boost = preset.pixel_boost
     memory_strategy = preset.memory_strategy
     if hw.backend == "cpu":
+        # без видеокарты полное разрешение прорисовки нереально: снижаем, иначе ролик считается часами
         threads = max(1, min(4, (os.cpu_count() or 4) // 2))
-        if req.quality == "fast":
-            pixel_boost = "128x128"
-        log("CPU backend: this will be slow. Balanced/Best on CPU may take a long time.")
+        pixel_boost = "256x256"
+        log("CPU backend: this will be slow, pixel boost reduced to 256x256")
     elif hw.backend == "cuda" and hw.gpu_vram_mb and hw.gpu_vram_mb < 6000:
         threads = min(threads, 3)
 

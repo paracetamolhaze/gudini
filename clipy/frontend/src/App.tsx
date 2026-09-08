@@ -1,14 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { del, getJSON, postJSON, upload, RequestError, type ApiError, type Face, type Identity, type Job, type Source, type Stage, type SystemInfo } from "./api";
 
-type Quality = "fast" | "balanced" | "best";
-
-const QUALITY: { key: Quality; title: string; sub: string }[] = [
-  { key: "fast", title: "Быстро", sub: "черновик за минуту" },
-  { key: "balanced", title: "Обычно", sub: "хорошо для большинства роликов" },
-  { key: "best", title: "Лучшее", sub: "максимум деталей, дольше" },
-];
-const QUALITY_TITLE: Record<string, string> = { fast: "Быстро", balanced: "Обычно", best: "Лучшее" };
 const STATUS_RU: Record<string, { text: string; tone: string; busy?: boolean }> = {
   queued: { text: "В очереди", tone: "accent", busy: true },
   processing: { text: "Выполняется", tone: "accent", busy: true },
@@ -16,6 +8,7 @@ const STATUS_RU: Record<string, { text: string; tone: string; busy?: boolean }> 
   failed: { text: "Ошибка", tone: "error" },
   cancelled: { text: "Отменено", tone: "warn" },
 };
+const NONE = "";
 
 function errorOf(e: unknown): ApiError {
   if (e instanceof RequestError) return e.error;
@@ -71,7 +64,7 @@ function StageList({ stages }: { stages: Stage[] }) {
       {stages.map((s) => (
         <div key={s.key} className={`stage ${s.status}`}>
           <span className="dot" />
-          <span>{s.label}</span>
+          <span>{s.label}{s.status === "running" && s.note ? ` · ${s.note}` : ""}</span>
           <span className="kv">{s.status === "running" ? `${s.progress}%` : s.status === "done" ? "✓" : s.status === "skipped" ? "пропущено" : s.status === "failed" ? "ошибка" : ""}</span>
         </div>
       ))}
@@ -93,17 +86,15 @@ export default function App() {
   const [faceBusy, setFaceBusy] = useState(false);
   const [faceErr, setFaceErr] = useState<ApiError | null>(null);
   const [identities, setIdentities] = useState<Identity[]>([]);
-  const [identityId, setIdentityId] = useState<string>("");
   const [profileName, setProfileName] = useState("Моё лицо");
-  const [selectedFaceIds, setSelectedFaceIds] = useState<string[]>([]);
+  const [profileFrom, setProfileFrom] = useState<string[]>([]);
 
-  const [faceSwap, setFaceSwap] = useState(true);
-  const [target, setTarget] = useState<string>("auto");
+  // человек из видео -> чем заменить: "" | "i:<профиль>" | "f:<фото>"
+  const [choice, setChoice] = useState<Record<string, string>>({});
   const [bgEnabled, setBgEnabled] = useState(false);
   const [bg, setBg] = useState<{ background_id: string; kind: string; preview_url: string; filename: string } | null>(null);
   const [bgBusy, setBgBusy] = useState(false);
   const [bgErr, setBgErr] = useState<ApiError | null>(null);
-  const [quality, setQuality] = useState<Quality>("balanced");
 
   const [job, setJob] = useState<Job | null>(null);
   const [jobErr, setJobErr] = useState<ApiError | null>(null);
@@ -152,8 +143,7 @@ export default function App() {
     if (!source || (source.status !== "queued" && source.status !== "processing")) return;
     const t = setInterval(async () => {
       try {
-        const s = await getJSON<Source>(`/sources/${source.id}`);
-        setSource(s);
+        setSource(await getJSON<Source>(`/sources/${source.id}`));
       } catch {
         /* keep polling */
       }
@@ -183,14 +173,35 @@ export default function App() {
     getJSON<{ lines: string[] }>(`/jobs/${job.id}/logs?n=300`).then((l) => setLogs(l.lines)).catch(() => {});
   }, [job?.id, showLogs]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const running = !!job && (job.status === "queued" || job.status === "processing");
+  const sourceReady = source?.status === "ready";
+  const people = useMemo(() => source?.persons ?? [], [source]);
+  const faceById = useMemo(() => new Map(faces.map((f) => [f.id, f])), [faces]);
+
+  // первое загруженное лицо само встаёт на главного человека, дальше пользователь правит
   useEffect(() => {
-    setSelectedFaceIds((ids) => ids.filter((id) => faces.some((f) => f.id === id)));
-  }, [faces]);
-  useEffect(() => {
-    if (!identityId) return;
-    const ident = identities.find((i) => i.id === identityId);
-    if (ident) setSelectedFaceIds(ident.face_ids);
-  }, [identityId, identities]);
+    if (!people.length || running) return;
+    const first = identities.length ? `i:${identities[0].id}` : faces.length ? `f:${faces[0].id}` : "";
+    if (!first) return;
+    setChoice((cur) => (Object.values(cur).some(Boolean) ? cur : { ...cur, [people[0].id]: first }));
+  }, [people, identities, faces, running]);
+
+  function previewOf(value: string): Face | undefined {
+    if (value.startsWith("f:")) return faceById.get(value.slice(2));
+    if (value.startsWith("i:")) {
+      const ident = identities.find((i) => i.id === value.slice(2));
+      return ident ? faceById.get(ident.face_ids[0]) : undefined;
+    }
+    return undefined;
+  }
+  function labelOf(value: string): string {
+    if (value.startsWith("i:")) return identities.find((i) => i.id === value.slice(2))?.name ?? "профиль";
+    if (value.startsWith("f:")) {
+      const i = faces.findIndex((f) => f.id === value.slice(2));
+      return `Фото ${i + 1}`;
+    }
+    return "Не менять";
+  }
 
   async function addUrl() {
     if (!url.trim()) return;
@@ -198,7 +209,7 @@ export default function App() {
     setSourceErr(null);
     try {
       setSource(await postJSON<Source>("/sources", { url: url.trim() }));
-      setTarget("auto");
+      setChoice({});
     } catch (e) {
       setSourceErr(errorOf(e));
     } finally {
@@ -212,7 +223,7 @@ export default function App() {
     try {
       const up = await upload<{ upload_id: string }>("/uploads/video", file, (f) => setUploadPct(Math.round(f * 100)));
       setSource(await postJSON<Source>("/sources", { upload_id: up.upload_id }));
-      setTarget("auto");
+      setChoice({});
     } catch (e) {
       setSourceErr(errorOf(e));
     } finally {
@@ -225,9 +236,8 @@ export default function App() {
     setFaceErr(null);
     try {
       const r = await upload<{ face: Face }>("/faces", file);
-      setFaces((prev) => [r.face, ...prev]);
-      setSelectedFaceIds((ids) => (ids.length >= 10 ? ids : [...ids, r.face.id]));
-      setIdentityId("");
+      setFaces((prev) => [...prev, r.face]);
+      setProfileFrom((prev) => [...prev, r.face.id]);
       if (r.face.warnings?.length) setFaceErr({ code: "WARN", message: r.face.warnings.join(" ") });
     } catch (e) {
       setFaceErr(errorOf(e));
@@ -240,16 +250,18 @@ export default function App() {
     try {
       await del(`/faces/${id}`);
       setFaces((prev) => prev.filter((f) => f.id !== id));
+      setProfileFrom((prev) => prev.filter((x) => x !== id));
+      setChoice((cur) => Object.fromEntries(Object.entries(cur).map(([k, v]) => [k, v === `f:${id}` ? "" : v])));
     } catch (e) {
       setFaceErr(errorOf(e));
     }
   }
   async function saveProfile() {
-    if (!selectedFaceIds.length) return;
+    if (!profileFrom.length) return;
     try {
-      const r = await postJSON<{ identity: Identity }>("/identities", { name: profileName, face_ids: selectedFaceIds });
+      const r = await postJSON<{ identity: Identity }>("/identities", { name: profileName, face_ids: profileFrom });
       setIdentities((prev) => [r.identity, ...prev]);
-      setIdentityId(r.identity.id);
+      setProfileFrom([]);
     } catch (e) {
       setFaceErr(errorOf(e));
     }
@@ -259,7 +271,7 @@ export default function App() {
     try {
       await del(`/identities/${id}`);
       setIdentities((prev) => prev.filter((i) => i.id !== id));
-      if (identityId === id) setIdentityId("");
+      setChoice((cur) => Object.fromEntries(Object.entries(cur).map(([k, v]) => [k, v === `i:${id}` ? "" : v])));
     } catch (e) {
       setFaceErr(errorOf(e));
     }
@@ -276,12 +288,24 @@ export default function App() {
     }
   }
 
-  const running = !!job && (job.status === "queued" || job.status === "processing");
-  const sourceReady = source?.status === "ready";
-  const people = source?.persons ?? [];
-  const canGenerate = sourceReady && ((faceSwap && selectedFaceIds.length > 0 && people.length > 0) || (bgEnabled && !!bg)) && !running;
-  const selectedFaces = useMemo(() => selectedFaceIds.map((id) => faces.find((f) => f.id === id)).filter(Boolean) as Face[], [selectedFaceIds, faces]);
-  const otherFaces = faces.filter((f) => !selectedFaceIds.includes(f.id));
+  const assignments = useMemo(
+    () =>
+      people
+        .map((p) => ({ person: p.id, value: choice[p.id] || NONE }))
+        .filter((a) => a.value)
+        .map((a) => (a.value.startsWith("i:") ? { person: a.person, identity_id: a.value.slice(2) } : { person: a.person, face_ids: [a.value.slice(2)] })),
+    [people, choice],
+  );
+  const canGenerate = sourceReady && (assignments.length > 0 || (bgEnabled && !!bg)) && !running;
+  const whyDisabled = !sourceReady
+    ? "Сначала добавьте видео."
+    : !faces.length
+      ? "Загрузите фото своего лица."
+      : !people.length
+        ? "В этом видео нет лица. Можно заменить только фон."
+        : assignments.length === 0 && !(bgEnabled && bg)
+          ? "Выберите, чьё лицо заменить."
+          : "";
 
   async function generate() {
     if (!source) return;
@@ -291,11 +315,7 @@ export default function App() {
     try {
       const r = await postJSON<{ job_id: string; job: Job }>("/jobs", {
         source_id: source.id,
-        face_ids: selectedFaceIds,
-        identity_id: identityId || null,
-        face_swap: faceSwap,
-        target_person: target,
-        quality,
+        assignments,
         background: bgEnabled && bg ? { background_id: bg.background_id } : null,
       });
       setJob(r.job);
@@ -318,20 +338,26 @@ export default function App() {
     try {
       setSource(await getJSON<Source>(`/sources/${j.source_id}`));
     } catch {
-      /* source may be gone */
+      /* видео могли удалить */
+    }
+  }
+  async function reuseResult() {
+    if (!job?.result) return;
+    setSourceBusy(true);
+    setSourceErr(null);
+    try {
+      const res = await fetch(job.result.video_url);
+      const blob = await res.blob();
+      await addFile(new File([blob], `clipy-${job.id}.mp4`, { type: "video/mp4" }));
+      setJob(null);
+    } catch (e) {
+      setSourceErr(errorOf(e));
+    } finally {
+      setSourceBusy(false);
     }
   }
 
   const hw = system?.hardware;
-  const whyDisabled = !sourceReady
-    ? "Сначала добавьте видео."
-    : faceSwap && !selectedFaceIds.length
-      ? "Загрузите фото своего лица."
-      : faceSwap && !people.length && !(bgEnabled && bg)
-        ? "В этом видео нет лица. Можно заменить только фон."
-        : bgEnabled && !bg && !faceSwap
-          ? "Загрузите фон."
-          : "";
   const st = job ? STATUS_RU[job.status] : null;
 
   return (
@@ -353,7 +379,7 @@ export default function App() {
         </div>
       </header>
       <h1 className="page-title">Clipy</h1>
-      <p className="page-sub">Своё лицо в чужом ролике. Добавьте видео, загрузите фото лица и нажмите «Создать видео».</p>
+      <p className="page-sub">Своё лицо в чужом ролике. Добавьте видео, загрузите фото лица и выберите, кого на кого заменить.</p>
       {hw?.notes?.length ? <div className="box warn">{hw.notes.join(" · ")}</div> : null}
 
       {/* 1. Видео */}
@@ -388,99 +414,97 @@ export default function App() {
           <div style={{ marginTop: 14 }}>
             <video className="video" src={source.video_url ?? undefined} poster={source.poster_url ?? undefined} controls playsInline preload="metadata" />
             <p className="kv" style={{ marginTop: 6 }}>
-              {source.info.width}×{source.info.height} · {fmtDuration(source.info.duration)} · {source.info.has_audio ? "со звуком" : "без звука"}
+              {source.info.width}×{source.info.height} · {fmtDuration(source.info.duration)} · {source.info.has_audio ? "со звуком" : "без звука"} · людей в кадре: {people.length}
             </p>
-            {faceSwap && (
-              <div style={{ marginTop: 12 }}>
-                <p className="hint">Кого заменить:</p>
-                {people.length === 0 ? (
-                  <div className="box warn"><b>В этом видео не найдено лицо.</b>Заменить лицо не получится, но можно заменить фон.</div>
-                ) : (
-                  <div className="people">
-                    <div className={`person ${target === "auto" ? "selected" : ""}`} onClick={() => !running && setTarget("auto")}>
-                      <img src={people[0].thumbnail_url} alt="" />
-                      Главный человек
-                      <small>выбирается сам</small>
-                    </div>
-                    {people.map((p, i) => (
-                      <div key={p.id} className={`person ${target === p.id ? "selected" : ""}`} onClick={() => !running && setTarget(p.id)}>
-                        <img src={p.thumbnail_url} alt="" />
-                        Человек {i + 1}
-                        <small>в {Math.round(p.coverage * 100)}% кадров</small>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         )}
       </section>
 
-      {/* 2. Лицо */}
+      {/* 2. Ваши лица */}
       <section className="card">
         <div className="card-head">
           <span className="step-n">2</span>
-          <h2>Ваше лицо</h2>
+          <h2>Ваши лица</h2>
           <span className="spacer" />
-          {selectedFaces.length > 0 && <span className="status success">Фото: {selectedFaces.length}</span>}
+          {faces.length > 0 && <span className="status success">Фото: {faces.length}</span>}
         </div>
-        {identities.length > 0 && (
-          <div className="row" style={{ marginBottom: 12 }}>
-            <select value={identityId} onChange={(e) => setIdentityId(e.target.value)} disabled={running}>
-              <option value="">Сохранённые профили</option>
-              {identities.map((i) => (
-                <option key={i.id} value={i.id}>{i.name} · {i.face_ids.length} фото</option>
-              ))}
-            </select>
-            {identityId && <button className="btn btn-ghost btn-sm" onClick={() => deleteProfile(identityId)} disabled={running}>Удалить профиль</button>}
+        <p className="hint" style={{ marginBottom: 10 }}>Несколько фото одного человека повышают качество. Профиль объединяет их под одним именем.</p>
+        <Drop accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" onFile={addFace} label={faceBusy ? "Проверяем фото…" : "Загрузить фото лица"} sub="одно лицо на фото, при хорошем свете" disabled={faceBusy || running} />
+        <Msg error={faceErr} kind={faceErr?.code === "WARN" ? "warn" : "err"} />
+        {faces.length > 0 && (
+          <div className="faces">
+            {faces.map((f, i) => (
+              <div className="face" key={f.id}>
+                <img src={f.thumb_url} alt="" title={`Фото ${i + 1}`} />
+                <button className="x" title="Удалить фото" onClick={() => void removeFace(f.id)} disabled={running}>×</button>
+              </div>
+            ))}
           </div>
         )}
-        <Drop accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" onFile={addFace} label={faceBusy ? "Проверяем фото…" : "Загрузить фото лица"} sub="одно лицо на фото, при хорошем свете · можно несколько фото" disabled={faceBusy || running} />
-        <Msg error={faceErr} kind={faceErr?.code === "WARN" ? "warn" : "err"} />
-        {selectedFaces.length > 0 && (
-          <>
-            <div className="faces">
-              {selectedFaces.map((f) => (
-                <div className="face" key={f.id}>
-                  <img src={f.thumb_url} alt="" />
-                  <button className="x" title="Не использовать в этот раз" onClick={() => setSelectedFaceIds((ids) => ids.filter((x) => x !== f.id))} disabled={running}>×</button>
-                </div>
-              ))}
-            </div>
-            {!identityId && (
-              <div className="row" style={{ marginTop: 12 }}>
-                <input type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} style={{ maxWidth: 220 }} disabled={running} aria-label="Название профиля" />
-                <button className="btn btn-secondary btn-sm" onClick={saveProfile} disabled={running}>Сохранить как профиль</button>
-              </div>
-            )}
-          </>
+        {profileFrom.length > 0 && (
+          <div className="row" style={{ marginTop: 12 }}>
+            <input type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} style={{ maxWidth: 220 }} disabled={running} aria-label="Название профиля" />
+            <button className="btn btn-secondary btn-sm" onClick={saveProfile} disabled={running}>Сохранить {profileFrom.length} фото как профиль</button>
+          </div>
         )}
-        {otherFaces.length > 0 && (
-          <>
-            <p className="hint" style={{ marginTop: 12 }}>Ранее загруженные фото, нажмите, чтобы добавить:</p>
-            <div className="faces">
-              {otherFaces.map((f) => (
-                <div className="face dim" key={f.id} onClick={() => setSelectedFaceIds((ids) => (ids.length >= 10 ? ids : [...ids, f.id]))} style={{ cursor: "pointer" }}>
-                  <img src={f.thumb_url} alt="" />
-                  <button className="x" title="Удалить фото" onClick={(e) => { e.stopPropagation(); void removeFace(f.id); }} disabled={running}>×</button>
-                </div>
-              ))}
-            </div>
-          </>
+        {identities.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <p className="hint">Профили:</p>
+            {identities.map((i) => (
+              <div className="row" key={i.id} style={{ marginTop: 6 }}>
+                <span>{i.name}</span>
+                <span className="kv">{i.face_ids.length} фото</span>
+                <span className="spacer" />
+                <button className="link-btn" onClick={() => deleteProfile(i.id)} disabled={running}>Удалить</button>
+              </div>
+            ))}
+          </div>
         )}
       </section>
 
-      {/* 3. Настройки */}
+      {/* 3. Кого на кого меняем */}
       <section className="card">
         <div className="card-head">
           <span className="step-n">3</span>
-          <h2>Настройки</h2>
+          <h2>Кого на кого меняем</h2>
+          <span className="spacer" />
+          {assignments.length > 0 && <span className="status success">Замен: {assignments.length}</span>}
         </div>
-        <label className="check">
-          <input type="checkbox" checked={faceSwap} onChange={(e) => setFaceSwap(e.target.checked)} disabled={running} /> Заменить лицо
-        </label>
-        <label className="check" style={{ marginTop: 12 }}>
+        {!sourceReady && <p className="hint">Сначала добавьте видео.</p>}
+        {sourceReady && people.length === 0 && <div className="box warn"><b>В этом видео не найдено лицо.</b>Заменить лицо не получится, но можно заменить фон.</div>}
+        {sourceReady && people.length > 0 && (
+          <>
+            <p className="hint" style={{ marginBottom: 10 }}>Для каждого человека выберите своё лицо. Кого не выбрали, останется без изменений.</p>
+            <div className="assign">
+              {people.map((p, i) => {
+                const value = choice[p.id] || NONE;
+                const preview = previewOf(value);
+                return (
+                  <div className="assign-row" key={p.id}>
+                    <img className="assign-face" src={p.thumbnail_url} alt="" />
+                    <div className="assign-info">
+                      <b>Человек {i + 1}</b>
+                      <span className="kv">{i === 0 ? "чаще всех в кадре · " : ""}в {Math.round(p.coverage * 100)}% кадров</span>
+                    </div>
+                    <span className="assign-arrow" aria-hidden>→</span>
+                    {preview ? <img className="assign-face" src={preview.thumb_url} alt="" /> : <div className="assign-face empty">нет</div>}
+                    <select value={value} onChange={(e) => setChoice((c) => ({ ...c, [p.id]: e.target.value }))} disabled={running} aria-label={`Чем заменить человека ${i + 1}`}>
+                      <option value={NONE}>Не менять</option>
+                      {identities.map((id) => (
+                        <option key={id.id} value={`i:${id.id}`}>{id.name} · {id.face_ids.length} фото</option>
+                      ))}
+                      {faces.map((f, fi) => (
+                        <option key={f.id} value={`f:${f.id}`}>Фото {fi + 1}</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+            {!faces.length && <p className="hint" style={{ marginTop: 10 }}>Сначала загрузите фото лица на шаге 2.</p>}
+          </>
+        )}
+        <label className="check" style={{ marginTop: 18 }}>
           <input type="checkbox" checked={bgEnabled} onChange={(e) => setBgEnabled(e.target.checked)} disabled={running} /> Заменить фон
         </label>
         {bgEnabled && (
@@ -490,16 +514,6 @@ export default function App() {
             {bg && (bg.kind === "image" ? <img className="preview-img" src={bg.preview_url} alt="" /> : <video className="video" src={bg.preview_url} muted controls style={{ marginTop: 10, maxHeight: 200 }} />)}
           </div>
         )}
-        <p className="hint" style={{ margin: "18px 0 8px" }}>Качество</p>
-        <div className="seg">
-          {QUALITY.map((q) => (
-            <button key={q.key} className={quality === q.key ? "active" : ""} onClick={() => setQuality(q.key)} disabled={running}>
-              <b>{q.title}</b>
-              <span>{q.sub}</span>
-            </button>
-          ))}
-        </div>
-        {hw?.backend === "cpu" && <p className="hint" style={{ marginTop: 8 }}>Без видеокарты обработка идёт на процессоре и занимает много минут.</p>}
       </section>
 
       {/* 4. Запуск */}
@@ -510,6 +524,7 @@ export default function App() {
           <button className="btn btn-danger btn-big" onClick={cancel}>Отменить</button>
         )}
         {!running && !canGenerate && whyDisabled && <p className="hint" style={{ marginTop: 8 }}>{whyDisabled}</p>}
+        {!running && canGenerate && assignments.length > 1 && <p className="hint" style={{ marginTop: 8 }}>Замен {assignments.length}, каждая считается отдельным проходом, поэтому времени уйдёт во столько же раз больше.</p>}
         <Msg error={jobErr} />
         {job && st && (
           <div style={{ marginTop: 16 }}>
@@ -550,6 +565,7 @@ export default function App() {
           </div>
           <div className="actions">
             <a className="btn" href={job.result.video_url} download={`clipy-${job.id}.mp4`}>Скачать видео</a>
+            <button className="btn btn-secondary" onClick={reuseResult} disabled={sourceBusy}>Продолжить с этим результатом</button>
           </div>
         </section>
       )}
@@ -562,12 +578,13 @@ export default function App() {
           <div className="history">
             {history.slice(0, 10).map((h) => {
               const hs = STATUS_RU[h.status] ?? { text: h.status, tone: "" };
+              const n = (h.assignments ?? []).length;
               return (
                 <div key={h.id} className={`hist ${job?.id === h.id ? "active" : ""}`} onClick={() => openJob(h)}>
                   {h.result?.poster_url ? <img src={h.result.poster_url} alt="" /> : <div className="noimg" />}
                   <div>
                     <div>{h.source?.url ? h.source.url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 48) : "Загруженное видео"}</div>
-                    <div className="kv">{new Date(h.created_at).toLocaleString("ru-RU")} · {QUALITY_TITLE[h.quality] ?? h.quality}{h.background ? " · с фоном" : ""}</div>
+                    <div className="kv">{new Date(h.created_at).toLocaleString("ru-RU")} · замен: {n || (h.face_swap ? 1 : 0)}{h.background ? " · с фоном" : ""}</div>
                   </div>
                   <span className={`status ${hs.tone}`}>{hs.text}</span>
                 </div>

@@ -73,6 +73,7 @@ export type SystemInfo = {
   ffmpeg: string;
   ytdlp: string;
   cookies: { present: boolean; path: string };
+  preset?: { swapper: string; pixel_boost: string; enhancer: string | null };
   limits: { max_video_seconds: number; max_video_mb: number };
   busy_job: string | null;
 };
@@ -105,6 +106,8 @@ export type Source = {
 export type Face = { id: string; created_at: string; original_name?: string; warnings: string[]; face_width?: number; image_url: string; thumb_url: string };
 export type Identity = { id: string; name: string; face_ids: string[]; created_at: string };
 
+export type Assignment = { person: string; face_ids?: string[]; identity_id?: string | null };
+
 export type Job = {
   id: string;
   status: "queued" | "processing" | "completed" | "failed" | "cancelled";
@@ -112,9 +115,10 @@ export type Job = {
   stage?: string;
   stage_label?: string;
   stages: Stage[];
-  quality: string;
-  face_swap: boolean;
-  target_person: string;
+  quality?: string;
+  assignments?: Assignment[];
+  face_swap?: boolean;
+  target_person?: string;
   background: { kind: string } | null;
   source_id: string;
   source?: { duration?: number; width?: number; height?: number; fps?: number; url?: string; kind?: string };

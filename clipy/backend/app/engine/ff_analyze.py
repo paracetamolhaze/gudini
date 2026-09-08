@@ -19,6 +19,13 @@ HERE = Path(__file__).resolve().parent
 FF_DIR = (HERE.parent.parent.parent / "engines" / "facefusion").resolve()
 
 
+# Сходство эмбеддингов ArcFace: лицо попадает в кластер при таком сходстве с его центроидом,
+# кластеры склеиваются при такой средней связи. Склейка должна быть не строже присоединения,
+# иначе один человек остаётся разбитым на несколько.
+ASSIGN_SIM = 0.42
+MERGE_SIM = 0.40
+
+
 def emit(obj: dict) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False))
     sys.stdout.flush()
@@ -54,7 +61,8 @@ def bootstrap(target_path: str, providers: list[str]) -> None:
         "--execution-providers", *providers,
         "--face-detector-model", "yolo_face",
         "--face-detector-size", "640x640",
-        "--face-detector-score", "0.5",
+        # 0.35 вместо 0.5: смазанные, мелкие и полуотвёрнутые лица тоже попадают в разбор
+        "--face-detector-score", "0.35",
         "--face-landmarker-model", "2dfan4",
         "--face-landmarker-score", "0.5",
         "--log-level", "error",
@@ -141,7 +149,7 @@ def analyze_video(path: str, out_dir: Path, max_samples: int, providers: list[st
                 sim = float(numpy.dot(emb, c["centroid"]))
                 if sim > best_sim:
                     best, best_sim = c, sim
-            if best is not None and best_sim >= 0.45:
+            if best is not None and best_sim >= ASSIGN_SIM:
                 best["members"].append((idx, face))
                 best["sum"] = best["sum"] + emb
                 best["centroid"] = best["sum"] / (numpy.linalg.norm(best["sum"]) + 1e-8)
@@ -150,14 +158,25 @@ def analyze_video(path: str, out_dir: Path, max_samples: int, providers: list[st
         sys.stderr.write(f"frame {idx}: {len(faces)} face(s)\n")
     cap.release()
 
-    # merge clusters that drifted apart (same person, different angle)
+    # Склейка кластеров одного человека, снятого под разными углами. Средняя связь по всем парам:
+    # по центроидам два ракурса одного лица расходятся сильнее, чем два разных человека сближаются,
+    # и человек рассыпался на «person_4, person_5, person_6», а порог сходства для замены схлопывался.
+    def linkage(a: dict, b: dict) -> float:
+        ea = numpy.stack([numpy.asarray(f.embedding_norm, dtype=numpy.float32) for _, f in a["members"]])
+        eb = numpy.stack([numpy.asarray(f.embedding_norm, dtype=numpy.float32) for _, f in b["members"]])
+        return float(numpy.mean(ea @ eb.T))
+
     merged = True
     while merged and len(clusters) > 1:
         merged = False
         for i in range(len(clusters)):
             for j in range(i + 1, len(clusters)):
-                sim = float(numpy.dot(clusters[i]["centroid"], clusters[j]["centroid"]))
-                if sim >= 0.55:
+                # два лица в одном кадре — это точно разные люди, такие кластеры не склеиваем
+                frames_i = {m[0] for m in clusters[i]["members"]}
+                frames_j = {m[0] for m in clusters[j]["members"]}
+                if frames_i & frames_j:
+                    continue
+                if linkage(clusters[i], clusters[j]) >= MERGE_SIM:
                     clusters[i]["members"].extend(clusters[j]["members"])
                     clusters[i]["sum"] = clusters[i]["sum"] + clusters[j]["sum"]
                     clusters[i]["centroid"] = clusters[i]["sum"] / (numpy.linalg.norm(clusters[i]["sum"]) + 1e-8)
@@ -177,6 +196,25 @@ def analyze_video(path: str, out_dir: Path, max_samples: int, providers: list[st
         return frames_seen * (0.3 + float(area))
 
     clusters.sort(key=rank, reverse=True)
+
+    # «Значимый» человек — тот, кого реально стоит показывать в списке замен: он появляется не в
+    # одном кадре или занимает заметную часть экрана. Прохожие и ложные срабатывания на фоне
+    # (лицо в 0.1% кадра, один раз) в список не идут и не влияют на порог совпадения.
+    def area_of(c: dict) -> float:
+        return float(numpy.mean([max(0.0, (f.bounding_box[2] - f.bounding_box[0]) * (f.bounding_box[3] - f.bounding_box[1])) for _, f in c["members"]]) / float(max(1, width * height)))
+
+    def frames_of(c: dict) -> int:
+        return len({m[0] for m in c["members"]})
+
+    def significant(c: dict) -> bool:
+        return (frames_of(c) >= 2 and frames_of(c) / float(max(1, sampled)) >= 0.02) or area_of(c) >= 0.03
+
+    keep = [c for c in clusters if significant(c)] or clusters[:1]
+    dropped = len(clusters) - len(keep)
+    if dropped:
+        sys.stderr.write(f"skipped {dropped} incidental face(s)\n")
+    clusters = keep[:8]
+
     persons = []
     out_dir.mkdir(parents=True, exist_ok=True)
     for pi, c in enumerate(clusters):
@@ -190,12 +228,15 @@ def analyze_video(path: str, out_dir: Path, max_samples: int, providers: list[st
             if oc is c:
                 continue
             inter = min(inter, max(0.0, (1.0 - float(numpy.dot(c["centroid"], oc["centroid"]))) / 2.0))
-        # reference frame: prefer frames where this person is alone, then big + confident + frontal
+        # Опорный кадр. Движок сравнивает все кадры ролика именно с этим лицом, поэтому главное —
+        # чтобы оно было самым типичным для человека (ближе всех к центроиду), а не просто крупным:
+        # нетипичный ракурс в опоре отсекал половину кадров, и лицо «пропадало».
         def ref_score(item):
             fidx, f = item
+            typical = float(numpy.dot(numpy.asarray(f.embedding_norm), c["centroid"]))
             alone = 1.0 if len(frame_faces.get(fidx, [])) == 1 else 0.0
             area = max(0.0, (f.bounding_box[2] - f.bounding_box[0]) * (f.bounding_box[3] - f.bounding_box[1])) / float(max(1, width * height))
-            return alone * 2.0 + float(f.score_set.get("detector", 0)) + float(f.score_set.get("landmarker", 0)) + min(area * 10, 1.0)
+            return typical * 4.0 + alone + float(f.score_set.get("landmarker", 0)) + min(area * 10, 1.0)
 
         ref_idx, ref_face = max(members, key=ref_score)
         ordered = sorted(frame_faces[ref_idx], key=lambda f: float(f.bounding_box[0]))
@@ -213,8 +254,11 @@ def analyze_video(path: str, out_dir: Path, max_samples: int, providers: list[st
             "reference_frame": int(ref_idx),
             "reference_position": int(position),
             "reference_alone": len(frame_faces.get(ref_idx, [])) == 1,
-            "intra_distance": round(float(max(intra)) if intra else 0.0, 3),
+            # разброс лица по кадрам: p85, а не максимум — один нетипичный кадр не должен задирать порог
+            "intra_distance": round(float(numpy.percentile(intra, 85)) if intra else 0.0, 3),
+            "intra_max": round(float(max(intra)) if intra else 0.0, 3),
             "nearest_other_distance": round(float(inter), 3),
+            "coverage_rank": pi,
             "thumbnail": thumb.name,
             "sample": face_to_dict(ref_face, width, height),
         })

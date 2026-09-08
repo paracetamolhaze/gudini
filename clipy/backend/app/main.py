@@ -533,18 +533,28 @@ async def cancel_job(job_id: str):
 
 
 @app.delete(f"{P}/api/jobs/{{job_id}}")
-async def delete_job(job_id: str):
+async def delete_job(job_id: str, with_source: bool = False):
+    """Удаляет задачу с готовым видео и её файлы. with_source — заодно исходник,
+    если на него не ссылается ни одна другая задача (иначе он остаётся)."""
     job = store.get(job_id)
     if not job:
         raise HTTPException(404, "job not found")
     if job.data.get("status") in ("queued", "processing"):
         raise UserError("BUSY", "Сначала отмените задачу.")
+    source_id = job.data.get("source_id")
     for p in (config.OUTPUTS_DIR / f"{job_id}.mp4", config.OUTPUTS_DIR / f"{job_id}.jpg"):
         p.unlink(missing_ok=True)
     shutil.rmtree(job.dir, ignore_errors=True)
     with store._lock:
         store._jobs.pop(job_id, None)
-    return {"ok": True}
+        others = [j for j in store._jobs.values() if j.data.get("type") == "render" and j.data.get("source_id") == source_id]
+    if with_source and source_id and not others:
+        shutil.rmtree(pipeline.source_dir(source_id), ignore_errors=True)
+        with store._lock:
+            for analyze in [j for j in store._jobs.values() if j.data.get("source_id") == source_id]:
+                store._jobs.pop(analyze.id, None)
+                shutil.rmtree(analyze.dir, ignore_errors=True)
+    return {"ok": True, "source_deleted": bool(with_source and source_id and not others)}
 
 
 @app.get(f"{P}/api/jobs/{{job_id}}/result")

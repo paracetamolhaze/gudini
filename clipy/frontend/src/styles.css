@@ -244,6 +244,14 @@ select {
 .btn-danger:hover {
   background: var(--error-soft);
 }
+.btn-danger-solid {
+  background: var(--error);
+  border-color: transparent;
+  color: #2b1111;
+}
+.btn-danger-solid:hover {
+  background: #ffa5a5;
+}
 .btn-big {
   width: 100%;
   min-height: 54px;
@@ -489,6 +497,35 @@ select {
   }
 }
 
+/* ---- окно подтверждения ---- */
+.modal-back {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 9, 12, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 50;
+}
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  padding: 22px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.modal h3 {
+  margin: 0 0 8px;
+  font-size: 19px;
+  font-weight: 650;
+}
+.modal .actions {
+  margin-top: 18px;
+}
+
 /* ---- медиа ---- */
 .video {
   width: 100%;
@@ -706,7 +743,7 @@ select {
 }
 .hist {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) auto;
+  grid-template-columns: 48px minmax(0, 1fr) auto auto;
   gap: 12px;
   align-items: center;
   padding: 8px 10px;

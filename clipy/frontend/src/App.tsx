@@ -76,6 +76,47 @@ function PhotoAdd({ onFile, disabled, busy }: { onFile: (f: File) => void; disab
   );
 }
 
+type Ask = { title: string; text?: string; ok?: string; run: () => Promise<void> | void };
+
+/** Своё окно подтверждения: системное confirm() выглядит как окно браузера и пугает адресом сайта. */
+function Confirm({ ask, onClose }: { ask: Ask | null; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!ask) return;
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [ask, onClose]);
+  if (!ask) return null;
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3>{ask.title}</h3>
+        {ask.text && <p className="hint">{ask.text}</p>}
+        <div className="actions">
+          <button
+            className="btn btn-danger-solid"
+            autoFocus
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await ask.run();
+                onClose();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? <span className="spin" /> : null} {ask.ok ?? "Удалить"}
+          </button>
+          <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Отмена</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StageList({ stages }: { stages: Stage[] }) {
   return (
     <div className="stages">
@@ -120,6 +161,7 @@ export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [showLogs, setShowLogs] = useState(false);
   const [history, setHistory] = useState<Job[]>([]);
+  const [ask, setAsk] = useState<Ask | null>(null);
 
   const loadSystem = useCallback(async () => {
     try {
@@ -262,10 +304,19 @@ export default function App() {
     const person = people.find((p) => p.id === identityId);
     if (!person) return;
     if (person.face_ids.length <= 1) {
-      await removePerson(identityId);
+      removePerson(identityId);
       return;
     }
-    if (!confirm("Удалить это фото?")) return;
+    setAsk({
+      title: "Удалить это фото?",
+      text: `У «${person.name}» останется ${person.face_ids.length - 1} фото.`,
+      run: () => doRemovePhoto(identityId, faceId),
+    });
+  }
+
+  async function doRemovePhoto(identityId: string, faceId: string) {
+    const person = people.find((p) => p.id === identityId);
+    if (!person) return;
     try {
       const upd = await patchJSON<{ identity: Identity }>(`/identities/${identityId}`, { face_ids: person.face_ids.filter((f) => f !== faceId) });
       setPeople((prev) => prev.map((p) => (p.id === identityId ? upd.identity : p)));
@@ -276,9 +327,19 @@ export default function App() {
     }
   }
 
-  async function removePerson(id: string) {
+  function removePerson(id: string) {
     const person = people.find((p) => p.id === id);
-    if (!person || !confirm(`Удалить «${person.name}» вместе с его фото?`)) return;
+    if (!person) return;
+    setAsk({
+      title: `Удалить «${person.name}»?`,
+      text: `Вместе с ним удалятся его фото: ${person.face_ids.length}.`,
+      run: () => doRemovePerson(id),
+    });
+  }
+
+  async function doRemovePerson(id: string) {
+    const person = people.find((p) => p.id === id);
+    if (!person) return;
     try {
       await del(`/identities/${id}`);
       for (const fid of person.face_ids) {
@@ -386,6 +447,24 @@ export default function App() {
       /* видео могли удалить */
     }
   }
+  function removeJob(j: Job) {
+    setAsk({
+      title: "Удалить это видео?",
+      text: "Готовый ролик и журнал задачи будут удалены без возможности вернуть." + (source?.id !== j.source_id ? " Исходник тоже удалится, если он больше нигде не нужен." : ""),
+      run: () => doRemoveJob(j),
+    });
+  }
+
+  async function doRemoveJob(j: Job) {
+    try {
+      await del(`/jobs/${j.id}${source?.id !== j.source_id ? "?with_source=true" : ""}`);
+      setHistory((prev) => prev.filter((x) => x.id !== j.id));
+      if (job?.id === j.id) setJob(null);
+    } catch (e) {
+      setJobErr(errorOf(e));
+    }
+  }
+
   async function reuseResult() {
     if (!job?.result) return;
     setSourceBusy(true);
@@ -407,24 +486,16 @@ export default function App() {
 
   return (
     <div className="app">
+      <Confirm ask={ask} onClose={() => setAsk(null)} />
       <header className="topbar">
         <a href="/" className="back-btn">
           <span className="arrow">←</span> Вернуться в Гудини
         </a>
         <div className="sys">
-          {system ? (
-            <>
-              {hw?.gpu_name || "Без видеокарты"} · {hw?.backend === "cuda" ? "видеокарта NVIDIA" : hw?.backend === "directml" ? "видеокарта" : "процессор"}
-            </>
-          ) : systemErr ? (
-            "Сервер недоступен"
-          ) : (
-            "Проверяем оборудование…"
-          )}
+          {systemErr ? "Сервер недоступен" : system && hw?.backend === "cpu" ? "Считает процессор, будет медленно" : ""}
         </div>
       </header>
       <h1 className="page-title">Clipy</h1>
-      <p className="page-sub">Своё лицо в чужом ролике. Добавьте видео, соберите людей с их фото и выберите, кого на кого заменить.</p>
       {hw?.notes?.length ? <div className="box warn">{hw.notes.join(" · ")}</div> : null}
 
       {/* 1. Видео */}
@@ -473,10 +544,6 @@ export default function App() {
           <span className="spacer" />
           {people.length > 0 && <span className="status success">Людей: {people.length}</span>}
         </div>
-        <p className="hint" style={{ marginBottom: 12 }}>
-          Заведите каждого отдельно: себя, друга, кого угодно. Чем больше фото у одного человека, тем точнее сходство:
-          движок усредняет их в один отпечаток лица. Лучше всего 3–5 фото анфас, при хорошем свете, по одному лицу на фото.
-        </p>
         <Msg error={faceErr} kind={faceErr?.code === "WARN" ? "warn" : "err"} />
         <div className="people">
           {people.map((p) => (
@@ -631,6 +698,8 @@ export default function App() {
           <div className="actions">
             <a className="btn" href={job.result.video_url} download={`clipy-${job.id}.mp4`}>Скачать видео</a>
             <button className="btn btn-secondary" onClick={reuseResult} disabled={sourceBusy}>Продолжить с этим результатом</button>
+            <span className="spacer" />
+            <button className="btn btn-danger" onClick={() => removeJob(job)}>Удалить видео</button>
           </div>
         </section>
       )}
@@ -652,6 +721,14 @@ export default function App() {
                     <div className="kv">{new Date(h.created_at).toLocaleString("ru-RU")} · замен: {n || (h.face_swap ? 1 : 0)}{h.background ? " · с фоном" : ""}</div>
                   </div>
                   <span className={`status ${hs.tone}`}>{hs.text}</span>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    title="Удалить видео"
+                    onClick={(e) => { e.stopPropagation(); removeJob(h); }}
+                    disabled={h.status === "queued" || h.status === "processing"}
+                  >
+                    ×
+                  </button>
                 </div>
               );
             })}

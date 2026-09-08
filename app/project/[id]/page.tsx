@@ -569,10 +569,11 @@ function ProcessStep({
   const otherStyle: "cards" | "ai_film" = style === "cards" ? "ai_film" : "cards";
   const otherOutput = outputs[otherStyle];
   const styleName = (s: "cards" | "ai_film") => (s === "cards" ? "Карточки" : "AI-фильм");
-  // превью: ролик выбранного стиля; у старых проектов без outputs — последний смонтированный
+  // превью: ролик выбранного стиля; у старых проектов без outputs последний монтаж — это
+  // всегда карточки, поэтому он показывается только под стилем «Карточки»
   const previewSrc = styleOutput
     ? `/api/projects/${project.id}/video?which=processed&style=${style}&t=${styleOutput.at}`
-    : !hasOutputs && project.processedVideo
+    : !hasOutputs && project.processedVideo && style === "cards"
       ? `/api/projects/${project.id}/video?which=processed&t=${Date.now()}`
       : null;
   const filmPlan = project.aiFilm?.plan;
@@ -755,9 +756,9 @@ function ProcessStep({
 
       {processing.state === "error" && <div className="error-box">Ошибка монтажа: {processing.error}</div>}
 
-      {!previewSrc && otherOutput && processing.state !== "running" && (
+      {!previewSrc && (otherOutput || (!hasOutputs && project.processedVideo)) && processing.state !== "running" && (
         <p className="hint" style={{ marginTop: 12 }}>
-          Ролика в стиле «{styleName(style)}» ещё нет. Есть ролик в стиле «{styleName(otherStyle)}» — переключи стиль выше, чтобы посмотреть, или смонтируй этот.
+          Ролика в стиле «{styleName(style)}» ещё нет. Есть ролик в стиле «{styleName(otherOutput ? otherStyle : "cards")}» — переключи стиль выше, чтобы посмотреть, или смонтируй этот.
         </p>
       )}
       {previewSrc && processing.state !== "running" && (

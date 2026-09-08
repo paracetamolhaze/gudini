@@ -6,6 +6,7 @@ import {
   type PlanConfig,
 } from "../lib/aiFilm/plan";
 import { normalizeVeoDuration } from "../lib/aiFilm/veo";
+import { openrouterRequestBody } from "../lib/mediaLlm";
 import { loadUniverseProfile, universePromptBlock, universePlannerBlock } from "../lib/aiFilm/universe";
 import type { CharacterProfile, StoryBeat, StoryBible, DisplayMode, BeatPurpose, Priority } from "../lib/aiFilm/types";
 
@@ -342,4 +343,13 @@ test("эффективность генерации: короткие AI-бит�
   const good = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
   assert.ok(good.stats.generationEfficiency >= 0.75, String(good.stats.generationEfficiency));
   assert.ok(!good.warnings.some((w) => /эффективность/.test(w)));
+});
+
+test("разбор истории идёт без скрытых размышлений модели: тело запроса OpenRouter несёт reasoning.enabled=false", () => {
+  const off = openrouterRequestBody("anthropic/claude-sonnet-5", 16000, "sys", "user", "off") as any;
+  assert.deepEqual(off.reasoning, { enabled: false });
+  assert.equal(off.max_tokens, 16000);
+  assert.deepEqual(off.usage, { include: true });
+  const auto = openrouterRequestBody("anthropic/claude-sonnet-5", 8000, "sys", "user") as any;
+  assert.equal("reasoning" in auto, false, "остальные стадии не трогаем");
 });

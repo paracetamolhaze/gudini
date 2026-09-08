@@ -141,12 +141,35 @@ function recordOpenRouterClaude(stage: CostStage, model: string, usage: any, fai
 type OpenRouterPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
 
 /** Один запрос к OpenRouter (совместимый с OpenAI chat API). Ошибки — наружу, с кодом. */
+/** Режим размышлений модели в OpenRouter: "off" — выключить (Claude 5 думает адаптивно и сам). */
+export type ReasoningMode = "auto" | "off";
+
+/**
+ * Тело запроса OpenRouter. Размышления выключаются явно там, где они опасны: разбор
+ * истории AI-фильма на речи в 124 с однажды потратил все 16 000 токенов ответа на
+ * скрытые размышления и не выдал ни символа текста ($0.17 впустую).
+ */
+export function openrouterRequestBody(model: string, maxTokens: number, system: string, user: string | OpenRouterPart[], reasoning: ReasoningMode = "auto") {
+  return {
+    model,
+    max_tokens: maxTokens,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    // точная цена вызова в ответе — для учёта денег
+    usage: { include: true },
+    ...(reasoning === "off" ? { reasoning: { enabled: false } } : {}),
+  };
+}
+
 async function openrouterChat(
   stage: CostStage,
   model: string,
   maxTokens: number,
   system: string,
   user: string | OpenRouterPart[],
+  reasoning: ReasoningMode = "auto",
 ): Promise<{ text: string; truncated: boolean; finish: string; usage: any; reasoningTokens: number }> {
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -155,16 +178,7 @@ async function openrouterChat(
       "Content-Type": "application/json",
       "X-Title": "Gudini",
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      // точная цена вызова в ответе — для учёта денег
-      usage: { include: true },
-    }),
+    body: JSON.stringify(openrouterRequestBody(model, maxTokens, system, user, reasoning)),
     signal: AbortSignal.timeout(10 * 60 * 1000),
   });
   const json: any = await res.json().catch(() => ({}));
@@ -201,6 +215,8 @@ export type CompleteArgs = {
   stage?: CostStage;
   /** модель стадии: сценарий пишет Opus, утилитарные задачи — Sonnet */
   model?: string;
+  /** "off" — запретить модели скрытые размышления (только транспорт OpenRouter) */
+  reasoning?: ReasoningMode;
 };
 
 /**
@@ -231,7 +247,7 @@ export async function mediaComplete(args: CompleteArgs): Promise<string> {
 }
 
 async function completeOnce(
-  { system, user, maxTokens = 8000, stage = "Media Research", model: modelOverride }: CompleteArgs,
+  { system, user, maxTokens = 8000, stage = "Media Research", model: modelOverride, reasoning = "auto" }: CompleteArgs,
   isRetry = false,
 ): Promise<string> {
   const transport = mediaTransport();
@@ -244,7 +260,7 @@ async function completeOnce(
   // вызовы больше не проходят проверку по одному и тому же остатку.
   return withBudget(stage, projectRequestCost({ model, promptChars: system.length + user.length, maxTokens }), async () => {
   if (transport === "openrouter") {
-    const r = await openrouterChat(stage, model, maxTokens, system, user);
+    const r = await openrouterChat(stage, model, maxTokens, system, user, reasoning);
     recordOpenRouterClaude(stage, model, r.usage, false, isRetry);
     if (r.truncated) {
       throw new Error(

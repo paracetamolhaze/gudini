@@ -270,7 +270,8 @@ export async function planStory(args: {
     `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
     `Сценарий (что автор хотел сказать):\n${args.script.slice(0, 4000)}\n\n` +
     `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}`;
-  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", system: storySystemPrompt(args.character, args.universe, args.coverage), user });
+  // без скрытых размышлений: на речи в 124 с модель потратила на них все 16 000 токенов и не выдала текст
+  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", reasoning: "off", system: storySystemPrompt(args.character, args.universe, args.coverage), user });
   const parsed = parseJson<RawStory>(raw, "AI Film Story");
   const bible = normalizeBible(parsed, args.character, args.universe);
   const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration);

@@ -35,6 +35,14 @@ export type ProjectMeta = {
   hashtags: string[];
 };
 
+export type ProjectOutput = {
+  /** out-cards.mp4 | out-ai_film.mp4 */
+  file: string;
+  at: string;
+  brollCount?: number;
+  subtitlesSource?: "scribe" | "whisper" | "script";
+};
+
 export type Project = {
   id: string;
   topic: string;
@@ -59,6 +67,8 @@ export type Project = {
   scriptBeats?: ScriptBeat[];
   /** стиль монтажа: карточки (по умолчанию) или AI-фильм сверху */
   montageStyle?: "cards" | "ai_film";
+  /** итог каждого стиля отдельно: монтаж одного стиля не стирает другой */
+  outputs?: Partial<Record<"cards" | "ai_film", ProjectOutput>>;
   /** AI-фильм: запрошенная фаза, план с ценой, итог генерации */
   aiFilm?: AiFilmState;
 };

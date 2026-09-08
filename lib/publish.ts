@@ -25,7 +25,7 @@ export type TikTokPostOptions = {
  */
 export type PublishMode = "live" | "draft";
 
-export type PublishOptions = { tiktok?: TikTokPostOptions; mode?: PublishMode };
+export type PublishOptions = { tiktok?: TikTokPostOptions; mode?: PublishMode; style?: "cards" | "ai_film" };
 
 /**
  * Обложка первым кадром. YouTube для Shorts и TikTok не показывают свою картинку, даже
@@ -72,13 +72,15 @@ async function withCoverLead(dir: string, videoFile: string, coverFile: string |
 /** Публикация на платформу. Без подключённого аккаунта — демо-режим (симуляция). */
 export async function publish(id: string, platform: Platform, options: PublishOptions = {}): Promise<Publication> {
   const project = getProject(id);
-  if (!project?.processedVideo) throw new Error("Сначала смонтируйте видео");
+  // выбранный стиль публикуется из своей копии; без выбора — последний смонтированный ролик
+  const source = options.style && project?.outputs?.[options.style]?.file ? project.outputs[options.style]!.file : project?.processedVideo;
+  if (!project || !source) throw new Error("Сначала смонтируйте видео");
   const dir = projectDir(id);
   // TikTok — копия с обложкой первым кадром (кадр 0 и есть превью); YouTube и Instagram — оригинал:
   // у Shorts свою обложку не показать никак, у Instagram она уходит по ссылке
-  const videoFile = platform === "tiktok" ? await withCoverLead(dir, project.processedVideo, project.cover ?? null) : project.processedVideo;
+  const videoFile = platform === "tiktok" ? await withCoverLead(dir, source, project.cover ?? null) : source;
   const videoPath = path.join(dir, videoFile);
-  const leadUsed = videoFile !== project.processedVideo;
+  const leadUsed = videoFile !== source;
   const title = project.meta?.title ?? project.topic;
   const description = [project.meta?.description ?? "", (project.meta?.hashtags ?? []).join(" ")]
     .filter(Boolean)
@@ -100,7 +102,7 @@ export async function publish(id: string, platform: Platform, options: PublishOp
         status: "skipped",
         message: "Черновиков в Instagram через API нет — в режиме проверки пропущен, публикуйте кнопкой «во все» или отдельной.",
       };
-    else result = await publishInstagram(id, title, description, coverMs, Boolean(coverPath && fs.existsSync(coverPath)));
+    else result = await publishInstagram(id, title, description, coverMs, Boolean(coverPath && fs.existsSync(coverPath)), options.style);
   } catch (e: any) {
     result = { platform, status: "error", message: String(e?.message ?? e) };
   }
@@ -511,6 +513,7 @@ async function publishInstagram(
   description: string,
   coverMs: number,
   hasCover: boolean,
+  videoStyle?: "cards" | "ai_film",
 ): Promise<PublishResult> {
   const s = getSettings();
   const igUser = s.instagramTokens?.ig_user_id;
@@ -524,7 +527,7 @@ async function publishInstagram(
   }
 
   const base = s.publicBaseUrl.replace(/\/$/, "");
-  const videoUrl = `${base}/api/projects/${id}/video?which=processed`;
+  const videoUrl = `${base}/api/projects/${id}/video?which=processed${videoStyle ? `&style=${videoStyle}` : ""}`;
   const caption = `${title}\n\n${description}`.slice(0, 2200);
   // прямой вход через Instagram → graph.instagram.com; вход через Facebook → graph.facebook.com
   const graph = s.instagramTokens?.via === "ig" ? "https://graph.instagram.com" : "https://graph.facebook.com";

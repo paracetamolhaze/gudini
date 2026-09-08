@@ -158,3 +158,19 @@ test("сбой доставки при прежнем стиле и плане �
   assert.equal(delivery.canRedeliver(aiFilm, { ...fingerprint, montageStyle: "ai_film", aiFilmPlanHash: "approved-plan" }), true);
   assert.equal(delivery.canRedeliver(aiFilm, { ...fingerprint, montageStyle: "cards" }), false);
 });
+
+test("итог каждого стиля хранится отдельно: out-<style>.mp4 и outputs в проекте", async () => {
+  const generated: AiFilmState = { request: "generate", status: "generated", plan, generatedAt: "2026-09-08T01:00:00Z", spent: 1.2 };
+  const first = await finish(project({ montageStyle: "ai_film", aiFilm: generated }), { montageStyle: "ai_film", aiFilm: generated, subtitlesSource: "scribe" }, true);
+  assert.equal(first.response.status, 200);
+  assert.equal(first.body.processedVideo, "out.mp4");
+  assert.equal(first.body.outputs.ai_film.file, "out-ai_film.mp4");
+  assert.equal(first.body.outputs.ai_film.subtitlesSource, "scribe");
+  assert.ok(fs.existsSync(path.join(store.projectDir("style-lifecycle"), "out-ai_film.mp4")));
+  const second = await finish({ ...first.body, montageStyle: "cards", processing: { state: "running", step: "Монтаж на воркере", progress: 90 } }, { montageStyle: "cards", brollCount: 2 }, true);
+  assert.equal(second.response.status, 200);
+  assert.equal(second.body.outputs.ai_film.file, "out-ai_film.mp4", "итог AI-фильма не стёрт монтажом карточек");
+  assert.equal(second.body.outputs.cards.file, "out-cards.mp4");
+  assert.equal(second.body.outputs.cards.brollCount, 2);
+  assert.ok(fs.existsSync(path.join(store.projectDir("style-lifecycle"), "out-cards.mp4")));
+});

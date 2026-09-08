@@ -46,9 +46,20 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   if (!hasOut) return NextResponse.json({ error: "out.mp4 не загружен" }, { status: 400 });
   const hasCover = fs.existsSync(path.join(projectDir(id), "cover.jpg"));
 
+  // копия итога под стиль: карточки и AI-фильм живут рядом, монтаж одного не стирает другой
+  const style: "cards" | "ai_film" = body.montageStyle === "ai_film" || body.montageStyle === "cards" ? body.montageStyle : project.montageStyle ?? "cards";
+  const styledFile = `out-${style}.mp4`;
+  try {
+    fs.copyFileSync(path.join(projectDir(id), "out.mp4"), path.join(projectDir(id), styledFile));
+  } catch (e: any) {
+    return NextResponse.json({ error: `не удалось сохранить копию ${styledFile}: ${String(e?.message ?? e)}` }, { status: 500 });
+  }
+  const subtitlesSource = body.subtitlesSource === "scribe" || body.subtitlesSource === "whisper" || body.subtitlesSource === "script" ? body.subtitlesSource : undefined;
+
   return NextResponse.json(
     updateProject(id, {
       processedVideo: "out.mp4",
+      outputs: { ...(project.outputs ?? {}), [style]: { file: styledFile, at: new Date().toISOString(), brollCount: Number(body.brollCount) || 0, subtitlesSource } },
       cover: hasCover ? "cover.jpg" : null,
       // статус и причина отказа проверки приходят от воркера: без них отклонённая
       // обложка выглядела на сайте как «обложки нет», без объяснения

@@ -23,7 +23,10 @@ export async function GET(req: NextRequest, { params }: Ctx) {
 
   const whichParam = req.nextUrl.searchParams.get("which");
   const which = whichParam === "raw" ? "raw" : whichParam === "cover" ? "cover" : "processed";
-  const filename = which === "raw" ? project.rawVideo : which === "cover" ? project.cover : project.processedVideo;
+  // ?style=cards|ai_film — итог конкретного стиля; без него — последний смонтированный
+  const styleParam = req.nextUrl.searchParams.get("style");
+  const styled = which === "processed" && (styleParam === "cards" || styleParam === "ai_film") ? project.outputs?.[styleParam]?.file : undefined;
+  const filename = which === "raw" ? project.rawVideo : which === "cover" ? project.cover : styled ?? project.processedVideo;
   if (!filename) return NextResponse.json({ error: "Файла нет" }, { status: 404 });
 
   const filePath = path.join(projectDir(id), filename);

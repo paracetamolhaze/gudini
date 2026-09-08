@@ -22,6 +22,7 @@ type Project = {
   meta: Meta | null;
   publications: Publication[];
   montageStyle?: "cards" | "ai_film";
+  outputs?: Partial<Record<"cards" | "ai_film", { file: string; at: string; brollCount?: number; subtitlesSource?: string }>>;
   aiFilm?: {
     request?: "plan" | "generate";
     status?: "planned" | "generated" | "failed";
@@ -562,6 +563,18 @@ function ProcessStep({
   }, [processing.state, reload]);
 
   const style = project.montageStyle ?? "cards";
+  const outputs = project.outputs ?? {};
+  const hasOutputs = Object.keys(outputs).length > 0;
+  const styleOutput = outputs[style];
+  const otherStyle: "cards" | "ai_film" = style === "cards" ? "ai_film" : "cards";
+  const otherOutput = outputs[otherStyle];
+  const styleName = (s: "cards" | "ai_film") => (s === "cards" ? "Карточки" : "AI-фильм");
+  // превью: ролик выбранного стиля; у старых проектов без outputs — последний смонтированный
+  const previewSrc = styleOutput
+    ? `/api/projects/${project.id}/video?which=processed&style=${style}&t=${styleOutput.at}`
+    : !hasOutputs && project.processedVideo
+      ? `/api/projects/${project.id}/video?which=processed&t=${Date.now()}`
+      : null;
   const filmPlan = project.aiFilm?.plan;
   const planStale = Boolean(filmPlan && filmPlan.version !== AI_FILM_PLAN_VERSION);
 
@@ -742,9 +755,24 @@ function ProcessStep({
 
       {processing.state === "error" && <div className="error-box">Ошибка монтажа: {processing.error}</div>}
 
-      {project.processedVideo && processing.state !== "running" && (
+      {!previewSrc && otherOutput && processing.state !== "running" && (
+        <p className="hint" style={{ marginTop: 12 }}>
+          Ролика в стиле «{styleName(style)}» ещё нет. Есть ролик в стиле «{styleName(otherStyle)}» — переключи стиль выше, чтобы посмотреть, или смонтируй этот.
+        </p>
+      )}
+      {previewSrc && processing.state !== "running" && (
         <div style={{ marginTop: 18 }}>
-          <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed&t=${Date.now()}`} controls playsInline />
+          {styleOutput && otherOutput && (
+            <p className="hint" style={{ textAlign: "center", marginBottom: 6 }}>
+              Показан ролик стиля «{styleName(style)}». Есть и «{styleName(otherStyle)}»: переключи стиль выше. На шаге публикации можно выбрать любой из них.
+            </p>
+          )}
+          {!hasOutputs && (
+            <p className="hint" style={{ textAlign: "center", marginBottom: 6 }}>
+              Показан последний смонтированный ролик. Со следующего монтажа каждый стиль хранится отдельно.
+            </p>
+          )}
+          <video className="video-preview" src={previewSrc} controls playsInline />
           <p className="hint" style={{ textAlign: "center", marginTop: 8 }}>
             Субтитры:{" "}
             {project.subtitlesSource === "scribe"
@@ -926,11 +954,13 @@ function TikTokPanel({
   screen,
   busy,
   onPublish,
+  videoStyle,
 }: {
   project: Project;
   screen: TikTokScreen;
   busy: boolean;
   onPublish: (opts: Record<string, unknown>) => Promise<void>;
+  videoStyle?: "cards" | "ai_film";
 }) {
   const [title, setTitle] = useState(screen.caption);
   const [privacy, setPrivacy] = useState("");
@@ -992,7 +1022,7 @@ function TikTokPanel({
 
       <div className="tiktok-grid">
         <div>
-          <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed`} controls playsInline />
+          <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed${videoStyle ? `&style=${videoStyle}` : ""}`} controls playsInline />
           <p className="hint" style={{ textAlign: "center", marginTop: 6 }}>Так ролик увидят в TikTok</p>
         </div>
         <div>
@@ -1110,6 +1140,13 @@ function PublishStep({
   const [busy, setBusy] = useState<string | null>(null);
   const [captionCopied, setCaptionCopied] = useState(false);
   const [connected, setConnected] = useState<Record<string, boolean>>({});
+  // какой ролик публиковать: по умолчанию выбранный стиль, если у него есть итог
+  const availableStyles = (["cards", "ai_film"] as const).filter((k) => project.outputs?.[k]);
+  const [pubStyle, setPubStyle] = useState<"cards" | "ai_film" | undefined>(() => {
+    const cur = project.montageStyle ?? "cards";
+    if (project.outputs?.[cur]) return cur;
+    return availableStyles[0];
+  });
 
   useEffect(() => {
     fetch("/api/settings")
@@ -1192,7 +1229,7 @@ function PublishStep({
       const res = await fetch(`/api/projects/${project.id}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform, ...extra }),
+        body: JSON.stringify({ platform, ...(pubStyle ? { style: pubStyle } : {}), ...extra }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error);
@@ -1229,7 +1266,7 @@ function PublishStep({
         const res = await fetch(`/api/projects/${project.id}/publish`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ platform: key, mode }),
+          body: JSON.stringify({ platform: key, mode, ...(pubStyle ? { style: pubStyle } : {}) }),
         });
         const j = await res.json();
         const pub = j.publication;
@@ -1289,6 +1326,14 @@ function PublishStep({
 
       <div className="card">
         <h2>🚀 Куда публикуем</h2>
+        {availableStyles.length > 1 && (
+          <div className="row" style={{ marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
+            <span className="hint">Какой ролик публиковать:</span>
+            <button className={`btn btn-sm ${pubStyle === "cards" ? "" : "btn-secondary"}`} onClick={() => setPubStyle("cards")} disabled={busy !== null}>🃏 Карточки</button>
+            <button className={`btn btn-sm ${pubStyle === "ai_film" ? "" : "btn-secondary"}`} onClick={() => setPubStyle("ai_film")} disabled={busy !== null}>🎬 AI-фильм</button>
+            <span className="hint">Можно опубликовать оба по очереди.</span>
+          </div>
+        )}
         <div className="row" style={{ marginBottom: 14 }}>
           <button className="btn" onClick={() => publishAll("live")} disabled={busy !== null}>
             {busy === "all" ? <span className="spin" /> : "🚀"} Опубликовать во все
@@ -1362,6 +1407,7 @@ function PublishStep({
           <TikTokPanel
             project={project}
             screen={tiktokScreen}
+            videoStyle={pubStyle}
             busy={busy === "tiktok"}
             onPublish={async (opts) => {
               await publishTo("tiktok", { tiktok: opts });

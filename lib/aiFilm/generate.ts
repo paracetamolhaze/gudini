@@ -125,30 +125,44 @@ export async function generateShot(args: {
 
   const reservation = reserveBudget("AI Film Generation", operation ? 0 : shot.cost);
   let debranded = false;
+  // Google отклоняет имена чужих персонажей либо при отправке, либо уже внутри операции
+  // (операция завершается отказом через ~15 с). В обоих случаях денег это не стоит, и
+  // сцена один раз уходит повторно с описаниями вместо имён.
+  const debrandOrThrow = (e: unknown) => {
+    if (debranded || !isThirdPartyContentError(e)) throw e;
+    const stripped = debrandPrompt(req.prompt, args.plan.bible);
+    if (stripped === req.prompt) throw e;
+    args.onProgress?.(`shot ${shot.id}: Veo отклонил имена персонажей — повтор с описаниями`);
+    console.warn(`AI-фильм: shot ${shot.id}: Veo отклонил промпт по правам третьих лиц, повтор без имён`);
+    req.prompt = stripped;
+    debranded = true;
+  };
   try {
-    if (!operation) {
-      try {
-        operation = await startVeo(req, (attempt, why) => args.onProgress?.(`shot ${shot.id}: повтор запуска ${attempt} (${why})`));
-      } catch (e) {
-        // Google отклонил имена чужих персонажей ещё до создания операции (бесплатно):
-        // один повтор с описаниями вместо имён, только для этой сцены
-        if (!isThirdPartyContentError(e)) throw e;
-        const stripped = debrandPrompt(req.prompt, args.plan.bible);
-        if (stripped === req.prompt) throw e;
-        args.onProgress?.(`shot ${shot.id}: Veo отклонил имена персонажей — повтор с описаниями`);
-        console.warn(`AI-фильм: shot ${shot.id}: Veo отклонил промпт по правам третьих лиц, повтор без имён`);
-        req.prompt = stripped;
-        debranded = true;
-        operation = await startVeo(req, (attempt, why) => args.onProgress?.(`shot ${shot.id}: повтор запуска ${attempt} (${why})`));
+    let result: Awaited<ReturnType<typeof waitVeo>> | null = null;
+    while (!result) {
+      if (!operation) {
+        try {
+          operation = await startVeo(req, (attempt, why) => args.onProgress?.(`shot ${shot.id}: повтор запуска ${attempt} (${why})`));
+        } catch (e) {
+          debrandOrThrow(e);
+          continue;
+        }
+        write({ key, request: veoBody(req), operation, debranded, startedAt: new Date().toISOString() });
+        // считаем сразу: операция принята — деньги, скорее всего, уже списаны
+        recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: shot.cost, estimated: true });
+        // The accepted call is now in the ledger; do not also count its reservation
+        // while the other groups are waiting to start.
+        releaseBudget(reservation);
       }
-      write({ key, request: veoBody(req), operation, debranded, startedAt: new Date().toISOString() });
-      // считаем сразу: операция принята — деньги, скорее всего, уже списаны
-      recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: shot.cost, estimated: true });
-      // The accepted call is now in the ledger; do not also count its reservation
-      // while the other groups are waiting to start.
-      releaseBudget(reservation);
+      try {
+        result = await waitVeo(shot.model, operation, (sec) => args.onProgress?.(`shot ${shot.id}: Veo работает ${Math.round(sec)} с`));
+      } catch (e) {
+        debrandOrThrow(e);
+        // цена отклонённой операции остаётся в леджере как осторожная оценка сверху
+        write({ key, request: veoBody(req), operation, error: String((e as any)?.message ?? e), terminalError: true, failedAt: new Date().toISOString() });
+        operation = "";
+      }
     }
-    const result = await waitVeo(shot.model, operation, (sec) => args.onProgress?.(`shot ${shot.id}: Veo работает ${Math.round(sec)} с`));
     await downloadGcs(result.gcsUri, file);
     const dur = await probeDuration(file);
     if (dur < 1) throw new Error(`Veo: shot ${shot.id} пустой (${dur.toFixed(1)} с)`);

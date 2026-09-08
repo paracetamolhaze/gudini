@@ -436,4 +436,6 @@ test("отказ Veo по правам третьих лиц распознаё�
   assert.match(out, /green cloak and iron mask/);
   assert.match(out, /the hero team/);
   assert.equal(debrandPrompt("Gudini stands on a cliff at dusk.", { supportingCharacters: [] }), "Gudini stands on a cliff at dusk.");
+  const rules = debrandPrompt("his true face is only implied, never unmasked as Stark; wearing the golden Infinity Gauntlet", { supportingCharacters: [] });
+  assert.ok(!/Stark|Infinity/.test(rules), rules);
 });

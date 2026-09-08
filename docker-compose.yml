@@ -23,6 +23,8 @@ services:
       WORKER_ONLY: "1"
       # адрес, по которому сайт виден снаружи: нужен OAuth-коллбэкам и Instagram Reels
       PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
+      # вкладка /clipy: сайт проксирует её в контейнер clipy (снаружи это делает Caddy напрямую)
+      CLIPY_URL: http://clipy:8500
     ports:
       # только с этого компьютера; из интернета — через caddy
       # 3000 открыт и в домашней сети: роутер не заворачивает свой внешний адрес обратно внутрь,
@@ -49,6 +51,30 @@ services:
     volumes:
       - gudini-worker-data:/app/data
       - ${GCLOUD_ADC_FILE:-./data/gcp-adc-missing.json}:/app/gcp-adc.json:ro
+
+  # --- Clipy, вкладка /clipy: замена лица в чужом ролике на своё (FaceFusion на GPU) ---
+  # Образ ~8 ГБ (CUDA + модели) и том clipy-data лежат там же, где остальной Docker (диск D).
+  clipy:
+    build:
+      context: ./clipy
+    container_name: gudini-clipy
+    restart: unless-stopped
+    environment:
+      # тот же вход, что у сайта: пустой SITE_PASSWORD — открыт, иначе cookie gudini_auth или /login
+      CLIPY_PASSWORD: ${SITE_PASSWORD:-}
+      CLIPY_URL_PREFIX: /clipy
+    ports:
+      # как и 3000: дома открывается напрямую http://192.168.1.68:8500/clipy, снаружи — через Caddy
+      - "8500:8500"
+    volumes:
+      - clipy-data:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # --- публичный HTTPS: включается профилем `public`, когда домен и проброс порта готовы ---
   caddy:
@@ -83,5 +109,6 @@ services:
 volumes:
   gudini-site-data:
   gudini-worker-data:
+  clipy-data:
   caddy-data:
   caddy-config:

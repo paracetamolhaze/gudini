@@ -341,7 +341,7 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           AI REELS REMAKER
-          <small>CLIPY · LOCAL FACE SWAP</small>
+          <small>CLIPY · LOCAL FACE SWAP · <a href="/">← Гудини</a></small>
         </div>
         <div className="sysbadge">
           {system ? (

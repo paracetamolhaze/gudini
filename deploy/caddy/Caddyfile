@@ -1,9 +1,8 @@
 {$DOMAIN} {
 	encode zstd gzip
-	# Clipy (AI Reels Remaker) живёт отдельным процессом на хосте (GPU), см. clipy/start.bat;
-	# пароль спрашивает сам Clipy (CLIPY_PASSWORD в clipy/.env)
+	# вкладка /clipy — контейнер clipy (замена лица на GPU); вход тот же, что у сайта
 	handle /clipy* {
-		reverse_proxy host.docker.internal:8500 {
+		reverse_proxy clipy:8500 {
 			flush_interval -1
 		}
 	}

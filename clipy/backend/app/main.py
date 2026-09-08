@@ -30,29 +30,88 @@ store = JobStore()
 queue = JobQueue(store, lambda job: pipeline.run_job(store, job))
 
 
-@app.middleware("http")
-async def _password_gate(request: Request, call_next):
-    """Optional protection when the app is published through a reverse proxy: CLIPY_PASSWORD (HTTP Basic).
-    Requests from this machine (127.0.0.1) never need the password, so local use stays frictionless."""
-    password = config.PASSWORD
-    client = request.client.host if request.client else ""
-    # Docker Desktop relays host.docker.internal through loopback, so a proxied request also looks local;
-    # the reverse proxy always adds X-Forwarded-For, direct local browsers never do.
-    proxied = bool(request.headers.get("x-forwarded-for"))
-    if password and (proxied or client not in ("127.0.0.1", "::1")):
+def _auth_cookie_value(password: str) -> str:
+    """Same cookie as the Gudini site (middleware.ts): sha256("gudini:<password>") in gudini_auth."""
+    import hashlib
+
+    return hashlib.sha256(f"gudini:{password}".encode("utf-8")).hexdigest()
+
+
+def _is_authorized(request: Request, password: str) -> bool:
+    if request.cookies.get("gudini_auth") == _auth_cookie_value(password):
+        return True
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("basic "):
         import base64
 
-        header = request.headers.get("authorization", "")
-        ok = False
-        if header.lower().startswith("basic "):
-            try:
-                raw = base64.b64decode(header[6:]).decode("utf-8", "replace")
-                ok = raw.split(":", 1)[-1] == password
-            except Exception:
-                ok = False
-        if not ok:
-            return JSONResponse(status_code=401, content={"error": {"code": "AUTH", "message": "Password required."}}, headers={"WWW-Authenticate": 'Basic realm="Clipy"'})
-    return await call_next(request)
+        try:
+            raw = base64.b64decode(header[6:]).decode("utf-8", "replace")
+            idx = raw.find(":")
+            return raw[idx + 1:] == password or raw[:idx] == password
+        except Exception:
+            return False
+    return False
+
+
+_LOGIN_HTML = """<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clipy · вход</title><style>body{margin:0;background:#0b0c10;color:#f2f3f5;font:15px/1.5 "Segoe UI",system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}
+form{background:#14161c;border:1px solid #2a2e39;border-radius:12px;padding:24px;width:320px}h1{font-size:14px;letter-spacing:.16em;color:#9aa0ad;margin:0 0 14px}
+input{width:100%;box-sizing:border-box;background:#1b1e26;border:1px solid #2a2e39;border-radius:10px;color:#f2f3f5;padding:10px 12px;font:inherit;margin-bottom:12px}
+button{width:100%;min-height:42px;border:0;border-radius:10px;background:#7c5cff;color:#fff;font:inherit;font-weight:600;cursor:pointer}.err{color:#ff6b6b;font-size:13px;margin-bottom:10px}</style></head>
+<body><form method="post"><h1>ВХОД В CLIPY</h1>{error}<input type="password" name="password" placeholder="Пароль сайта" autofocus><input type="hidden" name="next" value="{next}"><button>Войти</button></form></body></html>"""
+
+
+@app.middleware("http")
+async def _password_gate(request: Request, call_next):
+    """Same protection as the Gudini site: with SITE_PASSWORD (CLIPY_PASSWORD here) the shared cookie
+    gudini_auth or Basic auth is required; without a password everything is open. Requests from this
+    machine's loopback (native start.bat) never need the password."""
+    password = config.PASSWORD
+    path = request.url.path
+    if not password or path in (f"{P}/login", f"{P}/api/health"):
+        return await call_next(request)
+    client = request.client.host if request.client else ""
+    proxied = bool(request.headers.get("x-forwarded-for") or request.headers.get("x-forwarded-host"))
+    if not proxied and client in ("127.0.0.1", "::1"):
+        return await call_next(request)
+    if _is_authorized(request, password):
+        return await call_next(request)
+    if path.startswith(f"{P}/api/"):
+        return JSONResponse(status_code=401, content={"error": {"code": "AUTH", "message": "Требуется вход: откройте /clipy/login"}})
+    login = f"{P}/login?next={path}"
+    return RedirectResponse(login, status_code=302)
+
+
+@app.get(f"{P}/login")
+async def login_form(next: str = "/clipy/", error: str = ""):
+    if not config.PASSWORD:
+        return RedirectResponse(P or "/", status_code=302)
+    safe_next = next if next.startswith("/") and not next.startswith("//") else (P or "/")
+    msg = '<div class="err">Неверный пароль</div>' if error else ""
+    from fastapi.responses import HTMLResponse
+
+    return HTMLResponse(_LOGIN_HTML.replace("{error}", msg).replace("{next}", safe_next))
+
+
+@app.post(f"{P}/login")
+async def login_submit(request: Request):
+    form = await request.form()
+    password = str(form.get("password", ""))
+    nxt = str(form.get("next", f"{P}/"))
+    safe_next = nxt if nxt.startswith("/") and not nxt.startswith("//") else f"{P}/"
+    if not config.PASSWORD:
+        return RedirectResponse(safe_next, status_code=303)
+    if password != config.PASSWORD:
+        return RedirectResponse(f"{P}/login?error=1&next={safe_next}", status_code=303)
+    res = RedirectResponse(safe_next, status_code=303)
+    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    res.set_cookie("gudini_auth", _auth_cookie_value(config.PASSWORD), max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax", path="/", secure=secure)
+    return res
+
+
+@app.get(f"{P}/api/health")
+async def health():
+    return {"ok": True}
 
 
 @app.exception_handler(UserError)
@@ -490,6 +549,12 @@ async def root():
 
 
 if config.FRONTEND_DIST.is_dir():
+    # /clipy without a trailing slash must answer directly: the Gudini site normalises "/clipy/" to "/clipy"
+    # before proxying, and a redirect back to "/clipy/" would loop
+    @app.get(P or "/")
+    async def frontend_index():
+        return FileResponse(config.FRONTEND_DIST / "index.html", media_type="text/html")
+
     app.mount(P or "/", StaticFiles(directory=str(config.FRONTEND_DIST), html=True), name="frontend")
 else:
     @app.get(f"{P}/")

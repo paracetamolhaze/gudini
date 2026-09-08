@@ -1,91 +1,101 @@
-# Clipy — AI Reels Remaker
+# Clipy — AI Reels Remaker (вкладка /clipy сайта Гудини)
 
-Local web app: give it a TikTok / Instagram Reels / YouTube Shorts link or an MP4, upload a photo of your face,
-and it replaces the main person's face with yours while keeping the original movement, camera, cut, fps,
-duration and audio. Optional background replacement. Everything runs on your machine, no paid APIs.
-
-```
-TikTok / Reels / MP4 → yt-dlp / upload → FFmpeg normalize → face detection + identity clustering
-→ FaceFusion (reference-tracked swap + enhancer + occlusion masks) → optional Robust Video Matting background
-→ FFmpeg mux → result.mp4
-```
-
-## Quick start (Windows 10/11)
+Ссылка на TikTok / Instagram Reels / YouTube Shorts или свой MP4 + фото своего лица → тот же ролик, где
+лицо главного человека заменено на ваше. Движения, камера, монтаж, fps, длительность и звук сохраняются.
+Опционально заменяется фон. Всё работает локально на GPU, платных API нет.
 
 ```
-git clone <this repo>
-cd gudini\clipy
-setup.bat
-start.bat
+TikTok / Reels / MP4 → yt-dlp / upload → FFmpeg normalize → детекция и кластеризация людей
+→ FaceFusion (трекинг по эмбеддингу выбранного человека, occlusion-маски, enhancer)
+→ опционально Robust Video Matting (фон) → FFmpeg mux → result.mp4
 ```
 
-Open http://localhost:8500/clipy/ — the UI shows `GPU: …` and `Backend: CUDA / DIRECTML / CPU`.
+## Запуск (Docker, вместе с Гудини)
 
-`setup.bat` installs (via winget when missing) git, FFmpeg, curl, Node.js and Python 3.12 (3.11 also works),
-creates `.venv`, installs the Python deps, picks the ONNX Runtime flavour (CUDA 12 + cuDNN 9 from pip when an
-NVIDIA GPU is present, otherwise DirectML, otherwise CPU), clones FaceFusion 3.9.0 into `engines/facefusion`,
-downloads the face models (~1.9 GB) and builds the frontend. Re-run it after updates; it is idempotent.
+Clipy — сервис `clipy` в корневом `docker-compose.yml`, стартует вместе с сайтом:
 
-`setup.bat -Backend cpu` (or `directml`, `cuda`) forces a backend.
+```
+docker compose up -d --build                    # сайт, воркер и clipy
+docker compose --profile public up -d --build   # плюс Caddy: https://<домен>/clipy
+```
 
-## Layout
+Адреса: дома `http://192.168.1.68:3000/clipy` (сайт проксирует в контейнер) или напрямую
+`http://192.168.1.68:8500/clipy`, снаружи `https://gudinijr.duckdns.org/clipy`. В шапке сайта есть вкладка «Clipy».
+
+Вход тот же, что у сайта: при заданном `SITE_PASSWORD` принимается cookie `gudini_auth` сайта или своя
+страница `/clipy/login`; при пустом пароле всё открыто. Образ (~8 ГБ: CUDA 12.9 + cuDNN 9, FaceFusion 3.9.0
+с моделями) и том `clipy-data` лежат в хранилище Docker (диск D), а не в папке репозитория.
+
+GPU пробрасывается через `deploy.resources.reservations.devices` (Docker Desktop + WSL2 + драйвер NVIDIA).
+В интерфейсе видно `GPU: …` и `Backend: CUDA`; без GPU контейнер работает на CPU (медленно).
+
+## Запуск без Docker (Windows, запасной вариант)
+
+```
+cd clipy
+setup.bat        # venv, onnxruntime-gpu + CUDA из pip, FaceFusion 3.9.0, модели, сборка фронтенда
+start.bat        # http://localhost:8500/clipy/
+```
+
+`setup.bat` ставит через winget недостающие git, FFmpeg, curl, Node.js и Python 3.12 (3.11 тоже работает).
+`setup.bat -Backend cpu|directml|cuda` задаёт бэкенд принудительно. Пароль для доступа не с localhost —
+`CLIPY_PASSWORD` в `clipy/.env`.
+
+## Структура
 
 ```
 clipy/
-  backend/app/            FastAPI app (main.py), jobs.py (queue + logs), pipeline.py (stages),
-                          ffmpeg.py, downloader.py (yt-dlp), hardware.py (CUDA → DirectML → CPU), faces.py
-  backend/app/engine/     ff_analyze.py (people detection with FaceFusion's models), facefusion_runner.py,
-                          background.py (RVM matting), ff_download.py (model pre-download)
-  frontend/               React + Vite UI, built to frontend/dist and served under /clipy
-  engines/facefusion/     FaceFusion 3.9.0 (cloned by setup)
-  data/                   faces/ identities/ sources/ jobs/ outputs/ temp/ models/ logs/ uploads/ backgrounds/
-  scripts/smoke_test.py   end-to-end test against a running backend
-  setup.ps1 / setup.bat / start.bat
+  Dockerfile              node-стадия (фронтенд) + nvidia/cuda runtime (python 3.12, ffmpeg, FaceFusion, модели)
+  backend/app/            main.py (FastAPI, /clipy/api/*, статика, вход), jobs.py (очередь, логи),
+                          pipeline.py (стадии), ffmpeg.py, downloader.py (yt-dlp), hardware.py, faces.py
+  backend/app/engine/     ff_analyze.py (люди в видео на моделях FaceFusion), facefusion_runner.py,
+                          background.py (RVM), ff_download.py (модели)
+  frontend/               React + Vite, отдаётся под /clipy
+  data/                   том: faces/ identities/ sources/ jobs/ outputs/ temp/ models/ logs/ cookies.txt
+  scripts/smoke_test.py   сквозной тест против работающего backend
 ```
 
-Each job has `data/jobs/<id>/job.json` + `log.txt`, its own temp folder under `data/temp/<id>` (removed after
-success, failure or cancel) and its result in `data/outputs/<id>.mp4`.
+У каждой задачи `data/jobs/<id>/job.json` и `log.txt`, своя temp-папка (удаляется после успеха, ошибки и
+отмены), результат в `data/outputs/<id>.mp4`.
 
 ## API
 
-| Method | Path | Purpose |
+| Метод | Путь | Что делает |
 | --- | --- | --- |
-| GET | `/clipy/api/system` | GPU, backend, engine, ffmpeg, yt-dlp, cookies |
+| GET | `/clipy/api/system` | GPU, backend, движок, ffmpeg, yt-dlp, cookies |
 | POST | `/clipy/api/uploads/video` | multipart MP4/MOV/WebM → `upload_id` |
-| POST | `/clipy/api/sources` | `{url}` or `{upload_id}` → source; analysis job starts (download → prepare → detect people) |
-| GET | `/clipy/api/sources/{id}` | status, video info, `persons[]` with thumbnails |
-| POST | `/clipy/api/faces` | multipart photo → validated face (exactly one face required) |
-| POST | `/clipy/api/identities` | `{name, face_ids[]}` → saved profile ("MY FACE", up to 10 photos) |
-| POST | `/clipy/api/uploads/background` | JPEG/PNG/MP4 background |
+| POST | `/clipy/api/sources` | `{url}` или `{upload_id}` → источник; задача анализа (скачать → подготовить → найти людей) |
+| GET | `/clipy/api/sources/{id}` | статус, параметры видео, `persons[]` с миниатюрами |
+| POST | `/clipy/api/faces` | multipart фото → проверенное лицо (ровно одно лицо) |
+| POST | `/clipy/api/identities` | `{name, face_ids[]}` → профиль «MY FACE» (до 10 фото) |
+| POST | `/clipy/api/uploads/background` | JPEG/PNG/MP4 фон |
 | POST | `/clipy/api/jobs` | `{source_id, face_ids | identity_id, face_swap, target_person, quality, background}` → `{job_id}` |
 | GET | `/clipy/api/jobs/{id}` | `status`, `stage`, `progress`, `stages[]`, `error`, `result` |
 | GET | `/clipy/api/jobs/{id}/result` | result.mp4 |
-| GET | `/clipy/api/jobs/{id}/logs` | job log lines |
-| POST | `/clipy/api/jobs/{id}/cancel` | stops the worker, kills subprocesses, frees temp files |
+| GET | `/clipy/api/jobs/{id}/logs` | строки лога задачи |
+| POST | `/clipy/api/jobs/{id}/cancel` | остановить воркер, убить подпроцессы, освободить temp |
 
-Quality modes (FaceFusion processors): **Fast** = inswapper_128_fp16, box mask, no enhancer;
-**Balanced** = hyperswap_1a_256, GFPGAN 1.4 at 50 %, box + occlusion (XSeg) masks, 5-frame face tracking;
-**Best** = hyperswap with 512×512 pixel boost, GFPGAN 70 %, box + occlusion + region masks, 7-frame tracking.
-The target person is followed by identity (ArcFace embedding of the person you picked), so the swap never
-jumps to another person and resumes when the face comes back into frame.
+Режимы качества: **Fast** — inswapper_128_fp16, box-маска, без enhancer; **Balanced** — hyperswap_1a_256,
+GFPGAN 1.4 на 50 %, маски box + occlusion (XSeg), трекинг по 5 кадрам; **Best** — hyperswap с pixel boost
+512×512, GFPGAN 70 %, маски box + occlusion + region, трекинг по 7 кадрам. Человек ведётся по эмбеддингу
+(ArcFace) выбранного лица, поэтому замена не перескакивает на других людей и возобновляется, когда лицо
+возвращается в кадр.
 
-## Instagram / cookies
+## Instagram и cookies
 
-Instagram often requires a login for downloads. Export your cookies in Netscape format to
-`clipy/data/cookies.txt` (browser extensions like "Get cookies.txt LOCALLY") and retry. Alternatively set
-`CLIPY_COOKIES_FROM_BROWSER=chrome` (or `firefox`, `edge`) before `start.bat` and yt-dlp reads the browser
-profile. Only public videos can be downloaded without cookies.
+Instagram часто требует вход. Экспортируйте cookies в формате Netscape в `data/cookies.txt` (в Docker —
+внутрь тома: `docker cp cookies.txt gudini-clipy:/app/data/cookies.txt`) и повторите. Без cookies
+скачиваются только публичные ролики.
 
-## Smoke test
+## Smoke-тест
 
 ```
-start.bat                                   (in one terminal)
-.venv\Scripts\python scripts\smoke_test.py --video path\to\clip.mp4 --face path\to\me.jpg --quality fast
+python scripts/smoke_test.py --video clip.mp4 --face me.jpg --quality fast --base http://127.0.0.1:8500/clipy/api
 ```
 
-## Troubleshooting
+## Если что-то не так
 
-* `Backend: CPU` with an NVIDIA card — update the driver, then `setup.bat -Backend cuda`.
-* `GPU ran out of memory` — switch to Balanced/Fast; the runner already retries with fewer threads and a smaller pixel boost.
-* `Instagram requires authentication` — add `data/cookies.txt`.
-* Logs: `data/logs/clipy.log`, per job `data/jobs/<id>/log.txt`, and the "Show log" button in the UI.
+* `Backend: CPU` при наличии NVIDIA — проверьте `docker run --rm --gpus all nvidia/cuda:12.9.1-base-ubuntu24.04 nvidia-smi`.
+* `GPU ran out of memory` — режим Balanced/Fast; раннер и сам повторяет с меньшим числом потоков и pixel boost.
+* `Instagram requires authentication` — добавьте `cookies.txt`.
+* Логи: `docker logs gudini-clipy`, в томе `data/logs/clipy.log`, у задачи `data/jobs/<id>/log.txt`, кнопка «Show log» в интерфейсе.

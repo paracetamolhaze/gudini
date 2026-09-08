@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,7 +72,8 @@ def build_command(req: SwapRequest, preset: Preset, threads: int, pixel_boost: s
     hw = req.hardware
     providers = list(hw.execution_providers)
     encoder = "libx264"
-    if req.quality == "fast" and hw.backend == "cuda" and ffmpeg.encoder_available("h264_nvenc"):
+    # NVENC only on a native Windows install: WSL2/Docker containers list the encoder but cannot use it
+    if req.quality == "fast" and hw.backend == "cuda" and sys.platform.startswith("win") and ffmpeg.encoder_available("h264_nvenc"):
         encoder = "h264_nvenc"
     cmd = [
         config.PYTHON, "facefusion.py", "headless-run",

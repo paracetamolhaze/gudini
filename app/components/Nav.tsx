@@ -21,6 +21,10 @@ export default function Nav() {
           </Link>
         );
       })}
+      {/* отдельное приложение (контейнер clipy), поэтому обычная ссылка, а не Link */}
+      <a href="/clipy" className="nav-link">
+        Clipy
+      </a>
     </nav>
   );
 }

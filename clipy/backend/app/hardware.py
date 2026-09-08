@@ -44,11 +44,14 @@ def nvidia_dll_dirs() -> list[str]:
 
 
 def engine_env() -> dict[str, str]:
-    """Environment for engine subprocesses: CUDA DLLs from pip packages on PATH, no interactive prompts."""
+    """Environment for engine subprocesses: CUDA libraries from pip packages on PATH / LD_LIBRARY_PATH."""
     env = os.environ.copy()
     dll_dirs = nvidia_dll_dirs()
     if dll_dirs:
-        env["PATH"] = os.pathsep.join(dll_dirs + [env.get("PATH", "")])
+        if sys.platform.startswith("win"):
+            env["PATH"] = os.pathsep.join(dll_dirs + [env.get("PATH", "")])
+        else:
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(dll_dirs + [env.get("LD_LIBRARY_PATH", "")]).rstrip(os.pathsep)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     env.setdefault("OMP_NUM_THREADS", str(max(1, (os.cpu_count() or 4) // 2)))
@@ -121,11 +124,14 @@ def detect() -> Hardware:
         hw.notes.append(f"onnxruntime not importable: {e}")
         return hw
 
-    if "CUDAExecutionProvider" in hw.available_providers and hw.gpu_name:
+    if "CUDAExecutionProvider" in hw.available_providers:
+        # inside a container nvidia-smi may be missing while CUDA itself works, so test a real session
         ok, why = _cuda_session_works()
         if ok:
             hw.backend = "cuda"
             hw.execution_providers = ["cuda", "cpu"]
+            if not hw.gpu_name:
+                hw.gpu_name = "NVIDIA GPU"
             return hw
         hw.notes.append(f"CUDA present but unusable: {why}")
     if "DmlExecutionProvider" in hw.available_providers:

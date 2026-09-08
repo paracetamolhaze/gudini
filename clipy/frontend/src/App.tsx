@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { del, getJSON, postJSON, upload, RequestError, type ApiError, type Face, type Identity, type Job, type Source, type Stage, type SystemInfo } from "./api";
+import { del, getJSON, patchJSON, postJSON, upload, RequestError, type ApiError, type Face, type Identity, type Job, type Source, type Stage, type SystemInfo } from "./api";
 
 const STATUS_RU: Record<string, { text: string; tone: string; busy?: boolean }> = {
   queued: { text: "В очереди", tone: "accent", busy: true },
@@ -9,7 +9,6 @@ const STATUS_RU: Record<string, { text: string; tone: string; busy?: boolean }> 
   cancelled: { text: "Отменено", tone: "warn" },
 };
 const NONE = "";
-const ALL = "all";
 
 function errorOf(e: unknown): ApiError {
   if (e instanceof RequestError) return e.error;
@@ -31,6 +30,13 @@ function fmtDuration(s?: number) {
   const m = Math.floor(s / 60);
   const r = Math.round(s % 60);
   return m ? `${m} мин ${r} с` : `${r} с`;
+}
+
+function photoWord(n: number) {
+  const t = n % 10;
+  const teen = n % 100 >= 11 && n % 100 <= 14;
+  if (!teen && t === 1) return "фото";
+  return "фото";
 }
 
 function Drop({ accept, onFile, label, sub, disabled }: { accept: string; onFile: (f: File) => void; label: string; sub?: string; disabled?: boolean }) {
@@ -59,6 +65,17 @@ function Drop({ accept, onFile, label, sub, disabled }: { accept: string; onFile
   );
 }
 
+/** Плитка «плюс» внутри карточки человека: добавить ему ещё одно фото. */
+function PhotoAdd({ onFile, disabled, busy }: { onFile: (f: File) => void; disabled?: boolean; busy?: boolean }) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <button type="button" className="photo-add" onClick={() => !disabled && input.current?.click()} disabled={disabled} title="Добавить фото этому человеку">
+      {busy ? <span className="spin" /> : "+"}
+      <input ref={input} type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
+    </button>
+  );
+}
+
 function StageList({ stages }: { stages: Stage[] }) {
   return (
     <div className="stages">
@@ -83,14 +100,15 @@ export default function App() {
   const [uploadPct, setUploadPct] = useState<number | null>(null);
   const [sourceErr, setSourceErr] = useState<ApiError | null>(null);
 
+  // люди для замены: у каждого своё имя и свои фото
   const [faces, setFaces] = useState<Face[]>([]);
-  const [faceBusy, setFaceBusy] = useState(false);
+  const [people, setPeople] = useState<Identity[]>([]);
+  const [draftName, setDraftName] = useState<string | null>(null);
+  const [busyPerson, setBusyPerson] = useState<string | null>(null);
   const [faceErr, setFaceErr] = useState<ApiError | null>(null);
-  const [identities, setIdentities] = useState<Identity[]>([]);
-  const [profileName, setProfileName] = useState("Моё лицо");
-  const [selectedPhotos, setSelectedPhotos] = useState<string[]>([]);
+  const migrated = useRef(false);
 
-  // человек из видео -> чем заменить: "" | "i:<профиль>" | "f:<фото>"
+  // человек в видео -> кем заменить (id человека из шага 2)
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [bgEnabled, setBgEnabled] = useState(false);
   const [bg, setBg] = useState<{ background_id: string; kind: string; preview_url: string; filename: string } | null>(null);
@@ -113,16 +131,20 @@ export default function App() {
   }, []);
   const loadFaces = useCallback(async () => {
     try {
-      setFaces((await getJSON<{ faces: Face[] }>("/faces")).faces);
+      const r = await getJSON<{ faces: Face[] }>("/faces");
+      setFaces(r.faces);
+      return r.faces;
     } catch {
-      /* ignore */
+      return [] as Face[];
     }
   }, []);
-  const loadIdentities = useCallback(async () => {
+  const loadPeople = useCallback(async () => {
     try {
-      setIdentities((await getJSON<{ identities: Identity[] }>("/identities")).identities);
+      const r = await getJSON<{ identities: Identity[] }>("/identities");
+      setPeople(r.identities);
+      return r.identities;
     } catch {
-      /* ignore */
+      return [] as Identity[];
     }
   }, []);
   const loadHistory = useCallback(async () => {
@@ -135,10 +157,25 @@ export default function App() {
 
   useEffect(() => {
     void loadSystem();
-    void loadFaces();
-    void loadIdentities();
     void loadHistory();
-  }, [loadSystem, loadFaces, loadIdentities, loadHistory]);
+    // фото из старой версии не принадлежат никому: заводим по человеку на каждое, дальше их можно переименовать
+    (async () => {
+      const [fs, ids] = await Promise.all([loadFaces(), loadPeople()]);
+      if (migrated.current) return;
+      migrated.current = true;
+      const used = new Set(ids.flatMap((i) => i.face_ids));
+      const orphans = fs.filter((f) => !used.has(f.id));
+      if (!orphans.length) return;
+      for (let i = 0; i < orphans.length; i++) {
+        try {
+          await postJSON<{ identity: Identity }>("/identities", { name: `Лицо ${ids.length + i + 1}`, face_ids: [orphans[i].id] });
+        } catch {
+          /* ignore */
+        }
+      }
+      await loadPeople();
+    })();
+  }, [loadSystem, loadFaces, loadPeople, loadHistory]);
 
   useEffect(() => {
     if (!source || (source.status !== "queued" && source.status !== "processing")) return;
@@ -176,36 +213,86 @@ export default function App() {
 
   const running = !!job && (job.status === "queued" || job.status === "processing");
   const sourceReady = source?.status === "ready";
-  const people = useMemo(() => source?.persons ?? [], [source]);
+  const persons = useMemo(() => source?.persons ?? [], [source]);
   const faceById = useMemo(() => new Map(faces.map((f) => [f.id, f])), [faces]);
 
-  // первое загруженное лицо само встаёт на главного человека, дальше пользователь правит
+  // первый человек из списка сам встаёт на главного человека в кадре
   useEffect(() => {
-    if (!people.length || running) return;
-    const first = identities.length ? `i:${identities[0].id}` : faces.length > 1 ? ALL : faces.length ? `f:${faces[0].id}` : "";
-    if (!first) return;
-    setChoice((cur) => (Object.values(cur).some(Boolean) ? cur : { ...cur, [people[0].id]: first }));
-  }, [people, identities, faces, running]);
+    if (!persons.length || !people.length || running) return;
+    setChoice((cur) => (Object.values(cur).some(Boolean) ? cur : { ...cur, [persons[0].id]: people[0].id }));
+  }, [persons, people, running]);
 
-  function previewOf(value: string): Face | undefined {
-    if (value === ALL) return faces[0];
-    if (value.startsWith("f:")) return faceById.get(value.slice(2));
-    if (value.startsWith("i:")) {
-      const ident = identities.find((i) => i.id === value.slice(2));
-      return ident ? faceById.get(ident.face_ids[0]) : undefined;
+  // ---------------- люди
+  async function addPhoto(identityId: string | "draft", file: File) {
+    setBusyPerson(identityId);
+    setFaceErr(null);
+    try {
+      const r = await upload<{ face: Face }>("/faces", file);
+      setFaces((prev) => [...prev, r.face]);
+      if (identityId === "draft") {
+        const created = await postJSON<{ identity: Identity }>("/identities", { name: draftName?.trim() || `Человек ${people.length + 1}`, face_ids: [r.face.id] });
+        setPeople((prev) => [...prev, created.identity]);
+        setDraftName(null);
+      } else {
+        const person = people.find((p) => p.id === identityId);
+        const next = [...(person?.face_ids ?? []), r.face.id];
+        const upd = await patchJSON<{ identity: Identity }>(`/identities/${identityId}`, { face_ids: next });
+        setPeople((prev) => prev.map((p) => (p.id === identityId ? upd.identity : p)));
+      }
+      if (r.face.warnings?.length) setFaceErr({ code: "WARN", message: r.face.warnings.join(" ") });
+    } catch (e) {
+      setFaceErr(errorOf(e));
+    } finally {
+      setBusyPerson(null);
     }
-    return undefined;
-  }
-  function labelOf(value: string): string {
-    if (value === ALL) return `Все мои фото (${faces.length})`;
-    if (value.startsWith("i:")) return identities.find((i) => i.id === value.slice(2))?.name ?? "профиль";
-    if (value.startsWith("f:")) {
-      const i = faces.findIndex((f) => f.id === value.slice(2));
-      return `Фото ${i + 1}`;
-    }
-    return "Не менять";
   }
 
+  async function renamePerson(id: string, name: string) {
+    const person = people.find((p) => p.id === id);
+    if (!person || person.name === name.trim() || !name.trim()) return;
+    try {
+      const upd = await patchJSON<{ identity: Identity }>(`/identities/${id}`, { name: name.trim() });
+      setPeople((prev) => prev.map((p) => (p.id === id ? upd.identity : p)));
+    } catch (e) {
+      setFaceErr(errorOf(e));
+    }
+  }
+
+  async function removePhoto(identityId: string, faceId: string) {
+    const person = people.find((p) => p.id === identityId);
+    if (!person) return;
+    if (person.face_ids.length <= 1) {
+      await removePerson(identityId);
+      return;
+    }
+    if (!confirm("Удалить это фото?")) return;
+    try {
+      const upd = await patchJSON<{ identity: Identity }>(`/identities/${identityId}`, { face_ids: person.face_ids.filter((f) => f !== faceId) });
+      setPeople((prev) => prev.map((p) => (p.id === identityId ? upd.identity : p)));
+      await del(`/faces/${faceId}`);
+      setFaces((prev) => prev.filter((f) => f.id !== faceId));
+    } catch (e) {
+      setFaceErr(errorOf(e));
+    }
+  }
+
+  async function removePerson(id: string) {
+    const person = people.find((p) => p.id === id);
+    if (!person || !confirm(`Удалить «${person.name}» вместе с его фото?`)) return;
+    try {
+      await del(`/identities/${id}`);
+      for (const fid of person.face_ids) {
+        await del(`/faces/${fid}`).catch(() => {});
+      }
+      setPeople((prev) => prev.filter((p) => p.id !== id));
+      setFaces((prev) => prev.filter((f) => !person.face_ids.includes(f.id)));
+      setChoice((cur) => Object.fromEntries(Object.entries(cur).map(([k, v]) => [k, v === id ? NONE : v])));
+    } catch (e) {
+      setFaceErr(errorOf(e));
+    }
+  }
+
+  // ---------------- источник и фон
   async function addUrl() {
     if (!url.trim()) return;
     setSourceBusy(true);
@@ -234,51 +321,6 @@ export default function App() {
       setUploadPct(null);
     }
   }
-  async function addFace(file: File) {
-    setFaceBusy(true);
-    setFaceErr(null);
-    try {
-      const r = await upload<{ face: Face }>("/faces", file);
-      setFaces((prev) => [...prev, r.face]);
-      setSelectedPhotos((prev) => [...prev, r.face.id]);
-      if (r.face.warnings?.length) setFaceErr({ code: "WARN", message: r.face.warnings.join(" ") });
-    } catch (e) {
-      setFaceErr(errorOf(e));
-    } finally {
-      setFaceBusy(false);
-    }
-  }
-  async function removeFace(id: string) {
-    if (!confirm("Удалить это фото?")) return;
-    try {
-      await del(`/faces/${id}`);
-      setFaces((prev) => prev.filter((f) => f.id !== id));
-      setSelectedPhotos((prev) => prev.filter((x) => x !== id));
-      setChoice((cur) => Object.fromEntries(Object.entries(cur).map(([k, v]) => [k, v === `f:${id}` ? "" : v])));
-    } catch (e) {
-      setFaceErr(errorOf(e));
-    }
-  }
-  async function saveProfile() {
-    if (!selectedPhotos.length) return;
-    try {
-      const r = await postJSON<{ identity: Identity }>("/identities", { name: profileName, face_ids: selectedPhotos });
-      setIdentities((prev) => [r.identity, ...prev]);
-      setSelectedPhotos([]);
-    } catch (e) {
-      setFaceErr(errorOf(e));
-    }
-  }
-  async function deleteProfile(id: string) {
-    if (!confirm("Удалить профиль? Сами фото останутся.")) return;
-    try {
-      await del(`/identities/${id}`);
-      setIdentities((prev) => prev.filter((i) => i.id !== id));
-      setChoice((cur) => Object.fromEntries(Object.entries(cur).map(([k, v]) => [k, v === `i:${id}` ? "" : v])));
-    } catch (e) {
-      setFaceErr(errorOf(e));
-    }
-  }
   async function addBackground(file: File) {
     setBgBusy(true);
     setBgErr(null);
@@ -291,26 +333,20 @@ export default function App() {
     }
   }
 
+  // ---------------- задача
   const assignments = useMemo(
     () =>
-      people
-        .map((p) => ({ person: p.id, value: choice[p.id] || NONE }))
-        .filter((a) => a.value)
-        .map((a) =>
-          a.value === ALL
-            ? { person: a.person, face_ids: faces.map((f) => f.id) }
-            : a.value.startsWith("i:")
-              ? { person: a.person, identity_id: a.value.slice(2) }
-              : { person: a.person, face_ids: [a.value.slice(2)] },
-        ),
-    [people, choice, faces],
+      persons
+        .map((p) => ({ person: p.id, identity_id: choice[p.id] || NONE }))
+        .filter((a) => a.identity_id),
+    [persons, choice],
   );
   const canGenerate = sourceReady && (assignments.length > 0 || (bgEnabled && !!bg)) && !running;
   const whyDisabled = !sourceReady
     ? "Сначала добавьте видео."
-    : !faces.length
-      ? "Загрузите фото своего лица."
-      : !people.length
+    : !people.length
+      ? "Добавьте человека и его фото на шаге 2."
+      : !persons.length
         ? "В этом видео нет лица. Можно заменить только фон."
         : assignments.length === 0 && !(bgEnabled && bg)
           ? "Выберите, чьё лицо заменить."
@@ -388,7 +424,7 @@ export default function App() {
         </div>
       </header>
       <h1 className="page-title">Clipy</h1>
-      <p className="page-sub">Своё лицо в чужом ролике. Добавьте видео, загрузите фото лица и выберите, кого на кого заменить.</p>
+      <p className="page-sub">Своё лицо в чужом ролике. Добавьте видео, соберите людей с их фото и выберите, кого на кого заменить.</p>
       {hw?.notes?.length ? <div className="box warn">{hw.notes.join(" · ")}</div> : null}
 
       {/* 1. Видео */}
@@ -423,63 +459,72 @@ export default function App() {
           <div style={{ marginTop: 14 }}>
             <video className="video" src={source.video_url ?? undefined} poster={source.poster_url ?? undefined} controls playsInline preload="metadata" />
             <p className="kv" style={{ marginTop: 6 }}>
-              {source.info.width}×{source.info.height} · {fmtDuration(source.info.duration)} · {source.info.has_audio ? "со звуком" : "без звука"} · людей в кадре: {people.length}
+              {source.info.width}×{source.info.height} · {fmtDuration(source.info.duration)} · {source.info.has_audio ? "со звуком" : "без звука"} · людей в кадре: {persons.length}
             </p>
           </div>
         )}
       </section>
 
-      {/* 2. Ваши лица */}
+      {/* 2. Люди */}
       <section className="card">
         <div className="card-head">
           <span className="step-n">2</span>
-          <h2>Ваши лица</h2>
+          <h2>Люди для замены</h2>
           <span className="spacer" />
-          {faces.length > 0 && <span className="status success">Фото: {faces.length}</span>}
+          {people.length > 0 && <span className="status success">Людей: {people.length}</span>}
         </div>
-        <p className="hint" style={{ marginBottom: 10 }}>
-          Несколько фото одного человека дают более точное сходство: движок усредняет их в один отпечаток лица.
-          Загрузите 3–5 фото анфас, при хорошем свете, и выберите их щелчком, чтобы объединить в профиль.
+        <p className="hint" style={{ marginBottom: 12 }}>
+          Заведите каждого отдельно: себя, друга, кого угодно. Чем больше фото у одного человека, тем точнее сходство:
+          движок усредняет их в один отпечаток лица. Лучше всего 3–5 фото анфас, при хорошем свете, по одному лицу на фото.
         </p>
-        <Drop accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" onFile={addFace} label={faceBusy ? "Проверяем фото…" : "Загрузить фото лица"} sub="одно лицо на фото, при хорошем свете" disabled={faceBusy || running} />
         <Msg error={faceErr} kind={faceErr?.code === "WARN" ? "warn" : "err"} />
-        {faces.length > 0 && (
-          <div className="faces">
-            {faces.map((f, i) => {
-              const on = selectedPhotos.includes(f.id);
-              return (
-                <div
-                  className={`face ${on ? "sel" : ""}`}
-                  key={f.id}
-                  title={`Фото ${i + 1}`}
-                  onClick={() => !running && setSelectedPhotos((prev) => (on ? prev.filter((x) => x !== f.id) : [...prev, f.id]))}
-                >
-                  <img src={f.thumb_url} alt="" />
-                  {on && <span className="tick" aria-hidden>✓</span>}
-                  <button className="x" title="Удалить фото" onClick={(e) => { e.stopPropagation(); void removeFace(f.id); }} disabled={running}>×</button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {selectedPhotos.length > 0 && (
-          <div className="row" style={{ marginTop: 12 }}>
-            <span className="kv">Выбрано фото: {selectedPhotos.length}</span>
-            <input type="text" value={profileName} onChange={(e) => setProfileName(e.target.value)} style={{ maxWidth: 200 }} disabled={running} aria-label="Название профиля" />
-            <button className="btn btn-secondary btn-sm" onClick={saveProfile} disabled={running}>Объединить в профиль</button>
-          </div>
-        )}
-        {identities.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            <p className="hint">Профили:</p>
-            {identities.map((i) => (
-              <div className="row" key={i.id} style={{ marginTop: 6 }}>
-                <span>{i.name}</span>
-                <span className="kv">{i.face_ids.length} фото</span>
+        <div className="people">
+          {people.map((p) => (
+            <div className="person-card" key={p.id}>
+              <div className="person-head">
+                <input
+                  type="text"
+                  defaultValue={p.name}
+                  onBlur={(e) => renamePerson(p.id, e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                  disabled={running}
+                  aria-label="Имя человека"
+                />
+                <span className="kv">{p.face_ids.length} {photoWord(p.face_ids.length)}</span>
                 <span className="spacer" />
-                <button className="link-btn" onClick={() => deleteProfile(i.id)} disabled={running}>Удалить</button>
+                <button className="link-btn" onClick={() => removePerson(p.id)} disabled={running}>Удалить</button>
               </div>
-            ))}
+              <div className="faces">
+                {p.face_ids.map((fid) => {
+                  const f = faceById.get(fid);
+                  return (
+                    <div className="face" key={fid}>
+                      {f ? <img src={f.thumb_url} alt="" /> : <div className="face-missing">?</div>}
+                      <button className="x" title="Удалить фото" onClick={() => void removePhoto(p.id, fid)} disabled={running}>×</button>
+                    </div>
+                  );
+                })}
+                <PhotoAdd onFile={(file) => addPhoto(p.id, file)} disabled={running || busyPerson !== null} busy={busyPerson === p.id} />
+              </div>
+            </div>
+          ))}
+          {draftName !== null && (
+            <div className="person-card">
+              <div className="person-head">
+                <input type="text" value={draftName} onChange={(e) => setDraftName(e.target.value)} placeholder="Имя, например «Я»" autoFocus disabled={running} aria-label="Имя нового человека" />
+                <span className="spacer" />
+                <button className="link-btn" onClick={() => setDraftName(null)} disabled={running}>Отмена</button>
+              </div>
+              <div className="faces">
+                <PhotoAdd onFile={(file) => addPhoto("draft", file)} disabled={running || busyPerson !== null} busy={busyPerson === "draft"} />
+                <span className="hint" style={{ alignSelf: "center" }}>Добавьте первое фото</span>
+              </div>
+            </div>
+          )}
+        </div>
+        {draftName === null && (
+          <div className="actions">
+            <button className="btn btn-secondary" onClick={() => setDraftName("")} disabled={running}>Добавить человека</button>
           </div>
         )}
       </section>
@@ -493,14 +538,15 @@ export default function App() {
           {assignments.length > 0 && <span className="status success">Замен: {assignments.length}</span>}
         </div>
         {!sourceReady && <p className="hint">Сначала добавьте видео.</p>}
-        {sourceReady && people.length === 0 && <div className="box warn"><b>В этом видео не найдено лицо.</b>Заменить лицо не получится, но можно заменить фон.</div>}
-        {sourceReady && people.length > 0 && (
+        {sourceReady && persons.length === 0 && <div className="box warn"><b>В этом видео не найдено лицо.</b>Заменить лицо не получится, но можно заменить фон.</div>}
+        {sourceReady && persons.length > 0 && (
           <>
-            <p className="hint" style={{ marginBottom: 10 }}>Для каждого человека выберите своё лицо. Кого не выбрали, останется без изменений.</p>
+            <p className="hint" style={{ marginBottom: 10 }}>Кого не выбрали, останется без изменений.</p>
             <div className="assign">
-              {people.map((p, i) => {
+              {persons.map((p, i) => {
                 const value = choice[p.id] || NONE;
-                const preview = previewOf(value);
+                const chosen = people.find((x) => x.id === value);
+                const preview = chosen ? faceById.get(chosen.face_ids[0]) : undefined;
                 return (
                   <div className="assign-row" key={p.id}>
                     <img className="assign-face" src={p.thumbnail_url} alt="" />
@@ -512,19 +558,15 @@ export default function App() {
                     {preview ? <img className="assign-face" src={preview.thumb_url} alt="" /> : <div className="assign-face empty">нет</div>}
                     <select value={value} onChange={(e) => setChoice((c) => ({ ...c, [p.id]: e.target.value }))} disabled={running} aria-label={`Чем заменить человека ${i + 1}`}>
                       <option value={NONE}>Не менять</option>
-                      {faces.length > 1 && <option value={ALL}>Все мои фото ({faces.length})</option>}
-                      {identities.map((id) => (
-                        <option key={id.id} value={`i:${id.id}`}>{id.name} · {id.face_ids.length} фото</option>
-                      ))}
-                      {faces.map((f, fi) => (
-                        <option key={f.id} value={`f:${f.id}`}>Фото {fi + 1}</option>
+                      {people.map((x) => (
+                        <option key={x.id} value={x.id}>{x.name} · {x.face_ids.length} {photoWord(x.face_ids.length)}</option>
                       ))}
                     </select>
                   </div>
                 );
               })}
             </div>
-            {!faces.length && <p className="hint" style={{ marginTop: 10 }}>Сначала загрузите фото лица на шаге 2.</p>}
+            {!people.length && <p className="hint" style={{ marginTop: 10 }}>Сначала добавьте человека на шаге 2.</p>}
           </>
         )}
         <label className="check" style={{ marginTop: 18 }}>
@@ -547,7 +589,7 @@ export default function App() {
           <button className="btn btn-danger btn-big" onClick={cancel}>Отменить</button>
         )}
         {!running && !canGenerate && whyDisabled && <p className="hint" style={{ marginTop: 8 }}>{whyDisabled}</p>}
-        {!running && canGenerate && assignments.length > 1 && <p className="hint" style={{ marginTop: 8 }}>Замен {assignments.length}, каждая считается отдельным проходом, поэтому времени уйдёт во столько же раз больше.</p>}
+        {!running && canGenerate && assignments.length > 1 && <p className="hint" style={{ marginTop: 8 }}>Замен {assignments.length}: каждая считается отдельным проходом, поэтому времени уйдёт больше.</p>}
         <Msg error={jobErr} />
         {job && st && (
           <div style={{ marginTop: 16 }}>

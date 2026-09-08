@@ -585,6 +585,62 @@ select {
   width: 100%;
 }
 
+.people {
+  display: grid;
+  gap: 10px;
+}
+.person-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  padding: 12px;
+}
+.person-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.person-head input {
+  max-width: 220px;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: var(--bg-card);
+}
+.photo-add {
+  width: 88px;
+  height: 88px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 26px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color var(--t), color var(--t);
+}
+.photo-add:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.photo-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.face-missing {
+  width: 88px;
+  height: 88px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+
 .faces {
   display: flex;
   gap: 10px;
@@ -594,7 +650,6 @@ select {
 .face {
   position: relative;
   width: 88px;
-  cursor: pointer;
 }
 .face img {
   width: 88px;
@@ -606,24 +661,6 @@ select {
 }
 .face.dim img {
   opacity: 0.5;
-}
-.face.sel img {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
-}
-.face .tick {
-  position: absolute;
-  left: -6px;
-  top: -6px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 13px;
-  line-height: 22px;
-  text-align: center;
-  font-weight: 700;
 }
 .face .x {
   position: absolute;

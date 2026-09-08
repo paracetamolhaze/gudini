@@ -17,14 +17,14 @@ Log = Callable[[str], None]
 def ffmpeg_exe() -> str:
     exe = shutil.which("ffmpeg")
     if not exe:
-        raise UserError("FFMPEG_MISSING", "FFmpeg is not installed.", "Run setup.bat again or install FFmpeg and add it to PATH.", status=500)
+        raise UserError("FFMPEG_MISSING", "FFmpeg не установлен.", "Пересоберите Clipy или установите FFmpeg.", status=500)
     return exe
 
 
 def ffprobe_exe() -> str:
     exe = shutil.which("ffprobe")
     if not exe:
-        raise UserError("FFMPEG_MISSING", "ffprobe is not installed.", "Run setup.bat again or install FFmpeg and add it to PATH.", status=500)
+        raise UserError("FFMPEG_MISSING", "ffprobe не установлен.", "Пересоберите Clipy или установите FFmpeg.", status=500)
     return exe
 
 
@@ -52,12 +52,12 @@ def probe(path: Path) -> VideoInfo:
     cmd = [ffprobe_exe(), "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if r.returncode != 0 or not r.stdout:
-        raise UserError("CORRUPTED_VIDEO", "This video file could not be read.", "It may be corrupted or not a video. Try re-exporting it as MP4.", details=r.stderr[-1000:])
+        raise UserError("CORRUPTED_VIDEO", "Не удалось прочитать видеофайл.", "Возможно, он повреждён или это не видео. Пересохраните его как MP4.", details=r.stderr[-1000:])
     data = json.loads(r.stdout)
     video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
     audio = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), None)
     if not video:
-        raise UserError("CORRUPTED_VIDEO", "The file has no video stream.", "Upload an MP4, MOV or WebM video.")
+        raise UserError("CORRUPTED_VIDEO", "В файле нет видеодорожки.", "Загрузите видео MP4, MOV или WebM.")
     fmt = data.get("format", {})
 
     def frac(s: str) -> float:
@@ -110,7 +110,7 @@ def _run(cmd: list[str], log: Optional[Log] = None, timeout: int = 3600) -> None
         tail = (r.stderr or "")[-1500:]
         if log:
             log(tail)
-        raise UserError("FFMPEG", "Video processing failed.", "The file may be corrupted. Try re-exporting it as MP4 (H.264).", details=tail, status=500)
+        raise UserError("FFMPEG", "Не удалось обработать видео.", "Файл может быть повреждён. Пересохраните его как MP4 (H.264).", details=tail, status=500)
 
 
 def normalize(src: Path, dst: Path, info: VideoInfo, log: Optional[Log] = None) -> VideoInfo:

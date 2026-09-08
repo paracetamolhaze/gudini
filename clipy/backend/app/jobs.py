@@ -16,15 +16,15 @@ from . import config
 log = logging.getLogger("clipy")
 
 STAGES_RENDER = [
-    ("download", "Downloading video"),
-    ("prepare", "Preparing video"),
-    ("detect", "Detecting faces"),
-    ("track", "Tracking face"),
-    ("swap", "Swapping face"),
-    ("enhance", "Enhancing"),
-    ("background", "Processing background"),
-    ("encode", "Encoding"),
-    ("done", "Completed"),
+    ("download", "Скачивание видео"),
+    ("prepare", "Подготовка видео"),
+    ("detect", "Поиск лиц"),
+    ("track", "Слежение за лицом"),
+    ("swap", "Замена лица"),
+    ("enhance", "Улучшение лица"),
+    ("background", "Замена фона"),
+    ("encode", "Кодирование"),
+    ("done", "Готово"),
 ]
 
 
@@ -105,7 +105,7 @@ class JobStore:
             # jobs that were running when the server died can never finish
             if data.get("status") in ("queued", "processing"):
                 data["status"] = "failed"
-                data["error"] = {"code": "INTERRUPTED", "message": "The app was restarted while this job was running.", "hint": "Run it again."}
+                data["error"] = {"code": "INTERRUPTED", "message": "Clipy перезапустился во время этой задачи.", "hint": "Запустите её ещё раз."}
                 data["finished_at"] = now_iso()
                 try:
                     jf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -177,7 +177,7 @@ class JobQueue:
                 self.runner(job)
             except Exception as e:  # the runner handles its own errors; this is the last line of defence
                 log.exception("job %s crashed", job_id)
-                self.store.update(job, status="failed", error={"code": "CRASH", "message": "Could not process video.", "hint": str(e)[:300]}, finished_at=now_iso())
+                self.store.update(job, status="failed", error={"code": "CRASH", "message": "Не удалось обработать видео.", "hint": str(e)[:300]}, finished_at=now_iso())
             finally:
                 self.current = None
                 job.log.write(f"finished in {time.time() - started:.1f}s with status={job.data.get('status')}")

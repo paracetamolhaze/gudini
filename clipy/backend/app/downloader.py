@@ -20,10 +20,10 @@ _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 def validate_url(url: str) -> str:
     url = (url or "").strip()
     if not _URL_RE.match(url) or len(url) > 2048 or any(c.isspace() for c in url):
-        raise UserError("BAD_URL", "This is not a valid link.", "Paste a TikTok, Instagram Reels or YouTube Shorts link that starts with https://")
+        raise UserError("BAD_URL", "Это не похоже на ссылку.", "Вставьте ссылку на TikTok, Instagram Reels или YouTube Shorts, начинающуюся с https://")
     host = (urlparse(url).hostname or "").lower()
     if not any(host == h or host.endswith("." + h) for h in config.ALLOWED_URL_HOSTS):
-        raise UserError("UNSUPPORTED_HOST", "Only TikTok, Instagram and YouTube links are supported.", "Or upload the MP4 file directly.")
+        raise UserError("UNSUPPORTED_HOST", "Поддерживаются только ссылки TikTok, Instagram и YouTube.", "Или загрузите файл MP4 напрямую.")
     return url
 
 
@@ -36,7 +36,7 @@ def download(url: str, dest_dir: Path, log: Log, progress: Optional[Progress] = 
     try:
         import yt_dlp  # type: ignore
     except ImportError as e:  # pragma: no cover
-        raise UserError("YTDLP_MISSING", "yt-dlp is not installed.", "Run setup.bat again.", details=str(e), status=500)
+        raise UserError("YTDLP_MISSING", "Загрузчик yt-dlp не установлен.", "Пересоберите Clipy.", details=str(e), status=500)
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     out_tmpl = str(dest_dir / "source.%(ext)s")
@@ -99,10 +99,10 @@ def download(url: str, dest_dir: Path, log: Log, progress: Optional[Progress] = 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             if info is None:
-                raise UserError("DOWNLOAD_FAILED", "Could not download this video.", "Check that the link opens in a browser and is public.")
+                raise UserError("DOWNLOAD_FAILED", "Не удалось скачать видео.", "Проверьте, что ссылка открывается в браузере и ролик открытый.")
             duration = info.get("duration")
             if duration and duration > config.MAX_VIDEO_SECONDS:
-                raise UserError("TOO_LONG", f"The video is longer than {int(config.MAX_VIDEO_SECONDS // 60)} minutes.", "Use a shorter clip.")
+                raise UserError("TOO_LONG", f"Видео длиннее {int(config.MAX_VIDEO_SECONDS // 60)} минут.", "Возьмите ролик покороче.")
             title = info.get("title") or ""
             uploader = info.get("uploader") or info.get("channel") or ""
             log(f"downloaded: {title!r} by {uploader!r}")
@@ -114,15 +114,15 @@ def download(url: str, dest_dir: Path, log: Log, progress: Optional[Progress] = 
         raw = str(e)
         code, message, hint = classify(raw)
         if code == "PROCESSING_FAILED":
-            code, message, hint = "DOWNLOAD_FAILED", "Could not download this video.", "Check that the link opens in a browser and is public."
+            code, message, hint = "DOWNLOAD_FAILED", "Не удалось скачать видео.", "Проверьте, что ссылка открывается в браузере и ролик открытый."
         if code == "AUTH_REQUIRED" and "instagram" in url.lower():
-            hint = "Export your Instagram cookies to clipy/data/cookies.txt (Netscape format) and try again."
+            hint = "Экспортируйте cookies Instagram в файл cookies.txt (формат Netscape), положите его в папку данных Clipy и повторите."
         raise UserError(code, message, hint, details=raw[:2000])
 
     files = sorted(dest_dir.glob("source.*"), key=lambda p: p.stat().st_size, reverse=True)
     files = [f for f in files if f.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov", ".m4v")]
     if not files:
-        raise UserError("DOWNLOAD_FAILED", "The download finished but no video file was produced.", "Try again or upload the MP4 directly.")
+        raise UserError("DOWNLOAD_FAILED", "Скачивание завершилось, но видеофайла нет.", "Попробуйте ещё раз или загрузите MP4 напрямую.")
     return files[0]
 
 

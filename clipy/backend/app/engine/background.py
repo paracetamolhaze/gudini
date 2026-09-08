@@ -50,7 +50,7 @@ def ensure_model(log: Log) -> Path:
                 f.write(chunk)
         tmp.replace(path)
     except Exception as e:
-        raise UserError("MODEL_DOWNLOAD", "Could not download the background matting model.", "Check the internet connection and try again.", details=str(e), status=500)
+        raise UserError("MODEL_DOWNLOAD", "Не удалось скачать модель для замены фона.", "Проверьте интернет и попробуйте снова.", details=str(e), status=500)
     return path
 
 
@@ -102,7 +102,7 @@ class _BackgroundSource:
             data = numpy.fromfile(str(path), dtype=numpy.uint8)
             img = cv2.imdecode(data, cv2.IMREAD_COLOR)
             if img is None:
-                raise UserError("BAD_BACKGROUND", "The background image could not be read.", "Use a JPEG or PNG file.")
+                raise UserError("BAD_BACKGROUND", "Не удалось прочитать картинку фона.", "Подходят файлы JPEG и PNG.")
             self.still = _cover_resize(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), w, h)
         else:
             self._open()
@@ -121,7 +121,7 @@ class _BackgroundSource:
         n = self.w * self.h * 3
         buf = _read_exact(self.proc.stdout, n)
         if len(buf) < n:
-            raise UserError("BAD_BACKGROUND", "The background video could not be read.", "Use an MP4 file.")
+            raise UserError("BAD_BACKGROUND", "Не удалось прочитать видео фона.", "Подходит файл MP4.")
         return numpy.frombuffer(buf, dtype=numpy.uint8).reshape(self.h, self.w, 3)
 
     def close(self) -> None:
@@ -181,9 +181,9 @@ def replace_background(video: Path, background: Path, out_video: Path, hw: Hardw
         rc = writer.wait(timeout=600)
         if rc != 0:
             err = writer.stderr.read().decode("utf-8", "replace")[-1000:] if writer.stderr else ""
-            raise UserError("FFMPEG", "Video encoding failed after background replacement.", "", details=err, status=500)
+            raise UserError("FFMPEG", "Не удалось закодировать видео после замены фона.", "", details=err, status=500)
         if done == 0:
-            raise UserError("MATTING_FAILED", "Background replacement produced no frames.", "The video could not be decoded for matting.", status=500)
+            raise UserError("MATTING_FAILED", "Замена фона не дала ни одного кадра.", "Видео не удалось раскодировать.", status=500)
         log(f"background replaced on {done} frames ({encoder})")
     except Exception:
         try:

@@ -54,11 +54,11 @@ def _is_authorized(request: Request, password: str) -> bool:
 
 
 _LOGIN_HTML = """<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Clipy · вход</title><style>body{margin:0;background:#0b0c10;color:#f2f3f5;font:15px/1.5 "Segoe UI",system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}
-form{background:#14161c;border:1px solid #2a2e39;border-radius:12px;padding:24px;width:320px}h1{font-size:14px;letter-spacing:.16em;color:#9aa0ad;margin:0 0 14px}
-input{width:100%;box-sizing:border-box;background:#1b1e26;border:1px solid #2a2e39;border-radius:10px;color:#f2f3f5;padding:10px 12px;font:inherit;margin-bottom:12px}
-button{width:100%;min-height:42px;border:0;border-radius:10px;background:#7c5cff;color:#fff;font:inherit;font-weight:600;cursor:pointer}.err{color:#ff6b6b;font-size:13px;margin-bottom:10px}</style></head>
-<body><form method="post"><h1>ВХОД В CLIPY</h1>{error}<input type="password" name="password" placeholder="Пароль сайта" autofocus><input type="hidden" name="next" value="{next}"><button>Войти</button></form></body></html>"""
+<title>Вход · Clipy</title><style>body{margin:0;background:#101114;color:#f6f4ef;font:16px/1.5 "Segoe UI",system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}
+form{background:#191a1f;border:1px solid #343640;border-radius:14px;padding:24px;width:340px}h1{font-size:19px;font-weight:650;margin:0 0 14px}
+input{width:100%;box-sizing:border-box;background:#23252d;border:1px solid #343640;border-radius:10px;color:#f6f4ef;padding:12px 14px;font:inherit;margin-bottom:12px}
+button{width:100%;min-height:44px;border:0;border-radius:10px;background:#c0b4ff;color:#20183d;font:inherit;font-weight:600;cursor:pointer}.err{color:#ff8f8f;font-size:14px;margin-bottom:10px}</style></head>
+<body><form method="post"><h1>Вход в Clipy</h1>{error}<input type="password" name="password" placeholder="Пароль сайта" autofocus><input type="hidden" name="next" value="{next}"><button>Войти</button></form></body></html>"""
 
 
 @app.middleware("http")
@@ -123,7 +123,7 @@ async def _user_error(_: Request, exc: UserError):
 @app.exception_handler(Exception)
 async def _any_error(_: Request, exc: Exception):
     log.exception("unhandled")
-    return JSONResponse(status_code=500, content={"error": {"code": "INTERNAL", "message": "Something went wrong.", "hint": "See data/logs/clipy.log"}})
+    return JSONResponse(status_code=500, content={"error": {"code": "INTERNAL", "message": "Что-то пошло не так.", "hint": "Подробности в журнале Clipy."}})
 
 
 # ---------------------------------------------------------------- helpers
@@ -160,7 +160,7 @@ async def _save_upload(upload: UploadFile, allowed: set[str], max_bytes: int, de
     name = upload.filename or ""
     ext = Path(name).suffix.lower()
     if ext not in allowed:
-        raise UserError("BAD_FILE_TYPE", f"File type {ext or 'unknown'} is not supported.", "Allowed: " + ", ".join(sorted(allowed)))
+        raise UserError("BAD_FILE_TYPE", f"Файлы {ext or 'без расширения'} не поддерживаются.", "Подходят: " + ", ".join(sorted(allowed)))
     dest_dir.mkdir(parents=True, exist_ok=True)
     tmp = dest_dir / f"{uuid.uuid4().hex}{ext}"
     size = 0
@@ -172,17 +172,17 @@ async def _save_upload(upload: UploadFile, allowed: set[str], max_bytes: int, de
                     break
                 size += len(chunk)
                 if size > max_bytes:
-                    raise UserError("FILE_TOO_LARGE", f"The file is larger than {max_bytes // (1024 * 1024)} MB.")
+                    raise UserError("FILE_TOO_LARGE", f"Файл больше {max_bytes // (1024 * 1024)} МБ.")
                 f.write(chunk)
     except UserError:
         tmp.unlink(missing_ok=True)
         raise
     except OSError as e:
         tmp.unlink(missing_ok=True)
-        raise UserError("DISK_FULL", "Could not write the file. The disk may be full.", details=str(e), status=507)
+        raise UserError("DISK_FULL", "Не удалось сохранить файл. Возможно, диск заполнен.", details=str(e), status=507)
     if size == 0:
         tmp.unlink(missing_ok=True)
-        raise UserError("EMPTY_FILE", "The file is empty.")
+        raise UserError("EMPTY_FILE", "Файл пустой.")
     return tmp
 
 
@@ -235,13 +235,13 @@ async def create_source(body: SourceIn):
     elif body.upload_id:
         matches = [p for p in config.UPLOADS_DIR.glob(f"{body.upload_id}.*") if p.is_file()] if body.upload_id.isalnum() else []
         if not matches:
-            raise UserError("NOT_FOUND", "Uploaded file not found.", "Upload the video again.", status=404)
+            raise UserError("NOT_FOUND", "Загруженный файл не найден.", "Загрузите видео ещё раз.", status=404)
         original = sdir / ("original" + matches[0].suffix.lower())
         shutil.move(str(matches[0]), str(original))
         src["kind"] = "upload"
         src["files"]["original"] = str(original)
     else:
-        raise UserError("BAD_REQUEST", "Provide a link or an uploaded file.")
+        raise UserError("BAD_REQUEST", "Нужна ссылка или загруженный файл.")
     job = store.create({"id": new_id("a"), "type": "analyze", "source_id": src_id, "created_at": now_iso(), "status": "queued", "progress": 0, "stages": []})
     src["job_id"] = job.id
     pipeline.save_source(src)
@@ -303,7 +303,7 @@ async def upload_background(file: UploadFile = File(...)):
                 im.verify()
         except Exception:
             tmp.unlink(missing_ok=True)
-            raise UserError("BAD_IMAGE", "The background image could not be read.", "Use a JPEG or PNG file.")
+            raise UserError("BAD_IMAGE", "Не удалось прочитать картинку фона.", "Подходят файлы JPEG и PNG.")
     return {"background_id": tmp.stem, "kind": kind, "filename": (file.filename or "")[:120], "preview_url": f"{P}/api/backgrounds/{tmp.stem}"}
 
 
@@ -338,7 +338,7 @@ async def upload_face(file: UploadFile = File(...)):
         raise
     except Exception:
         tmp.unlink(missing_ok=True)
-        raise UserError("BAD_IMAGE", "The photo could not be read.", "Use a JPEG or PNG file.")
+        raise UserError("BAD_IMAGE", "Не удалось прочитать фото.", "Подходят файлы JPEG и PNG.")
     face = await run_in_threadpool(faces.register_face, tmp, file.filename or "", log.info)
     return {"face": _face_view(face)}
 
@@ -424,31 +424,31 @@ class JobIn(BaseModel):
 async def create_job(body: JobIn):
     src = pipeline.load_source(body.source_id)
     if not src:
-        raise UserError("NOT_FOUND", "Source video not found.", "Add the video again.", status=404)
+        raise UserError("NOT_FOUND", "Видео не найдено.", "Добавьте его ещё раз.", status=404)
     if src.get("status") != "ready":
-        raise UserError("SOURCE_NOT_READY", "The source video is still being analysed." if src.get("status") in ("queued", "processing") else "The source video failed to load.", "Wait for the analysis to finish or add the video again.")
+        raise UserError("SOURCE_NOT_READY", "Видео ещё разбирается." if src.get("status") in ("queued", "processing") else "Видео не удалось подготовить.", "Дождитесь окончания разбора или добавьте видео ещё раз.")
     if body.quality not in PRESETS:
-        raise UserError("BAD_QUALITY", "Unknown quality mode.")
+        raise UserError("BAD_QUALITY", "Неизвестный режим качества.")
     face_ids = list(body.face_ids)
     if body.identity_id:
         ident = faces.load_identity(body.identity_id)
         if not ident:
-            raise UserError("NOT_FOUND", "Face profile not found.", status=404)
+            raise UserError("NOT_FOUND", "Профиль лица не найден.", status=404)
         face_ids = ident["face_ids"] + [f for f in face_ids if f not in ident["face_ids"]]
     photos = faces.photos_for(face_ids)
     if body.face_swap and not photos:
-        raise UserError("NO_SOURCE_PHOTO", "Upload your face photo first.")
+        raise UserError("NO_SOURCE_PHOTO", "Сначала загрузите фото своего лица.")
     if body.face_swap and body.target_person != "auto" and not any(p["id"] == body.target_person for p in src.get("persons", [])):
-        raise UserError("BAD_PERSON", "The selected person was not found in this video.")
+        raise UserError("BAD_PERSON", "Выбранный человек в этом видео не найден.")
     background = None
     if body.background:
         bid = body.background.background_id
         matches = [p for p in config.BACKGROUNDS_DIR.glob(f"{bid}.*") if p.is_file()] if bid.isalnum() else []
         if not matches:
-            raise UserError("NOT_FOUND", "Background file not found.", "Upload it again.", status=404)
+            raise UserError("NOT_FOUND", "Файл фона не найден.", "Загрузите его ещё раз.", status=404)
         background = {"file": str(matches[0]), "kind": "video" if matches[0].suffix.lower() in config.VIDEO_EXTENSIONS else "image", "background_id": bid}
     if not body.face_swap and not background:
-        raise UserError("NOTHING_TO_DO", "Enable face replacement or background replacement.")
+        raise UserError("NOTHING_TO_DO", "Включите замену лица или замену фона.")
     data = {
         "id": new_id("j"),
         "type": "render",
@@ -513,7 +513,7 @@ async def delete_job(job_id: str):
     if not job:
         raise HTTPException(404, "job not found")
     if job.data.get("status") in ("queued", "processing"):
-        raise UserError("BUSY", "Cancel the job before deleting it.")
+        raise UserError("BUSY", "Сначала отмените задачу.")
     for p in (config.OUTPUTS_DIR / f"{job_id}.mp4", config.OUTPUTS_DIR / f"{job_id}.jpg"):
         p.unlink(missing_ok=True)
     shutil.rmtree(job.dir, ignore_errors=True)
@@ -559,4 +559,4 @@ if config.FRONTEND_DIST.is_dir():
 else:
     @app.get(f"{P}/")
     async def no_frontend():
-        return JSONResponse({"error": {"code": "NO_FRONTEND", "message": "Frontend is not built.", "hint": "Run setup.bat (it builds clipy/frontend)."}}, status_code=503)
+        return JSONResponse({"error": {"code": "NO_FRONTEND", "message": "Интерфейс не собран.", "hint": "Пересоберите Clipy."}}, status_code=503)

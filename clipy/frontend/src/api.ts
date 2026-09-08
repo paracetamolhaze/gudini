@@ -14,7 +14,7 @@ export class RequestError extends Error {
 
 async function handle<T>(res: Response): Promise<T> {
   if (res.ok) return (await res.json()) as T;
-  let err: ApiError = { code: "HTTP_" + res.status, message: `Request failed (${res.status})` };
+  let err: ApiError = { code: "HTTP_" + res.status, message: `Сервер ответил ошибкой ${res.status}` };
   try {
     const j = await res.json();
     if (j?.error) err = j.error;
@@ -57,9 +57,9 @@ export function upload<T>(path: string, file: File, onProgress?: (fraction: numb
         /* ignore */
       }
       if (xhr.status >= 200 && xhr.status < 300) resolve(json as T);
-      else reject(new RequestError(json?.error ?? { code: "HTTP_" + xhr.status, message: `Upload failed (${xhr.status})` }, xhr.status));
+      else reject(new RequestError(json?.error ?? { code: "HTTP_" + xhr.status, message: `Загрузка не удалась (${xhr.status})` }, xhr.status));
     };
-    xhr.onerror = () => reject(new RequestError({ code: "NETWORK", message: "Network error during upload." }, 0));
+    xhr.onerror = () => reject(new RequestError({ code: "NETWORK", message: "Связь прервалась во время загрузки." }, 0));
     const form = new FormData();
     form.append("file", file, file.name);
     xhr.send(form);

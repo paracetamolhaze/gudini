@@ -177,13 +177,13 @@ def run_swap(req: SwapRequest, log: Log, progress: Progress, cancel: threading.E
         last_error = joined[-3000:]
         arg_error = next((t for t in meaningful if "error: argument" in t or "error: unrecognized" in t), None)
         if arg_error:
-            raise UserError("ENGINE_ARGS", "The face swap engine rejected its settings.", "This is a Clipy bug; the log shows the rejected argument.", details=arg_error[:800], status=500)
+            raise UserError("ENGINE_ARGS", "Движок замены лица отклонил настройки.", "Это ошибка Clipy, подробности в журнале задачи.", details=arg_error[:800], status=500)
         if rc == 3:
-            raise UserError("CONTENT_BLOCKED", "The engine's content filter rejected this video.", "", details=last_error, status=422)
+            raise UserError("CONTENT_BLOCKED", "Фильтр содержимого движка отклонил это видео.", "", details=last_error, status=422)
         if rc == 4:
             raise Cancelled()
         if rc == 124:
-            raise UserError("TIMEOUT", "Processing took too long and was stopped.", "Try a shorter clip or Fast mode.", details=last_error, status=500)
+            raise UserError("TIMEOUT", "Обработка шла слишком долго и была остановлена.", "Возьмите ролик короче или режим «Быстро».", details=last_error, status=500)
         oom = re.search(r"out of memory|CUDA_ERROR_OUT_OF_MEMORY|CUDNN_STATUS_ALLOC_FAILED|Failed to allocate|cudaErrorMemoryAllocation|std::bad_alloc", joined, re.IGNORECASE)
         if oom and attempts < 3:
             new_threads = max(1, threads // 2)
@@ -192,11 +192,11 @@ def run_swap(req: SwapRequest, log: Log, progress: Progress, cancel: threading.E
             threads, pixel_boost, memory_strategy = new_threads, new_pb, "strict"
             continue
         if re.search(r"no face|No face|face not found", joined, re.IGNORECASE):
-            raise UserError("NO_FACE", "No face was found in the reference frame.", "Pick another person or check the source photo.", details=last_error, status=422)
+            raise UserError("NO_FACE", "В опорном кадре не найдено лицо.", "Выберите другого человека или проверьте фото.", details=last_error, status=422)
         if oom:
-            raise UserError("GPU_OOM", "GPU ran out of memory.", "Try Balanced or Fast mode, or close other GPU applications.", details=last_error, status=500)
+            raise UserError("GPU_OOM", "Видеокарте не хватило памяти.", "Попробуйте режим «Обычно» или «Быстро» либо закройте другие программы, использующие видеокарту.", details=last_error, status=500)
         if re.search(r"CUDA|cudnn|cublas|LoadLibrary", joined, re.IGNORECASE) and hw.backend == "cuda":
-            raise UserError("CUDA_ERROR", "The GPU backend failed while processing.", "Restart the app; it will re-check the GPU. Update the NVIDIA driver if this repeats.", details=last_error, status=500)
+            raise UserError("CUDA_ERROR", "Видеокарта дала сбой во время обработки.", "Перезапустите Clipy. Если повторяется, обновите драйвер NVIDIA.", details=last_error, status=500)
         if re.search(r"could not download|download failed|validating_hash_failed|hash.*failed|Downloading", joined, re.IGNORECASE):
-            raise UserError("MODEL_DOWNLOAD", "The engine could not download its models.", "Check the internet connection and run setup.bat again.", details=last_error, status=500)
-        raise UserError("ENGINE_FAILED", "Face swap failed.", "See the job log for details.", details=last_error, status=500)
+            raise UserError("MODEL_DOWNLOAD", "Движок не смог скачать модели.", "Проверьте интернет и попробуйте снова.", details=last_error, status=500)
+        raise UserError("ENGINE_FAILED", "Замена лица не удалась.", "Подробности в журнале задачи.", details=last_error, status=500)

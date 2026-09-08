@@ -113,7 +113,7 @@ def check_disk(path: Path, need_bytes: int) -> None:
     except OSError:
         return
     if usage.free < need_bytes:
-        raise UserError("DISK_FULL", "Not enough disk space.", f"About {need_bytes // (1024 * 1024)} MB is needed, {usage.free // (1024 * 1024)} MB is free.", status=507)
+        raise UserError("DISK_FULL", "Недостаточно места на диске.", f"Нужно около {need_bytes // (1024 * 1024)} МБ, свободно {usage.free // (1024 * 1024)} МБ.", status=507)
 
 
 def run_analysis_script(mode: str, input_path: Path, out_dir: Path, cancel: threading.Event, log, max_samples: int = 32) -> dict:
@@ -132,7 +132,7 @@ def run_analysis_script(mode: str, input_path: Path, out_dir: Path, cancel: thre
     if rc != 0 or not payload:
         raise friendly(RuntimeError(err[-2000:] or f"analyzer exit {rc}"), "ANALYSIS_FAILED")
     if not payload.get("ok"):
-        raise UserError(payload.get("code", "ANALYSIS_FAILED"), payload.get("message", "Face analysis failed."), "", details=payload.get("details", ""), status=422)
+        raise UserError(payload.get("code", "ANALYSIS_FAILED"), payload.get("message", "Не удалось разобрать лица."), "", details=payload.get("details", ""), status=422)
     return payload
 
 
@@ -160,14 +160,14 @@ def save_source(src: dict) -> None:
     tmp.replace(d / "source.json")
 
 
-STAGES_ANALYZE = [("download", "Downloading video"), ("prepare", "Preparing video"), ("detect", "Detecting faces"), ("done", "Completed")]
+STAGES_ANALYZE = [("download", "Скачивание видео"), ("prepare", "Подготовка видео"), ("detect", "Поиск лиц"), ("done", "Готово")]
 
 
 def run_analyze_job(store: JobStore, job: Job) -> None:
     """Job type 'analyze': fills the source record with the prepared video and the people found in it."""
     src = load_source(job.data["source_id"])
     if not src:
-        store.update(job, status="failed", error={"code": "NOT_FOUND", "message": "Source not found.", "hint": ""}, finished_at=now_iso())
+        store.update(job, status="failed", error={"code": "NOT_FOUND", "message": "Видео не найдено.", "hint": ""}, finished_at=now_iso())
         return
     tracker = StageTracker(store, job, STAGES_ANALYZE, {"download": 3, "prepare": 1, "detect": 3, "done": 0})
     store.update(job, status="processing", started_at=now_iso())
@@ -194,7 +194,7 @@ def run_analyze_job(store: JobStore, job: Job) -> None:
         original = Path(src["files"]["original"])
         info = ffmpeg.probe(original)
         if info.duration > config.MAX_VIDEO_SECONDS:
-            raise UserError("TOO_LONG", f"The video is longer than {int(config.MAX_VIDEO_SECONDS // 60)} minutes.", "Use a shorter clip.")
+            raise UserError("TOO_LONG", f"Видео длиннее {int(config.MAX_VIDEO_SECONDS // 60)} минут.", "Возьмите ролик покороче.")
         job.log.write(f"Input: {info.width}x{info.height} @ {info.fps}fps, {info.duration}s, {info.video_codec}/{info.pix_fmt}, audio={info.audio_codec or 'none'}")
         check_disk(config.DATA_DIR, int(original.stat().st_size * 3) + 200 * 1024 * 1024)
         prepared = sdir / "prepared.mp4"
@@ -268,11 +268,11 @@ def run_render_job(store: JobStore, job: Job) -> None:
     try:
         src = load_source(d["source_id"])
         if not src or src.get("status") != "ready":
-            raise UserError("SOURCE_NOT_READY", "The source video is not ready.", "Wait for the analysis to finish or add the video again.")
+            raise UserError("SOURCE_NOT_READY", "Видео ещё не готово.", "Дождитесь окончания разбора или добавьте видео ещё раз.")
         info = src["info"]
         prepared = Path(src["files"]["prepared"])
         if not prepared.is_file():
-            raise UserError("SOURCE_MISSING", "The prepared source video is missing.", "Add the video again.")
+            raise UserError("SOURCE_MISSING", "Подготовленное видео пропало.", "Добавьте видео ещё раз.")
         job.temp_dir.mkdir(parents=True, exist_ok=True)
         check_disk(config.DATA_DIR, int(prepared.stat().st_size * 6) + 500 * 1024 * 1024)
 
@@ -285,7 +285,7 @@ def run_render_job(store: JobStore, job: Job) -> None:
         face_swap = bool(d.get("face_swap", True))
         background = d.get("background") or None
         if not face_swap and not background:
-            raise UserError("NOTHING_TO_DO", "Nothing to do: enable face replacement or background replacement.")
+            raise UserError("NOTHING_TO_DO", "Нечего делать: включите замену лица или фона.")
 
         current = prepared  # the video the next stage works on
         # --- faces
@@ -295,11 +295,11 @@ def run_render_job(store: JobStore, job: Job) -> None:
         target: Optional[dict] = None
         if face_swap:
             if not persons:
-                raise UserError("NO_FACE", "No face was found in the source video.", "Face replacement needs a visible face. You can still replace the background only.", status=422)
+                raise UserError("NO_FACE", "В видео не найдено лицо.", "Для замены лица оно должно быть видно. Можно заменить только фон.", status=422)
             wanted = d.get("target_person") or "auto"
             target = persons[0] if wanted == "auto" else next((p for p in persons if p["id"] == wanted), None)
             if target is None:
-                raise UserError("BAD_PERSON", "The selected person was not found in this video.", "Pick a person from the list again.")
+                raise UserError("BAD_PERSON", "Выбранный человек в этом видео не найден.", "Выберите человека из списка заново.")
             job.log.write(f"Detected faces: {len(persons)} | Selected target: {target['id']} (seen in {target['frames_seen']} frames)")
             tracker.done(stage, f"{len(persons)} people, target {target['id']}")
         else:
@@ -324,7 +324,7 @@ def run_render_job(store: JobStore, job: Job) -> None:
             photos = [Path(p) for p in d.get("source_photos", [])]
             photos = [p for p in photos if p.is_file()]
             if not photos:
-                raise UserError("NO_SOURCE_PHOTO", "The face photo is missing.", "Upload your face photo again.")
+                raise UserError("NO_SOURCE_PHOTO", "Фото лица пропало.", "Загрузите фото ещё раз.")
             tracker.start(stage, f"{len(photos)} photo(s), {d.get('quality')}")
             out_swap = job.temp_dir / "swapped.mp4"
             job.log.write(f"Face swap started: model={preset.swapper} enhancer={preset.enhancer or 'off'} mask={'+'.join(preset.mask_types)}")
@@ -363,7 +363,7 @@ def run_render_job(store: JobStore, job: Job) -> None:
             tracker.start(stage)
             bg_file = Path(background["file"])
             if not bg_file.is_file():
-                raise UserError("NO_BACKGROUND", "The background file is missing.", "Upload it again.")
+                raise UserError("NO_BACKGROUND", "Файл фона пропал.", "Загрузите его ещё раз.")
             out_bg = job.temp_dir / "background.mp4"
             bg_engine.replace_background(current, bg_file, out_bg, hw, job.log.write, lambda f, n: tracker.progress("background", f, n), job.cancel)
             # the matting pass writes video only; put the original audio back

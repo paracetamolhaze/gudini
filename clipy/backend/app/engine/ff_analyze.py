@@ -66,7 +66,7 @@ def bootstrap(target_path: str, providers: list[str]) -> None:
 
     for module in (face_detector, face_landmarker, face_recognizer, face_classifier):
         if not module.pre_check():
-            fail("MODEL_DOWNLOAD", "Could not download the face models.", f"{module.__name__}.pre_check() failed")
+            fail("MODEL_DOWNLOAD", "Не удалось скачать модели лиц.", f"{module.__name__}.pre_check() failed")
 
 
 def face_to_dict(face, frame_w: int, frame_h: int) -> dict:
@@ -110,7 +110,7 @@ def analyze_video(path: str, out_dir: Path, max_samples: int, providers: list[st
 
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
-        fail("CORRUPTED_VIDEO", "This video file could not be read.")
+        fail("CORRUPTED_VIDEO", "Не удалось прочитать видеофайл.")
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
@@ -230,7 +230,7 @@ def analyze_image(path: str, out_dir: Path, providers: list[str]) -> dict:
 
     frame = cv2.imread(path, cv2.IMREAD_COLOR)
     if frame is None:
-        fail("BAD_IMAGE", "The photo could not be read.", "Use a JPEG or PNG file.")
+        fail("BAD_IMAGE", "Не удалось прочитать фото.", "Подходят файлы JPEG и PNG.")
     h, w = frame.shape[:2]
     faces = get_many_faces([frame])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -241,7 +241,7 @@ def analyze_image(path: str, out_dir: Path, providers: list[str]) -> dict:
         crop_thumb(frame, f.bounding_box, out_dir / "thumb.jpg", size=320)
         fw = float(f.bounding_box[2] - f.bounding_box[0])
         result["face_width"] = round(fw, 1)
-        result["warnings"] = ["Face is small in this photo, use a closer one for better quality."] if fw < 120 else []
+        result["warnings"] = ["Лицо на фото мелкое, для лучшего качества возьмите фото крупнее."] if fw < 120 else []
     return result
 
 
@@ -262,7 +262,7 @@ def main() -> None:
         raise
     except Exception as e:  # noqa
         traceback.print_exc(file=sys.stderr)
-        fail("ANALYSIS_FAILED", "Face analysis failed.", f"{type(e).__name__}: {e}")
+        fail("ANALYSIS_FAILED", "Не удалось разобрать лица.", f"{type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

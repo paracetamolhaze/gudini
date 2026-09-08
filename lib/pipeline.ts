@@ -15,7 +15,7 @@ import {
 } from "./speechCleanupPlan";
 import { planSpeechCleanup } from "./speechCleanupPlanner";
 import { planCleanupCuts } from "./speechCleanupRun";
-import { recordFlat, AUDIO_PRICES, assertBudget, setPriorProjectCost, priorProjectCost } from "./costLedger";
+import { recordFlat, AUDIO_PRICES, assertBudget, setPriorProjectCost, priorProjectCostBreakdown } from "./costLedger";
 import { runMontageV3, prepareLibrary, type PreparedLibrary } from "./montageV3Pipeline";
 import { scribeTranscribe, whisperTranscribe, alignScriptToDuration, Word } from "./transcribe";
 import { fileFingerprint, textHash } from "./fileFingerprint";
@@ -27,7 +27,8 @@ import { runAiFilmStage } from "./aiFilm/run";
 import { renderFilmComposite } from "./aiFilm/composite";
 import { checkAiSegments } from "./aiFilm/check";
 import type { AiFilmPlan, GroupClip } from "./aiFilm/types";
-import { CARD, CARD_FILTER } from "./topInset";
+import { CARD, CARD_FILTER, authorFitFilter } from "./topInset";
+export { authorFitFilter } from "./topInset";
 import { applyScriptFormatting } from "./scriptFormat";
 import { attachScriptPunctuation } from "./scriptPunctuation";
 import { generateMeta } from "./ai";
@@ -111,7 +112,7 @@ export async function processProject(id: string): Promise<void> {
     if (!info.hasAudio) throw new Error("В видео нет звуковой дорожки — запишите с микрофоном");
     // Предел на проект целиком: прошлые прогоны (cost-runs) плюс этот. Три неудачи
     // подряд на одном проекте стоили $1.71 — четвёртую без явного решения не начинать.
-    setPriorProjectCost(priorProjectCost(dir));
+    setPriorProjectCost(priorProjectCostBreakdown(dir));
     assertBudget("Media Research", 0);
 
     // Запись из браузера (телесуфлёр) приводится к обычному файлу: постоянные 30 fps, честные
@@ -408,7 +409,8 @@ export async function processProject(id: string): Promise<void> {
         keepRunLedger(dir, "done");
         console.log(`Стоимость плана AI-фильма (переменные API): $${summarize().totals.variableApiCost.toFixed(4)}`);
         updateProject(id, {
-          aiFilm: { ...(project.aiFilm ?? {}), request: "plan", plan: film.plan, status: "planned", error: undefined },
+          processedVideo: null,
+          aiFilm: { ...(project.aiFilm ?? {}), request: "plan", plan: film.plan, status: "planned", generatedAt: undefined, spent: undefined, error: undefined },
           processing: { state: "done", step: "План фильма готов", progress: 100 },
         });
         return;
@@ -728,18 +730,6 @@ export async function normalizeBrowserRecording(
  * тот же приём, что у карточек в brollEntity. Раньше центр вырезался до 9:16, и веб-камера
  * давала «зум ×3», которого автор в превью не видел.
  */
-export function authorFitFilter(displayWidth: number, displayHeight: number): string {
-  const target = 1080 / 1920;
-  const ratio = displayWidth > 0 && displayHeight > 0 ? displayWidth / displayHeight : target;
-  if (Math.abs(ratio - target) / target < 0.02) return "scale=1080:1920:flags=lanczos,setsar=1";
-  return (
-    "split[fitbg][fitfg];" +
-    "[fitbg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=28,eq=brightness=-0.12:saturation=0.75[fitbgb];" +
-    "[fitfg]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos[fitfgs];" +
-    "[fitbgb][fitfgs]overlay=(W-w)/2:(H-h)/2,setsar=1"
-  );
-}
-
 export async function buildCleanSource(
   dir: string,
   raw: string,
@@ -828,9 +818,9 @@ export async function renderPlan(
   // отдаёт 192 кГц, и без aresample ролик кодировался в AAC 96 кГц с шипением.
   const voice = "afftdn=nr=10:nf=-45:tn=1,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000";
   const audioChain = music
-    ? `[0:a]${voice}[vo];` +
+    ? `[0:a]${voice},asplit=2[vo][sidechain];` +
       `[1:a]volume=0.22,aresample=48000[mus];` +
-      `[mus][vo]sidechaincompress=threshold=0.05:ratio=12:attack=20:release=500[duck];` +
+      `[mus][sidechain]sidechaincompress=threshold=0.05:ratio=12:attack=20:release=500[duck];` +
       `[vo][duck]amix=inputs=2:duration=first:normalize=0[a]`
     : `[0:a]${voice}[a]`;
 

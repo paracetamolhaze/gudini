@@ -3,6 +3,7 @@ import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, projectDir, updateProject } from "@/lib/store";
 import { touchWorker } from "@/lib/workerState";
+import { isAiFilmPlanResult } from "@/lib/montageStyle";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -27,11 +28,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   }
 
   // план AI-фильма: видео ещё нет, пользователь смотрит план и цену и решает
-  if (body.aiFilm && typeof body.aiFilm === "object" && body.aiFilm.plan && !body.aiFilm.generatedAt) {
+  if (isAiFilmPlanResult({ montageStyle: project.montageStyle, aiFilm: body.aiFilm })) {
     return NextResponse.json(
       updateProject(id, {
         ...(research ? { research } : {}),
-        aiFilm: { ...(project.aiFilm ?? {}), ...body.aiFilm, request: "plan", status: "planned" },
+        processedVideo: null,
+        aiFilm: {
+          ...(project.aiFilm ?? {}), ...body.aiFilm, request: "plan", status: "planned",
+          generatedAt: undefined, spent: undefined, error: undefined,
+        },
         processing: { state: "idle", step: "План фильма готов", progress: 0 },
       }),
     );

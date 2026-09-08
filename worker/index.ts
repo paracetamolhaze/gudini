@@ -18,6 +18,7 @@ import { runFromLedgerFile, ledgerStamp, SpendRun } from "../lib/spendLog";
 import { processProject } from "../lib/pipeline";
 import { fileFingerprint, textHash } from "../lib/fileFingerprint";
 import { canRedeliver, readDelivery, writeDelivery, clearDelivery } from "../lib/deliveryMarker";
+import { isAiFilmPlanResult } from "../lib/montageStyle";
 
 // --- .env ---
 try {
@@ -214,6 +215,9 @@ async function runJob(id: string): Promise<void> {
     const now = {
       rawFingerprint: fileFingerprint(path.join(projectDir(id), project.rawVideo!)),
       scriptHash: textHash(project.script ?? ""),
+      montageStyle: project.montageStyle ?? "cards",
+      aiFilmPlanHash: project.montageStyle === "ai_film" && project.aiFilm?.plan
+        ? textHash(JSON.stringify(project.aiFilm.plan)) : undefined,
     };
     const pending = readDelivery(id);
     const filmPlanOnly = project.montageStyle === "ai_film" && (project.aiFilm?.request ?? "plan") === "plan";
@@ -225,12 +229,13 @@ async function runJob(id: string): Promise<void> {
     }
 
     const done = getProject(id)!;
-    if (done.processing.state === "done" && !done.processedVideo && done.aiFilm?.plan) {
+    if (done.processing.state === "done" && isAiFilmPlanResult(done) && done.aiFilm?.plan) {
       // план AI-фильма: видео нет, сайт показывает план и цену, генерация — после подтверждения
       await api(`/api/worker/complete/${id}`, { method: "POST", body: JSON.stringify({ aiFilm: done.aiFilm, research: done.research }) });
       console.log(`✔ Задача ${id}: план AI-фильма отправлен (оценка $${done.aiFilm.plan.stats.estimatedCost.toFixed(2)}, AI ${done.aiFilm.plan.stats.aiSeconds} с из ${done.aiFilm.plan.stats.speechSeconds} с)`);
     } else if (done.processing.state === "done") {
       const deliverable = {
+        montageStyle: done.montageStyle ?? "cards",
         subtitlesSource: done.subtitlesSource,
         brollCount: done.brollCount ?? 0,
         coverOffsetSec: done.coverOffsetSec ?? 1,
@@ -238,7 +243,7 @@ async function runJob(id: string): Promise<void> {
         coverReason: done.coverReason,
         meta: done.meta,
         research: done.research,
-        ...(done.aiFilm ? { aiFilm: done.aiFilm } : {}),
+        ...(done.montageStyle === "ai_film" && done.aiFilm ? { aiFilm: done.aiFilm } : {}),
       };
       writeDelivery(id, {
         at: new Date().toISOString(),

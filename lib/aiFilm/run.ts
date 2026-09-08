@@ -29,8 +29,9 @@ export function filmBudget(): number {
 }
 
 /** Ключ входных данных плана: чистая речь + сценарий + версии + модели + персонаж с эталонами + мир. */
-export function planKey(words: Word[], script: string, character: { id: string; refHash: string }, universe: { id: string; hash: string }): string {
-  return `${textHash(words.map((w) => w.word).join(" "))}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:${character.id}@${character.refHash}:${universe.id}@${universe.hash}`;
+export function planKey(words: Word[], script: string, character: { id: string; refHash: string }, universe: { id: string; hash: string }, duration?: number): string {
+  const speech = JSON.stringify({ words: words.map((w) => [w.word, w.start, w.end]), duration: duration ?? words.at(-1)?.end ?? 0 });
+  return `${textHash(speech)}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:${character.id}@${character.refHash}:${universe.id}@${universe.hash}`;
 }
 
 export function loadPlanFile(dir: string): AiFilmPlan | null {
@@ -59,7 +60,7 @@ export async function runAiFilmStage(args: {
   const request = project.aiFilm?.request ?? "plan";
   const character = loadCharacterProfile();
   const universe = loadUniverseProfile();
-  const key = planKey(words, project.script ?? "", character, universe);
+  const key = planKey(words, project.script ?? "", character, universe, duration);
   const budget = filmBudget();
   const coverage = coverageConfig();
   const cfg = { key, universe, budgetUsd: budget, maxCoverage: coverage.max, concurrency: veoConcurrency(), callMinutes: veoCallMinutes() };

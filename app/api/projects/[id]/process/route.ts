@@ -11,6 +11,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   if (!project) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
   if (!project.rawVideo) return NextResponse.json({ error: "Сначала загрузите видео" }, { status: 400 });
 
+  if (project.processing.state === "running") {
+    // Проверяем до изменения фазы: повторный запрос не должен менять активное задание.
+    const age = Date.now() - new Date(project.processing.at ?? 0).getTime();
+    if (age < 15 * 60 * 1000) return NextResponse.json(project);
+  }
+
   // AI-фильм идёт в две фазы: план (без Veo) → подтверждение пользователем → генерация.
   // Платная генерация без плана не запускается — это правило, а не настройка.
   const body = await req.json().catch(() => ({}));
@@ -20,12 +26,6 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       return NextResponse.json({ error: "Сначала соберите план фильма и подтвердите его" }, { status: 400 });
     }
     project = updateProject(id, { aiFilm: { ...(project.aiFilm ?? {}), request, error: undefined } })!;
-  }
-
-  if (project.processing.state === "running") {
-    // зависшую задачу (без обновлений > 15 минут) можно перезапустить
-    const age = Date.now() - new Date(project.processing.at ?? 0).getTime();
-    if (age < 15 * 60 * 1000) return NextResponse.json(project);
   }
 
   if (workerActive()) {

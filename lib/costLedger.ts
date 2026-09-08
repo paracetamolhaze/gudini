@@ -93,10 +93,11 @@ export const IMAGE_PRICES: Record<string, number> = {
 
 let entries: CostEntry[] = [];
 /** Запросы, которые уже отправлены, но ещё не учтены: их оценка держит место в бюджете. */
-const reservations = new Map<number, number>();
+const reservations = new Map<number, { stage: CostStage; cost: number }>();
 let reservationSeq = 0;
-/** Расходы прошлых прогонов этого проекта (cost-runs): для суммарного предела проекта. */
+/** Общие стадии и Veo имеют независимые накопительные бюджеты проекта. */
 let priorCost = 0;
+let priorFilmCost = 0;
 
 export function resetLedger(): void {
   entries = [];
@@ -105,27 +106,37 @@ export function resetLedger(): void {
 }
 
 /**
- * Предел этого запуска, заданный стадией (AI-фильм: бюджет фильма вместо $2 на карточки).
- * Действует и вместо предела проекта: прошлые прогоны карточек не должны запрещать фильм,
- * который пользователь только что подтвердил с ценой. Сбрасывается resetLedger.
+ * Подтверждённый предел запуска Veo. Общие стадии сохраняют обычные ограничения;
+ * прошлые генерации Veo также учитываются в MEDIA_FILM_MAX_COST_USD.
+ * Сбрасывается resetLedger.
  */
 let runLimitOverride: number | null = null;
 export function setRunCostLimit(usd: number | null): void {
   runLimitOverride = usd != null && Number.isFinite(usd) && usd > 0 ? usd : null;
 }
 
-export function setPriorProjectCost(usd: number): void {
-  priorCost = Number.isFinite(usd) && usd > 0 ? usd : 0;
+export type ProjectCostBreakdown = { total: number; aiFilmGeneration: number };
+const positiveCost = (v: unknown): number => Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0;
+
+export function setPriorProjectCost(usd: number | ProjectCostBreakdown): void {
+  const total = positiveCost(typeof usd === "number" ? usd : usd.total);
+  priorFilmCost = typeof usd === "number" ? 0 : Math.min(total, positiveCost(usd.aiFilmGeneration));
+  priorCost = Number(Math.max(0, total - priorFilmCost).toFixed(6));
 }
 
 export function inFlightCost(): number {
   let sum = 0;
-  for (const v of reservations.values()) sum += v;
+  for (const v of reservations.values()) sum += v.cost;
   return sum;
 }
 
 /** Сумма переменных расходов прошлых прогонов проекта по сохранённым леджерам. */
 export function priorProjectCost(dir: string): number {
+  return priorProjectCostBreakdown(dir).total;
+}
+
+/** Старые леджеры без стадий консервативно относятся к общему бюджету. */
+export function priorProjectCostBreakdown(dir: string): ProjectCostBreakdown {
   const runs = path.join(dir, "cost-runs");
   const files: string[] = [];
   try {
@@ -136,13 +147,21 @@ export function priorProjectCost(dir: string): number {
     if (fs.existsSync(single)) files.push(single);
   }
   let total = 0;
+  let aiFilmGeneration = 0;
   for (const f of files) {
     try {
       const j = JSON.parse(fs.readFileSync(f, "utf8"));
-      total += Number(j?.summary?.totals?.variableApiCost ?? 0) || 0;
+      const rows = Array.isArray(j?.entries) ? j.entries : null;
+      const runTotal = positiveCost(j?.summary?.totals?.variableApiCost ?? rows?.reduce((sum: number, e: any) => sum + positiveCost(e.estimatedCost), 0));
+      const stages = Array.isArray(j?.summary?.stages) ? j.summary.stages : [];
+      const film = rows
+        ? rows.filter((e: any) => e.stage === "AI Film Generation").reduce((sum: number, e: any) => sum + positiveCost(e.estimatedCost), 0)
+        : stages.filter((e: any) => e.stage === "AI Film Generation").reduce((sum: number, e: any) => sum + positiveCost(e.cost), 0);
+      total += runTotal;
+      aiFilmGeneration += Math.min(runTotal, film);
     } catch {}
   }
-  return total;
+  return { total, aiFilmGeneration };
 }
 
 export function record(e: CostEntry): void {
@@ -373,7 +392,9 @@ export class CostLimitError extends Error {
         (reserved ? ` плюс ${reserved.toFixed(4)}$ за запросы, которые ещё выполняются` : "") +
         (projected ? `, следующий запрос оценён в ${projected.toFixed(4)}$` : "") +
         ` при пределе ${limit}$. Стадия «${stage}» остановлена ДО отправки платного запроса. ` +
-        "Поднимите MEDIA_JOB_MAX_COST_USD или снимите MEDIA_JOB_HARD_LIMIT.",
+        (stage === "AI Film Generation"
+          ? "Проверьте бюджет фильма MEDIA_FILM_MAX_COST_USD."
+          : "Поднимите MEDIA_JOB_MAX_COST_USD или снимите MEDIA_JOB_HARD_LIMIT."),
     );
     this.name = "CostLimitError";
   }
@@ -387,11 +408,12 @@ export class ProjectCostLimitError extends Error {
     readonly limit: number,
     readonly stage: CostStage,
     readonly projected = 0,
+    readonly limitSetting = "MEDIA_PROJECT_MAX_COST_USD",
   ) {
     super(
       `Суммарные расходы проекта ${(prior + spent + projected).toFixed(2)}$ (прошлые прогоны ${prior.toFixed(2)}$, ` +
         `этот ${spent.toFixed(2)}$` + (projected ? `, следующий запрос ${projected.toFixed(2)}$` : "") + ") " +
-        `превысили предел проекта MEDIA_PROJECT_MAX_COST_USD=${limit}$. Стадия «${stage}» остановлена ДО платного запроса. ` +
+        `превысили предел проекта ${limitSetting}=${limit}$. Стадия «${stage}» остановлена ДО платного запроса. ` +
         "Поднимите предел, если монтаж этого проекта действительно нужен.",
     );
     this.name = "ProjectCostLimitError";
@@ -453,19 +475,23 @@ export function projectRequestCost(args: {
  */
 export function assertBudget(stage: CostStage, projectedCost = 0): void {
   const guard = costGuard();
-  const max = runLimitOverride ?? guard.max;
-  const hardLimit = runLimitOverride != null ? true : guard.hardLimit;
-  const projectMax = runLimitOverride != null ? priorCost + runLimitOverride : projectGuard();
+  const film = stage === "AI Film Generation";
+  const max = film ? runLimitOverride ?? guard.max : guard.max;
+  const hardLimit = film && runLimitOverride != null ? true : guard.hardLimit;
+  const filmLimit = positiveCost(process.env.MEDIA_FILM_MAX_COST_USD ?? 12) || 12;
+  const projectMax = film ? filmLimit : projectGuard();
   if (!hardLimit && !projectMax) return;
-  const spent = summarize().totals.variableApiCost;
-  const reserved = inFlightCost();
+  const sameBudget = (s: CostStage) => (s === "AI Film Generation") === film;
+  const spent = Number(entries.filter((e) => sameBudget(e.stage)).reduce((sum, e) => sum + e.estimatedCost, 0).toFixed(6));
+  const reserved = [...reservations.values()].filter((r) => sameBudget(r.stage)).reduce((sum, r) => sum + r.cost, 0);
+  const prior = film ? priorFilmCost : priorCost;
   // предел одного запуска: потрачено + запросы в полёте + этот запрос
   if (hardLimit && Number.isFinite(max) && max > 0 && spent + reserved + projectedCost > max) {
     throw new CostLimitError(spent, max, stage, projectedCost, reserved);
   }
   // предел проекта: то же плюс прошлые прогоны (три неудачи подряд на одном проекте стоили $1.71)
-  if (projectMax && priorCost + spent + reserved + projectedCost > projectMax) {
-    throw new ProjectCostLimitError(priorCost, spent + reserved, projectMax, stage, projectedCost);
+  if (projectMax && prior + spent + reserved + projectedCost > projectMax) {
+    throw new ProjectCostLimitError(prior, spent + reserved, projectMax, stage, projectedCost, film ? "MEDIA_FILM_MAX_COST_USD" : "MEDIA_PROJECT_MAX_COST_USD");
   }
 }
 
@@ -477,7 +503,7 @@ export function assertBudget(stage: CostStage, projectedCost = 0): void {
 export function reserveBudget(stage: CostStage, projectedCost = 0): number {
   assertBudget(stage, projectedCost);
   const id = ++reservationSeq;
-  reservations.set(id, projectedCost);
+  reservations.set(id, { stage, cost: projectedCost });
   return id;
 }
 
@@ -499,13 +525,19 @@ export function checkGuard(): { level: "ok" | "warn" | "over"; cost: number; top
   const s = summarize();
   const { warn, max } = costGuard();
   const cost = s.totals.variableApiCost;
-  const top = [...s.stages].sort((a, b) => b.cost - a.cost)[0];
-  const blame = top ? `Больше всего съела стадия «${top.stage}» (${top.cost.toFixed(4)}$).` : "";
-  if (cost >= max) {
-    return { level: "over", cost, topStage: top?.stage, message: `Стоимость ролика ${cost.toFixed(4)}$ превысила предел ${max}$. ${blame}` };
+  const filmCost = s.stages.find((row) => row.stage === "AI Film Generation")?.cost ?? 0;
+  const commonCost = Number(Math.max(0, cost - filmCost).toFixed(6));
+  const filmMax = Math.min(runLimitOverride ?? Infinity, positiveCost(process.env.MEDIA_FILM_MAX_COST_USD ?? 12) || 12);
+  if (filmCost >= filmMax) {
+    return { level: "over", cost, topStage: "AI Film Generation", message: `Стоимость генерации Veo ${filmCost.toFixed(4)}$ достигла предела ${filmMax}$.` };
   }
-  if (cost >= warn) {
-    return { level: "warn", cost, topStage: top?.stage, message: `Стоимость ролика ${cost.toFixed(4)}$ выше порога ${warn}$. ${blame}` };
+  const top = s.stages.filter((row) => row.stage !== "AI Film Generation").sort((a, b) => b.cost - a.cost)[0];
+  const blame = top ? `Больше всего съела стадия «${top.stage}» (${top.cost.toFixed(4)}$).` : "";
+  if (commonCost >= max) {
+    return { level: "over", cost, topStage: top?.stage, message: `Стоимость общих стадий ${commonCost.toFixed(4)}$ достигла предела ${max}$. ${blame}` };
+  }
+  if (commonCost >= warn) {
+    return { level: "warn", cost, topStage: top?.stage, message: `Стоимость общих стадий ${commonCost.toFixed(4)}$ выше порога ${warn}$. ${blame}` };
   }
   return { level: "ok", cost };
 }

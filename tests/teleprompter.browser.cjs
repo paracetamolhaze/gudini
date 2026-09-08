@@ -10,6 +10,7 @@ const { build } = require('esbuild');
 const { chromium } = require('playwright');
 
 let browser, server, url;
+const liveId='__framing_check__';
 before(async () => {
   const result = await build({
     stdin: {
@@ -31,18 +32,36 @@ before(async () => {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   url = `http://127.0.0.1:${server.address().port}`;
+  if (process.env.CAPTURE_SITE_URL) url = `${process.env.CAPTURE_SITE_URL.replace(/\/$/,'')}/project/${liveId}`;
   const installed = process.platform === 'win32'
     ? ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(p => fs.existsSync(p))
     : undefined;
   browser = await chromium.launch({ headless: true, executablePath: process.env.CAPTURE_BROWSER || installed,
-    args: ['--autoplay-policy=no-user-gesture-required'] });
+    args: ['--autoplay-policy=no-user-gesture-required',
+      ...(process.env.CAPTURE_HOST_RULES ? [`--host-resolver-rules=${process.env.CAPTURE_HOST_RULES}`] : [])] });
 });
 after(async () => { await browser?.close(); await new Promise(resolve => server ? server.close(resolve) : resolve()); });
 
 async function openCamera(width, height, viewport, fallback = false) {
   const page = await browser.newPage({ viewport, isMobile: viewport.width < 500, hasTouch: viewport.width < 500 });
   const errors = [];
+  const uploads=[];
   page.on('pageerror', error => errors.push(error.message));
+  if (process.env.CAPTURE_SITE_URL) {
+    const project={id:liveId,topic:'Проверка кадра 9:16',script:'Тестовый текст НЕ должен попасть в видео',rawVideo:null,processedVideo:null,processing:{state:'idle'},publications:[],meta:null};
+    // All API requests are intercepted: this live-UI check cannot modify real projects,
+    // upload footage, start paid processing or publish anything.
+    await page.route('**/api/**', async route=>{
+      const request=route.request();const pathname=new URL(request.url()).pathname;
+      if (pathname===`/api/projects/${liveId}` && request.method()==='GET') return route.fulfill({json:project});
+      if (pathname===`/api/projects/${liveId}/upload` && request.method()==='PUT') {
+        uploads.push(request.postDataBuffer());project.rawVideo='record.mp4';
+        return route.fulfill({json:{received:Number(request.headers()['x-offset']||0)+request.postDataBuffer().length,uploadedSize:Number(request.headers()['x-file-size'])}});
+      }
+      if(request.method()!=='GET') errors.push(`Unexpected mutation blocked: ${request.method()} ${pathname}`);
+      await route.fulfill({json:{}});
+    });
+  }
   await page.addInitScript(({ width, height, fallback }) => {
     if (fallback) HTMLVideoElement.prototype.requestVideoFrameCallback = undefined;
     window.testStreams = [];
@@ -71,9 +90,13 @@ async function openCamera(width, height, viewport, fallback = false) {
     };
   }, { width, height, fallback });
   await page.goto(url);
+  if (process.env.CAPTURE_SITE_URL) {
+    await page.getByRole('button',{name:/2\. Съёмка/}).click();
+    await page.getByRole('button',{name:/Записать с телесуфлёром/}).click();
+  }
   await page.getByRole('button', { name: 'Начать запись' }).waitFor();
   await page.waitForFunction(() => ![...document.querySelectorAll('button')].find(b=>b.textContent.includes('Начать запись')).disabled);
-  return { page, errors };
+  return { page, errors, uploads };
 }
 
 for (const [name,width,height,viewport,fallback] of [
@@ -82,7 +105,7 @@ for (const [name,width,height,viewport,fallback] of [
   ['desktop 16:9 + rAF fallback',1920,1080,{width:1280,height:720},true],
 ]) {
   test(`${name}: preview → recorded file preserves crop, orientation, movement and audio`, {timeout:60000}, async () => {
-    const { page, errors } = await openCamera(width,height,viewport,fallback);
+    const { page, errors, uploads } = await openCamera(width,height,viewport,fallback);
     const dir=fs.mkdtempSync(path.join(os.tmpdir(),'gudini-capture-'));
     try {
       const geometry=await page.evaluate(()=>{
@@ -135,7 +158,10 @@ for (const [name,width,height,viewport,fallback] of [
         await page.waitForFunction(()=>window.testStreams.every(s=>s.getTracks().every(t=>t.readyState==='ended')));
       } else {
         await page.getByRole('button',{name:'Использовать запись'}).click();
-        assert.ok(await page.evaluate(()=>window.savedTake.size>0));
+        if(process.env.CAPTURE_SITE_URL) {
+          await page.getByRole('heading',{name:/Автомонтаж/}).waitFor();
+          assert.ok(Buffer.concat(uploads).equals(Buffer.from(encoded,'base64')),'the upload must contain exactly the reviewed file');
+        } else assert.ok(await page.evaluate(()=>window.savedTake.size>0));
       }
       assert.deepEqual(errors,[]);
     } finally {

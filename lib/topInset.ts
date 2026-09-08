@@ -71,3 +71,16 @@ export const AUTHOR_CROP = `crop=${FRAME.w}:${FRAME.h - AUTHOR_SAFE_TOP}:0:${AUT
 export function sourceBigEnough(w: number, h: number): boolean {
   return w >= MIN_SOURCE.w && h >= MIN_SOURCE.h;
 }
+
+/** Один способ вписать автора для монтажа и проверки результата обоих стилей. */
+export function authorFitFilter(displayWidth: number, displayHeight: number): string {
+  const target = 1080 / 1920;
+  const ratio = displayWidth > 0 && displayHeight > 0 ? displayWidth / displayHeight : target;
+  if (Math.abs(ratio - target) / target < 0.02) return "scale=1080:1920:flags=lanczos,setsar=1";
+  return (
+    "split[fitbg][fitfg];" +
+    "[fitbg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=28,eq=brightness=-0.12:saturation=0.75[fitbgb];" +
+    "[fitfg]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos[fitfgs];" +
+    "[fitbgb][fitfgs]overlay=(W-w)/2:(H-h)/2,setsar=1"
+  );
+}

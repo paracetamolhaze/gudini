@@ -2,10 +2,10 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { probeDuration, runFfmpeg } from "../ffmpeg";
-import { recordFlat, reserveBudget, releaseBudget } from "../costLedger";
+import { ledger, recordFlat, reserveBudget, releaseBudget } from "../costLedger";
 import { shotKey } from "./plan";
 import { mimeFor } from "./character";
-import { startVeo, waitVeo, downloadGcs, uploadGcs, veoBody, VEO_BUCKET, type VeoReference, type VeoRequest } from "./veo";
+import { startVeo, waitVeo, downloadGcs, uploadGcs, veoBody, VeoOperationError, VEO_BUCKET, type VeoReference, type VeoRequest } from "./veo";
 import type { AiFilmPlan, AiFilmShotResult, CharacterProfile, ContinuityGroup, FilmShot, GroupClip } from "./types";
 
 /**
@@ -83,7 +83,7 @@ export async function runPool<T>(tasks: (() => Promise<T>)[], n: number): Promis
   return results;
 }
 
-type RawRecord = { key: string; request: unknown; operation?: string; response?: unknown; file?: string; duration?: number; error?: string; startedAt?: string; finishedAt?: string; failedAt?: string };
+type RawRecord = { key: string; request: unknown; operation?: string; response?: unknown; file?: string; duration?: number; error?: string; terminalError?: boolean; startedAt?: string; finishedAt?: string; failedAt?: string };
 
 export async function generateShot(args: {
   dir: string;
@@ -116,7 +116,7 @@ export async function generateShot(args: {
   let operation = "";
   try {
     const prev = JSON.parse(fs.readFileSync(rawJson, "utf8")) as RawRecord;
-    if (prev.key === key && prev.operation && !prev.file && !prev.error) {
+    if (prev.key === key && prev.operation && !prev.terminalError) {
       operation = prev.operation;
       args.onProgress?.(`shot ${shot.id}: операция уже была запущена, продолжаю опрос`);
     }
@@ -129,6 +129,9 @@ export async function generateShot(args: {
       write({ key, request: veoBody(req), operation, startedAt: new Date().toISOString() });
       // считаем сразу: операция принята — деньги, скорее всего, уже списаны
       recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: shot.cost, estimated: true });
+      // The accepted call is now in the ledger; do not also count its reservation
+      // while the other groups are waiting to start.
+      releaseBudget(reservation);
     }
     const result = await waitVeo(shot.model, operation, (sec) => args.onProgress?.(`shot ${shot.id}: Veo работает ${Math.round(sec)} с`));
     await downloadGcs(result.gcsUri, file);
@@ -137,7 +140,7 @@ export async function generateShot(args: {
     write({ key, request: veoBody(req), operation, response: result.raw, file: path.relative(dir, file), duration: dur, finishedAt: new Date().toISOString() });
     return { shotId: shot.id, key, gcsUri: result.gcsUri, file: path.relative(dir, file), operation, veoSeconds: shot.veoSeconds, cost: shot.cost, createdAt: new Date().toISOString() };
   } catch (e) {
-    write({ key, request: veoBody(req), operation, error: String((e as any)?.message ?? e), failedAt: new Date().toISOString() });
+    write({ key, request: veoBody(req), operation, error: String((e as any)?.message ?? e), terminalError: e instanceof VeoOperationError, failedAt: new Date().toISOString() });
     if (operation) recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: 0, estimated: true, failed: true });
     throw new Error(`AI-фильм, shot ${shot.id} (${shot.mode}, ${shot.veoSeconds} с): ${String((e as any)?.message ?? e)}`);
   } finally {
@@ -155,14 +158,13 @@ async function generateGroup(args: {
   refHash: string;
   cache: Cache;
   onProgress?: (msg: string) => void;
-}): Promise<{ clip: GroupClip; spent: number; generated: number; cached: number }> {
+}): Promise<{ clip: GroupClip; generated: number; cached: number }> {
   const { dir, plan, group, cache } = args;
   const shots = group.shotIds.map((id) => plan.shots.find((s) => s.id === id)!);
   let sourceKey: string | null = null;
   let sourceGcs: string | null = null;
   let sourceFile: string | null = null;
   let sourceDur = 0;
-  let spent = 0;
   let generated = 0;
   let cached = 0;
   for (const shot of shots) {
@@ -176,7 +178,6 @@ async function generateGroup(args: {
       res = await generateShot({ dir, projectId: args.projectId, shot, key, references: args.references, videoGcsUri: sourceGcs ?? undefined, onProgress: args.onProgress });
       cache[key] = res;
       await saveCache(dir, cache);
-      spent += res.cost;
       generated++;
     }
     const file = path.join(dir, res.file);
@@ -204,7 +205,7 @@ async function generateGroup(args: {
   if (!sourceFile) throw new Error(`AI-фильм: группа ${group.id} без shots`);
   const out = path.join(filmDir(dir), `group-${group.id}.mp4`);
   fs.copyFileSync(sourceFile, out);
-  return { clip: { groupId: group.id, file: path.relative(dir, out), seconds: sourceDur }, spent, generated, cached };
+  return { clip: { groupId: group.id, file: path.relative(dir, out), seconds: sourceDur }, generated, cached };
 }
 
 /** Все группы плана: независимые параллельно (пул), цепочки внутри себя последовательно. */
@@ -217,6 +218,7 @@ export async function generateGroups(args: {
   onProgress?: GenerateProgress;
 }): Promise<{ clips: GroupClip[]; spent: number; generated: number; cached: number }> {
   const { dir, plan, character } = args;
+  const spentBefore = ledger().filter((e) => e.stage === "AI Film Generation").reduce((sum, e) => sum + e.estimatedCost, 0);
   const cache = loadCache(dir);
   const needRefs = plan.shots.some((s) => s.useReferences);
   const references = needRefs ? await uploadReferences(character) : [];
@@ -238,7 +240,7 @@ export async function generateGroups(args: {
   const clips = plan.groups.map((g) => byId.get(g.id)!.clip);
   return {
     clips,
-    spent: results.reduce((a, r) => a + r.spent, 0),
+    spent: Number((ledger().filter((e) => e.stage === "AI Film Generation").reduce((sum, e) => sum + e.estimatedCost, 0) - spentBefore).toFixed(6)),
     generated: results.reduce((a, r) => a + r.generated, 0),
     cached: results.reduce((a, r) => a + r.cached, 0),
   };

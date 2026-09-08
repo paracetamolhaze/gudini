@@ -9,7 +9,7 @@ import { GoogleAuth } from "google-auth-library";
  *
  * Схема запроса сверена с маппингом google-genai SDK (Vertex): instances[0].prompt,
  * instances[0].image {gcsUri|bytesBase64Encoded, mimeType}, instances[0].video {gcsUri,
- * mimeType}, instances[0].referenceImages[] {image, referenceType: ASSET|STYLE};
+ * mimeType}, instances[0].referenceImages[] {image, referenceType: asset|style};
  * parameters.{aspectRatio, durationSeconds, resolution, generateAudio, personGeneration,
  * storageUri, sampleCount}. Ограничения Veo 3.1 (документация Gemini API / Vertex):
  * длительности 4/6/8 с; с referenceImages — только 8 с; extension +7 с к видео,
@@ -72,6 +72,9 @@ export class VertexError extends Error {
   }
 }
 
+/** The accepted operation finished unsuccessfully; retrying needs a new operation. */
+export class VeoOperationError extends Error {}
+
 async function api(method: string, url: string, body?: unknown): Promise<any> {
   const res = await fetch(url, {
     method,
@@ -114,7 +117,7 @@ export function veoBody(r: VeoRequest): { instances: any[]; parameters: any } {
     if (r.videoGcsUri || r.imageGcsUri) throw new Error("Veo: referenceImages не сочетаются с image/video в одном запросе");
     if (r.durationSeconds !== VEO_REFERENCE_SECONDS) throw new Error(`Veo: с referenceImages длительность должна быть ${VEO_REFERENCE_SECONDS} с`);
     if (r.referenceImages.length > 3) throw new Error("Veo: referenceImages — не больше трёх");
-    instance.referenceImages = r.referenceImages.map((ref) => ({ image: { gcsUri: ref.gcsUri, mimeType: ref.mimeType }, referenceType: "ASSET" }));
+    instance.referenceImages = r.referenceImages.map((ref) => ({ image: { gcsUri: ref.gcsUri, mimeType: ref.mimeType }, referenceType: "asset" }));
   }
   if (!r.videoGcsUri && !(VEO_DURATIONS as readonly number[]).includes(r.durationSeconds)) {
     throw new Error(`Veo: длительность ${r.durationSeconds} с не поддерживается (4, 6 или 8)`);
@@ -177,13 +180,13 @@ export async function waitVeo(model: string, operationName: string, onTick?: (el
       continue;
     }
     if (op?.done) {
-      if (op.error) throw new Error(`Veo: ${op.error.message ?? JSON.stringify(op.error)}`);
+      if (op.error) throw new VeoOperationError(`Veo: ${op.error.message ?? JSON.stringify(op.error)}`);
       const videos = op.response?.videos ?? op.response?.generatedSamples ?? [];
       const first = videos[0];
       const gcsUri: string | undefined = first?.gcsUri ?? first?.video?.uri ?? first?.uri;
       if (!gcsUri) {
         const filtered = op.response?.raiMediaFilteredReasons ?? op.response?.raiMediaFilteredCount;
-        throw new Error(`Veo: результат без видео${filtered ? ` (фильтр безопасности: ${JSON.stringify(filtered).slice(0, 200)})` : ""}`);
+        throw new VeoOperationError(`Veo: результат без видео${filtered ? ` (фильтр безопасности: ${JSON.stringify(filtered).slice(0, 200)})` : ""}`);
       }
       return { gcsUri, raw: op.response };
     }

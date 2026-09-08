@@ -13,6 +13,12 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   const body = await req.json();
+  const current = getProject(id);
+  if (!current) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
+  if ((body.montageStyle === "cards" || body.montageStyle === "ai_film") &&
+      body.montageStyle !== (current.montageStyle ?? "cards") && current.processing.state === "running") {
+    return NextResponse.json({ error: "Дождитесь завершения монтажа перед сменой стиля" }, { status: 409 });
+  }
   const patch: any = {};
   if (typeof body.script === "string") patch.script = body.script;
   // исследование истории можно записать отдельно, не трогая уже начитанный сценарий

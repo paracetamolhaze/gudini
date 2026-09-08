@@ -68,7 +68,7 @@ export function compositeFilter(fit: string, overlays: Overlay[], plan: AiFilmPl
 export function audioFilter(music: boolean): string {
   const voice = "afftdn=nr=10:nf=-45:tn=1,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000";
   return music
-    ? `[0:a]${voice}[vo];[1:a]volume=0.22,aresample=48000[mus];[mus][vo]sidechaincompress=threshold=0.05:ratio=12:attack=20:release=500[duck];[vo][duck]amix=inputs=2:duration=first:normalize=0[a]`
+    ? `[0:a]${voice},asplit=2[vo][sidechain];[1:a]volume=0.22,aresample=48000[mus];[mus][sidechain]sidechaincompress=threshold=0.05:ratio=12:attack=20:release=500[duck];[vo][duck]amix=inputs=2:duration=first:normalize=0[a]`
     : `[0:a]${voice}[a]`;
 }
 

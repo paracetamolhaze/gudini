@@ -79,10 +79,10 @@ test("N: смена одного независимого shot не меняет
   assert.equal(shotKey(c, "refs-a", null), kc);
 });
 
-test("тело запроса Veo: референсы как ASSET, только с 8 с и без image/video; 9:16; без звука", () => {
+test("тело запроса Veo: референсы как asset, только с 8 с и без image/video; 9:16; без звука", () => {
   const refs = [{ gcsUri: "gs://b/characters/gudini/a.png", mimeType: "image/png" }];
   const body = veoBody({ model: "m", prompt: "p", durationSeconds: VEO_REFERENCE_SECONDS, storageUri: "gs://b/x/", aspectRatio: "9:16", referenceImages: refs });
-  assert.deepEqual(body.instances[0].referenceImages, [{ image: { gcsUri: "gs://b/characters/gudini/a.png", mimeType: "image/png" }, referenceType: "ASSET" }]);
+  assert.deepEqual(body.instances[0].referenceImages, [{ image: { gcsUri: "gs://b/characters/gudini/a.png", mimeType: "image/png" }, referenceType: "asset" }]);
   assert.equal(body.parameters.aspectRatio, "9:16");
   assert.equal(body.parameters.generateAudio, false);
   assert.equal(body.parameters.resolution, "720p");

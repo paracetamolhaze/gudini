@@ -1,8 +1,8 @@
 import fs from "fs";
 import path from "path";
-import { runFfmpeg } from "../ffmpeg";
+import { probe, runFfmpeg } from "../ffmpeg";
 import { hashFromGray, hamming, HASH_VF } from "../sceneHash";
-import { CARD } from "../topInset";
+import { authorFitFilter, CARD } from "../topInset";
 import type { AiFilmPlan } from "./types";
 
 /**
@@ -51,11 +51,13 @@ export async function checkAiSegments(dir: string, plan: AiFilmPlan, authorSourc
   fs.mkdirSync(tmp, { recursive: true });
   const segments = plan.timeline.filter((s) => s.mode !== "author" && s.end - s.start >= 1.5);
   if (!segments.length) throw new Error("Проверка AI-фильма: в плане нет AI-окон");
+  const source = await probe(path.isAbsolute(authorSource) ? authorSource : path.join(dir, authorSource));
+  const fit = authorFitFilter(source.displayWidth, source.displayHeight);
   for (const seg of segments) {
     const crop = seg.mode === "hybrid" ? `crop=${CARD.w}:${CARD.h}:${CARD.x}:${CARD.y}` : "";
     const mid = (seg.start + seg.end) / 2;
     const a = hashFromGray(await grayFrames(dir, outFile, crop, mid, 0.05, path.join(tmp, "chk-out.gray"), `${HASH_VF},select=eq(n\\,0)`));
-    const b = hashFromGray(await grayFrames(dir, authorSource, crop, mid, 0.05, path.join(tmp, "chk-src.gray"), `${HASH_VF},select=eq(n\\,0)`));
+    const b = hashFromGray(await grayFrames(dir, authorSource, `${fit}${crop ? `,${crop}` : ""}`, mid, 0.05, path.join(tmp, "chk-src.gray"), `${HASH_VF},select=eq(n\\,0)`));
     if (a == null || b == null) throw new Error(`Проверка AI-фильма: не удалось прочитать кадр на ${mid.toFixed(1)} с`);
     if (hamming(a, b) < MIN_HASH_DISTANCE) {
       throw new Error(`Проверка AI-фильма: на ${mid.toFixed(1)} с (${seg.mode}) в кадре автор, а не AI-сцена — наложение не сработало`);

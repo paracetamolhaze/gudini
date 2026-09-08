@@ -264,10 +264,13 @@ def pick_reference_distance(person: dict, persons: list[dict]) -> float:
     intra = float(person.get("intra_distance", 0.2))
     majors = [p for p in persons if p is not person and (float(p.get("coverage", 0)) >= 0.05 or float(p.get("avg_area_ratio", 0)) >= 0.05)]
     nearest = float(person.get("nearest_other_distance", 1.0)) if majors else 1.0
-    want = intra + (0.25 if not majors else 0.15)
+    # Запас 0.30 к разбросу: профиль и полуоборот уходят от анфасного опорного лица далеко.
+    # На проверочном ролике при 0.30 заменялось 88% профилей, при 0.45 — все.
+    want = intra + 0.30
     if nearest < want + 0.05:
-        want = max(0.30, (intra + nearest) / 2.0)
-    value = min(0.60, max(0.30, want))
+        # рядом есть заметный другой человек: подходим к нему не ближе 0.05
+        want = max(0.30, min(want, nearest - 0.05))
+    value = min(0.55, max(0.30, want))
     # FaceFusion принимает порог только с шагом 0.05
     return round(round(value / 0.05) * 0.05, 2)
 

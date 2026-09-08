@@ -2,28 +2,29 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { probeDuration, runFfmpeg } from "../ffmpeg";
-import { recordFlat, assertBudget } from "../costLedger";
-import { sceneKey } from "./plan";
-import { startVeo, waitVeo, downloadGcs, uploadGcs, veoBody, VEO_BUCKET } from "./veo";
-import type { AiFilmPlan, AiFilmSceneResult, FilmScene } from "./types";
+import { recordFlat, reserveBudget, releaseBudget } from "../costLedger";
+import { shotKey } from "./plan";
+import { mimeFor } from "./character";
+import { startVeo, waitVeo, downloadGcs, uploadGcs, veoBody, VEO_BUCKET, type VeoReference, type VeoRequest } from "./veo";
+import type { AiFilmPlan, AiFilmShotResult, CharacterProfile, ContinuityGroup, FilmShot, GroupClip } from "./types";
 
 /**
- * Генерация сцен по плану. Всё лежит в <проект>/ai-film/:
- *   scenes.json            — кэш: ключ сцены → результат (файл, GCS, операция, цена)
- *   raw/<scene>.json       — запрос, операция и ответ Veo как есть
- *   raw/<scene>.mp4        — сырое видео сцены, как вернул Veo
- *   sequence-N.mp4         — цельная последовательность (последняя extension-сцена)
+ * Генерация v2 по графу зависимостей. Всё лежит в <проект>/ai-film/:
+ *   shots.json          — кэш: ключ shot → результат (файл, GCS, операция, цена)
+ *   raw/<shot>-<key>.json / .mp4 — запрос, операция, ответ и сырое видео как есть
+ *   group-<id>.mp4      — клип группы (для цепочки — последняя extension)
  *
- * Сцена с тем же ключом (модель + режим + промпт + источник) не генерируется заново:
- * правка одной сцены в плане не трогает остальные — цепочка extension пересобирается
- * только от изменённой сцены дальше, потому что ключ включает ключ источника.
- * Сбой Veo — ошибка стадии; автоповтор только на сетевую ошибку (не на отказ модели).
+ * Независимые группы идут параллельно через пул (AI_FILM_VEO_CONCURRENCY), цепочка —
+ * последовательно. Ключ shot включает промпт, параметры, хэш эталонов и ключ источника:
+ * правка независимого shot не трогает остальные, правка первого shot цепочки
+ * пересобирает только её. Принятая Vertex операция сохраняется до опроса: если ответ
+ * потерялся, повторный запуск опрашивает её, а не платит за новую.
  */
 
 export const FILM_DIR = "ai-film";
 const RAW_DIR = "raw";
 
-type Cache = Record<string, AiFilmSceneResult>;
+type Cache = Record<string, AiFilmShotResult>;
 
 export function filmDir(dir: string): string {
   return path.join(dir, FILM_DIR);
@@ -31,160 +32,214 @@ export function filmDir(dir: string): string {
 
 function loadCache(dir: string): Cache {
   try {
-    return JSON.parse(fs.readFileSync(path.join(filmDir(dir), "scenes.json"), "utf8"));
+    return JSON.parse(fs.readFileSync(path.join(filmDir(dir), "shots.json"), "utf8"));
   } catch {
     return {};
   }
 }
 
-function saveCache(dir: string, cache: Cache): void {
-  fs.mkdirSync(filmDir(dir), { recursive: true });
-  fs.writeFileSync(path.join(filmDir(dir), "scenes.json"), JSON.stringify(cache, null, 2));
+let saveChain = Promise.resolve();
+function saveCache(dir: string, cache: Cache): Promise<void> {
+  saveChain = saveChain.then(() => {
+    fs.mkdirSync(filmDir(dir), { recursive: true });
+    fs.writeFileSync(path.join(filmDir(dir), "shots.json"), JSON.stringify(cache, null, 2));
+  });
+  return saveChain;
 }
 
-const short = (s: string) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
+const short = (s: string | Buffer) => crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
 
 export type GenerateProgress = (msg: string, fraction: number) => void;
 
-/** Последний кадр видео → JPEG (первый кадр следующей последовательности). */
-async function lastFrame(video: string, out: string): Promise<void> {
-  const dur = await probeDuration(video);
-  await runFfmpeg(["-ss", Math.max(0, dur - 0.1).toFixed(3), "-i", video, "-frames:v", "1", "-q:v", "2", out]);
+/** Эталоны героя → GCS (идемпотентно, по хэшу содержимого). Только картинки персонажа, не видео автора. */
+export async function uploadReferences(character: CharacterProfile): Promise<VeoReference[]> {
+  const out: VeoReference[] = [];
+  for (const file of character.referenceFiles) {
+    const ext = path.extname(file).toLowerCase() || ".png";
+    const uri = `gs://${VEO_BUCKET}/characters/${character.id}/${short(fs.readFileSync(file))}${ext}`;
+    await uploadGcs(file, uri, mimeFor(file));
+    out.push({ gcsUri: uri, mimeType: mimeFor(file) });
+  }
+  return out;
 }
 
-/** Веб-ошибки, которые имеет смысл повторить один раз; отказ модели — нет. */
-const transient = (e: unknown) => /\b(429|5\d\d)\b|ECONNRESET|fetch failed|timeout|EAI_AGAIN/i.test(String((e as any)?.message ?? e));
+/** Небольшой пул: не больше n задач одновременно; после первой ошибки новые не стартуют. */
+export async function runPool<T>(tasks: (() => Promise<T>)[], n: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  let failed: unknown = null;
+  const worker = async () => {
+    while (next < tasks.length && failed == null) {
+      const i = next++;
+      try {
+        results[i] = await tasks[i]();
+      } catch (e) {
+        if (failed == null) failed = e;
+      }
+    }
+  };
+  await Promise.all(new Array(Math.max(1, Math.min(n, tasks.length))).fill(0).map(worker));
+  if (failed != null) throw failed;
+  return results;
+}
 
-export async function generateScene(args: {
+type RawRecord = { key: string; request: unknown; operation?: string; response?: unknown; file?: string; duration?: number; error?: string; startedAt?: string; finishedAt?: string; failedAt?: string };
+
+export async function generateShot(args: {
   dir: string;
   projectId: string;
-  plan: AiFilmPlan;
-  scene: FilmScene;
+  shot: FilmShot;
   key: string;
-  imageGcsUri?: string;
+  references: VeoReference[];
   videoGcsUri?: string;
   onProgress?: (msg: string) => void;
-}): Promise<AiFilmSceneResult> {
-  const { dir, plan, scene, key } = args;
+}): Promise<AiFilmShotResult> {
+  const { dir, shot, key } = args;
   const rawDir = path.join(filmDir(dir), RAW_DIR);
   fs.mkdirSync(rawDir, { recursive: true });
-  const cost = Math.round(scene.seconds * plan.pricePerSec * 1000) / 1000;
-  assertBudget("AI Film Generation", cost);
-  const storageUri = `gs://${VEO_BUCKET}/${args.projectId}/${short(key)}/`;
-  const req = { model: plan.model, prompt: scene.prompt, durationSeconds: scene.seconds, storageUri, imageGcsUri: args.imageGcsUri, videoGcsUri: args.videoGcsUri };
-  const rawJson = path.join(rawDir, `${scene.id}-${short(key)}.json`);
+  const rawJson = path.join(rawDir, `${shot.id}-${key}.json`);
+  const file = path.join(rawDir, `${shot.id}-${key}.mp4`);
+  const req: VeoRequest = {
+    model: shot.model,
+    prompt: shot.prompt,
+    durationSeconds: shot.veoSeconds,
+    storageUri: `gs://${VEO_BUCKET}/${args.projectId}/${key}/`,
+    aspectRatio: shot.aspectRatio,
+    resolution: shot.resolution,
+    videoGcsUri: shot.mode === "extend" ? args.videoGcsUri : undefined,
+    referenceImages: shot.useReferences ? args.references : undefined,
+  };
+  if (shot.mode === "extend" && !req.videoGcsUri) throw new Error(`AI-фильм: у extension ${shot.id} нет исходного видео`);
+  const write = (rec: RawRecord) => fs.writeFileSync(rawJson, JSON.stringify(rec, null, 2));
+
+  // потерянный ответ прошлого запуска: операция принята — опрашиваем её, не платим заново
   let operation = "";
-  let attempt = 0;
-  for (;;) {
-    try {
-      operation = await startVeo(req);
-      fs.writeFileSync(rawJson, JSON.stringify({ key, request: veoBody(req), operation, startedAt: new Date().toISOString() }, null, 2));
-      // считаем сразу: операция запущена — деньги, скорее всего, уже списаны
-      recordFlat({ stage: "AI Film Generation", provider: "google", model: plan.model, cost, estimated: true });
-      const result = await waitVeo(plan.model, operation, (sec) => args.onProgress?.(`сцена ${scene.id}: Veo работает ${Math.round(sec)} с`));
-      const file = path.join(rawDir, `${scene.id}-${short(key)}.mp4`);
-      await downloadGcs(result.gcsUri, file);
-      const dur = await probeDuration(file);
-      if (dur < 1) throw new Error(`Veo: сцена ${scene.id} пустая (${dur.toFixed(1)} с)`);
-      fs.writeFileSync(rawJson, JSON.stringify({ key, request: veoBody(req), operation, response: result.raw, file: path.relative(dir, file), duration: dur, finishedAt: new Date().toISOString() }, null, 2));
-      return { sceneId: scene.id, key, gcsUri: result.gcsUri, file: path.relative(dir, file), operation, seconds: scene.seconds, cost, createdAt: new Date().toISOString() };
-    } catch (e) {
-      if (attempt === 0 && transient(e) && !operation) {
-        attempt++;
-        args.onProgress?.(`сцена ${scene.id}: сетевая ошибка, один повтор`);
-        await new Promise((r) => setTimeout(r, 5000));
-        continue;
-      }
-      fs.writeFileSync(rawJson, JSON.stringify({ key, request: veoBody(req), operation, error: String((e as any)?.message ?? e), failedAt: new Date().toISOString() }, null, 2));
-      if (operation) recordFlat({ stage: "AI Film Generation", provider: "google", model: plan.model, cost, estimated: true, failed: true });
-      throw e;
+  try {
+    const prev = JSON.parse(fs.readFileSync(rawJson, "utf8")) as RawRecord;
+    if (prev.key === key && prev.operation && !prev.file && !prev.error) {
+      operation = prev.operation;
+      args.onProgress?.(`shot ${shot.id}: операция уже была запущена, продолжаю опрос`);
     }
+  } catch {}
+
+  const reservation = reserveBudget("AI Film Generation", operation ? 0 : shot.cost);
+  try {
+    if (!operation) {
+      operation = await startVeo(req, (attempt, why) => args.onProgress?.(`shot ${shot.id}: повтор запуска ${attempt} (${why})`));
+      write({ key, request: veoBody(req), operation, startedAt: new Date().toISOString() });
+      // считаем сразу: операция принята — деньги, скорее всего, уже списаны
+      recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: shot.cost, estimated: true });
+    }
+    const result = await waitVeo(shot.model, operation, (sec) => args.onProgress?.(`shot ${shot.id}: Veo работает ${Math.round(sec)} с`));
+    await downloadGcs(result.gcsUri, file);
+    const dur = await probeDuration(file);
+    if (dur < 1) throw new Error(`Veo: shot ${shot.id} пустой (${dur.toFixed(1)} с)`);
+    write({ key, request: veoBody(req), operation, response: result.raw, file: path.relative(dir, file), duration: dur, finishedAt: new Date().toISOString() });
+    return { shotId: shot.id, key, gcsUri: result.gcsUri, file: path.relative(dir, file), operation, veoSeconds: shot.veoSeconds, cost: shot.cost, createdAt: new Date().toISOString() };
+  } catch (e) {
+    write({ key, request: veoBody(req), operation, error: String((e as any)?.message ?? e), failedAt: new Date().toISOString() });
+    if (operation) recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: 0, estimated: true, failed: true });
+    throw new Error(`AI-фильм, shot ${shot.id} (${shot.mode}, ${shot.veoSeconds} с): ${String((e as any)?.message ?? e)}`);
+  } finally {
+    releaseBudget(reservation);
   }
 }
 
-/**
- * Последовательности по плану. Возвращает файлы sequence-N.mp4 (относительно dir)
- * и реальную сумму, потраченную в этом запуске.
- */
-export async function generateSequences(args: {
+/** Цепочка группы: text → extend → extend; клип группы — последний файл (или склейка, если extension вернул только хвост). */
+async function generateGroup(args: {
   dir: string;
   projectId: string;
   plan: AiFilmPlan;
-  onProgress?: GenerateProgress;
-}): Promise<{ files: string[]; spent: number; generated: number; cached: number }> {
-  const { dir, plan, projectId } = args;
-  const cache = loadCache(dir);
-  const files: string[] = [];
+  group: ContinuityGroup;
+  references: VeoReference[];
+  refHash: string;
+  cache: Cache;
+  onProgress?: (msg: string) => void;
+}): Promise<{ clip: GroupClip; spent: number; generated: number; cached: number }> {
+  const { dir, plan, group, cache } = args;
+  const shots = group.shotIds.map((id) => plan.shots.find((s) => s.id === id)!);
+  let sourceKey: string | null = null;
+  let sourceGcs: string | null = null;
+  let sourceFile: string | null = null;
+  let sourceDur = 0;
   let spent = 0;
   let generated = 0;
   let cached = 0;
-  const total = plan.calls;
-  let done = 0;
-  for (const seq of plan.sequences) {
-    let sourceKey: string | null = null;
-    let sourceGcs: string | null = null;
-    let sourceFile: string | null = null;
-    let sourceDur = 0;
-    let imageGcs: string | undefined;
-    for (const scene of seq.scenes) {
-      if (scene.mode === "image") {
-        // первый кадр — последний кадр предыдущей последовательности (сгенерированной Veo, не автора)
-        const prevFile = files[seq.index - 1];
-        if (!prevFile) throw new Error(`AI-фильм: для ${scene.id} нет предыдущей последовательности`);
-        const jpg = path.join(filmDir(dir), `seq-${seq.index}-start.jpg`);
-        await lastFrame(path.join(dir, prevFile), jpg);
-        imageGcs = `gs://${VEO_BUCKET}/${projectId}/frames/seq-${seq.index}-${short(sourceKey ?? prevFile)}.jpg`;
-        await uploadGcs(jpg, imageGcs, "image/jpeg");
-        sourceKey = `image:${short(fs.readFileSync(jpg).toString("base64"))}`;
-      }
-      const key = sceneKey(scene, plan.model, sourceKey);
-      let res = cache[key];
-      if (res && fs.existsSync(path.join(dir, res.file))) {
-        cached++;
-        args.onProgress?.(`сцена ${scene.id}: из кэша`, done / total);
-      } else {
-        args.onProgress?.(`сцена ${scene.id}: генерация (${scene.mode}, ${scene.seconds} с)`, done / total);
-        res = await generateScene({
-          dir,
-          projectId,
-          plan,
-          scene,
-          key,
-          imageGcsUri: scene.mode === "image" ? imageGcs : undefined,
-          videoGcsUri: scene.mode === "extend" ? sourceGcs ?? undefined : undefined,
-          onProgress: (m) => args.onProgress?.(m, done / total),
-        });
-        cache[key] = res;
-        saveCache(dir, cache);
-        spent += res.cost;
-        generated++;
-      }
-      done++;
-      // extension возвращает либо всё видео целиком, либо только новые секунды — по длине видно
-      const file = path.join(dir, res.file);
-      const dur = await probeDuration(file);
-      if (scene.mode === "extend" && sourceFile && dur < sourceDur + scene.seconds - 1.5) {
-        const joined = path.join(filmDir(dir), `join-${scene.id}-${short(key)}.mp4`);
-        if (!fs.existsSync(joined)) {
-          await runFfmpeg([
-            "-i", sourceFile, "-i", file,
-            "-filter_complex", "[0:v]fps=24,scale=1280:720,setsar=1[a];[1:v]fps=24,scale=1280:720,setsar=1[b];[a][b]concat=n=2:v=1:a=0[v]",
-            "-map", "[v]", "-c:v", "libx264", "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p", joined,
-          ]);
-        }
-        sourceFile = joined;
-        sourceDur = await probeDuration(joined);
-      } else {
-        sourceFile = file;
-        sourceDur = dur;
-      }
-      sourceKey = key;
-      sourceGcs = res.gcsUri;
+  for (const shot of shots) {
+    const key = shotKey(shot, args.refHash, sourceKey);
+    let res = cache[key];
+    if (res && fs.existsSync(path.join(dir, res.file))) {
+      cached++;
+      args.onProgress?.(`shot ${shot.id}: из кэша`);
+    } else {
+      args.onProgress?.(`shot ${shot.id}: генерация (${shot.mode}, ${shot.veoSeconds} с, ${shot.aspectRatio}${shot.useReferences ? ", с эталонами" : ""})`);
+      res = await generateShot({ dir, projectId: args.projectId, shot, key, references: args.references, videoGcsUri: sourceGcs ?? undefined, onProgress: args.onProgress });
+      cache[key] = res;
+      await saveCache(dir, cache);
+      spent += res.cost;
+      generated++;
     }
-    if (!sourceFile) throw new Error(`AI-фильм: последовательность ${seq.index + 1} без сцен`);
-    const out = path.join(filmDir(dir), `sequence-${seq.index}.mp4`);
-    fs.copyFileSync(sourceFile, out);
-    files.push(path.relative(dir, out));
+    const file = path.join(dir, res.file);
+    const dur = await probeDuration(file);
+    // extension возвращает либо всё видео целиком, либо только новые секунды — по длине видно
+    if (shot.mode === "extend" && sourceFile && dur < sourceDur + shot.veoSeconds - 1.5) {
+      const joined = path.join(filmDir(dir), `join-${shot.id}-${key}.mp4`);
+      if (!fs.existsSync(joined)) {
+        const size = shot.aspectRatio === "9:16" ? "720:1280" : "1280:720";
+        await runFfmpeg([
+          "-i", sourceFile, "-i", file,
+          "-filter_complex", `[0:v]fps=24,scale=${size},setsar=1[a];[1:v]fps=24,scale=${size},setsar=1[b];[a][b]concat=n=2:v=1:a=0[v]`,
+          "-map", "[v]", "-c:v", "libx264", "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p", joined,
+        ]);
+      }
+      sourceFile = joined;
+      sourceDur = await probeDuration(joined);
+    } else {
+      sourceFile = file;
+      sourceDur = dur;
+    }
+    sourceKey = key;
+    sourceGcs = res.gcsUri;
   }
-  return { files, spent, generated, cached };
+  if (!sourceFile) throw new Error(`AI-фильм: группа ${group.id} без shots`);
+  const out = path.join(filmDir(dir), `group-${group.id}.mp4`);
+  fs.copyFileSync(sourceFile, out);
+  return { clip: { groupId: group.id, file: path.relative(dir, out), seconds: sourceDur }, spent, generated, cached };
+}
+
+/** Все группы плана: независимые параллельно (пул), цепочки внутри себя последовательно. */
+export async function generateGroups(args: {
+  dir: string;
+  projectId: string;
+  plan: AiFilmPlan;
+  character: CharacterProfile;
+  concurrency: number;
+  onProgress?: GenerateProgress;
+}): Promise<{ clips: GroupClip[]; spent: number; generated: number; cached: number }> {
+  const { dir, plan, character } = args;
+  const cache = loadCache(dir);
+  const needRefs = plan.shots.some((s) => s.useReferences);
+  const references = needRefs ? await uploadReferences(character) : [];
+  const total = Math.max(1, plan.shots.length);
+  let done = 0;
+  const progress = (msg: string) => args.onProgress?.(msg, done / total);
+  // длинные цепочки первыми — так пул заканчивает раньше
+  const order = [...plan.groups].sort((a, b) => b.shotIds.length - a.shotIds.length);
+  const results = await runPool(
+    order.map((group) => async () => {
+      const r = await generateGroup({ dir, projectId: args.projectId, plan, group, references, refHash: character.refHash, cache, onProgress: progress });
+      done += group.shotIds.length;
+      args.onProgress?.(`группа ${group.id} готова`, done / total);
+      return r;
+    }),
+    args.concurrency,
+  );
+  const byId = new Map(results.map((r) => [r.clip.groupId, r]));
+  const clips = plan.groups.map((g) => byId.get(g.id)!.clip);
+  return {
+    clips,
+    spent: results.reduce((a, r) => a + r.spent, 0),
+    generated: results.reduce((a, r) => a + r.generated, 0),
+    cached: results.reduce((a, r) => a + r.cached, 0),
+  };
 }

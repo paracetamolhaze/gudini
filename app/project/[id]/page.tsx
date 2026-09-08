@@ -27,18 +27,41 @@ type Project = {
     status?: "planned" | "generated" | "failed";
     spent?: number;
     generatedAt?: string;
-    plan?: {
-      duration: number;
-      model: string;
-      totalSeconds: number;
-      estimatedCost: number;
-      calls: number;
-      estimatedMinutes: number;
-      bible: { visualStyle: string; mood: string; mainCharacter: { description: string } | null; locations: string[]; storyArc: string };
-      episodes: { id: string; start: number; end: number; meaning: string; visualAction: string; location: string }[];
-      sequences: { index: number; start: number; end: number; seconds: number; scenes: { id: string }[] }[];
-    };
+    plan?: AiFilmPlanView;
   };
+};
+
+type AiFilmPlanView = {
+  version?: number;
+  duration: number;
+  character?: { id: string; name: string; referenceCount: number };
+  bible: {
+    visualStyle: string;
+    mood: string;
+    storyArc?: { understand: string; gudiniRole: string; beginning: string; development: string; conflict: string; climax: string; meaning: string };
+    supportingCharacters?: { name: string; function: string }[];
+  };
+  beats: {
+    id: string; start: number; end: number; meaning: string; storyBeat?: string;
+    displayMode: "author" | "full_ai" | "hybrid"; purpose: string; priority: string;
+    visualAction: string; location: string; continuityGroup: string | null; reduced?: string;
+  }[];
+  groups: { id: string; start: number; end: number; shotIds: string[]; chain: boolean; displayMode: string }[];
+  shots: { id: string; groupId: string; mode: string; veoSeconds: number; usedSeconds: number; model: string; generationProfile: string; cost: number; useReferences: boolean; beatIds: string[] }[];
+  pricing?: { model: string; pricePerSec: number; source: string };
+  budgetUsd?: number;
+  stats: {
+    speechSeconds: number; aiSeconds: number; generatedSeconds: number; coverage: number; calls: number;
+    groups: number; independentGroups: number; chains: number; estimatedCost: number; estimatedWallMinutes: number; concurrency: number;
+  };
+  warnings?: string[];
+};
+
+const AI_FILM_PLAN_VERSION = 3;
+const MODE_LABEL: Record<string, { text: string; bg: string; fg: string }> = {
+  author: { text: "AUTHOR", bg: "rgba(140,140,160,0.18)", fg: "#b9b9c9" },
+  full_ai: { text: "FULL AI", bg: "rgba(160, 90, 255, 0.22)", fg: "#c9a6ff" },
+  hybrid: { text: "HYBRID", bg: "rgba(60, 160, 255, 0.2)", fg: "#8fc6ff" },
 };
 
 const PLATFORMS = [
@@ -537,6 +560,7 @@ function ProcessStep({
 
   const style = project.montageStyle ?? "cards";
   const filmPlan = project.aiFilm?.plan;
+  const planStale = Boolean(filmPlan && filmPlan.version !== AI_FILM_PLAN_VERSION);
 
   async function start(request?: "plan" | "generate") {
     setError("");
@@ -586,27 +610,77 @@ function ProcessStep({
 
       {!project.rawVideo && <div className="error-box">Сначала загрузи видео на шаге «Съёмка»</div>}
 
-      {style === "ai_film" && filmPlan && processing.state !== "running" && (
+      {style === "ai_film" && filmPlan && processing.state !== "running" && planStale && (
+        <div className="error-box" style={{ marginBottom: 14 }}>AI Film plan устарел, пересоберите план.</div>
+      )}
+
+      {style === "ai_film" && filmPlan && !planStale && processing.state !== "running" && (
         <div style={{ marginBottom: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
-          <b>План фильма</b>
+          <b>План AI-фильма</b>
           <p className="hint" style={{ margin: "6px 0" }}>
-            Стиль: {filmPlan.bible.visualStyle}. {filmPlan.bible.mainCharacter ? `Герой: ${filmPlan.bible.mainCharacter.description}. ` : ""}
-            {filmPlan.bible.storyArc}
+            AI на экране: <b>{filmPlan.stats.aiSeconds} с</b> из {filmPlan.stats.speechSeconds} с · покрытие {Math.round(filmPlan.stats.coverage * 100)}% ·
+            Veo-секунд {filmPlan.stats.generatedSeconds} · вызовов {filmPlan.stats.calls} · групп {filmPlan.stats.groups} (параллельных {filmPlan.stats.independentGroups}, цепочек {filmPlan.stats.chains}) ·
+            оценка <b>${filmPlan.stats.estimatedCost.toFixed(2)}</b>{filmPlan.budgetUsd ? ` из бюджета $${filmPlan.budgetUsd}` : ""} · примерно {filmPlan.stats.estimatedWallMinutes} мин при {filmPlan.stats.concurrency} параллельных
+            {filmPlan.pricing ? ` · ${filmPlan.pricing.model} $${filmPlan.pricing.pricePerSec}/с` : ""}
           </p>
-          <ol style={{ margin: "6px 0 8px 18px", padding: 0 }}>
-            {filmPlan.episodes.map((e) => (
-              <li key={e.id} style={{ marginBottom: 4 }}>
-                <span className="hint">{fmtTime(e.start)}–{fmtTime(e.end)}</span> {e.meaning}
-                <div className="hint" style={{ opacity: 0.8 }}>{e.visualAction}</div>
-              </li>
-            ))}
-          </ol>
-          <p className="hint">
-            Последовательностей: {filmPlan.sequences.length} · вызовов Veo: {filmPlan.calls} · секунд фильма: {filmPlan.totalSeconds} ·
-            оценка <b>${filmPlan.estimatedCost.toFixed(2)}</b> · примерно {filmPlan.estimatedMinutes} мин · модель {filmPlan.model}
+          <p className="hint" style={{ margin: "6px 0" }}>
+            Персонаж: <b>{filmPlan.character?.name ?? "Gudini"}</b>{filmPlan.character ? ` (эталонов: ${filmPlan.character.referenceCount})` : ""}
+            {filmPlan.bible.storyArc?.gudiniRole ? ` · роль: ${filmPlan.bible.storyArc.gudiniRole}` : ""} · стиль: {filmPlan.bible.visualStyle}
           </p>
+          {filmPlan.bible.storyArc && (
+            <p className="hint" style={{ margin: "6px 0" }}>
+              История: {filmPlan.bible.storyArc.beginning} → {filmPlan.bible.storyArc.development} → {filmPlan.bible.storyArc.conflict} → {filmPlan.bible.storyArc.climax}. Смысл: {filmPlan.bible.storyArc.meaning}
+            </p>
+          )}
+          {filmPlan.warnings?.map((w, i) => (
+            <p key={i} className="hint" style={{ color: "#f0b429", margin: "4px 0" }}>⚠ {w}</p>
+          ))}
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 6 }}>
+              <thead>
+                <tr className="hint">
+                  <th style={{ textAlign: "left", padding: "4px 6px" }}>Время</th>
+                  <th style={{ textAlign: "left", padding: "4px 6px" }}>Режим</th>
+                  <th style={{ textAlign: "left", padding: "4px 6px" }}>Смысл и действие</th>
+                  <th style={{ textAlign: "left", padding: "4px 6px" }}>AI</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filmPlan.beats.map((b) => {
+                  const m = MODE_LABEL[b.displayMode] ?? MODE_LABEL.author;
+                  const shots = filmPlan.shots.filter((sh) => sh.beatIds.includes(b.id));
+                  const group = shots[0] ? filmPlan.groups.find((g) => g.id === shots[0].groupId) : undefined;
+                  const cost = shots.reduce((a, sh) => a + sh.cost, 0);
+                  return (
+                    <tr key={b.id} style={{ borderTop: "1px solid var(--border)" }}>
+                      <td style={{ padding: "6px", whiteSpace: "nowrap", verticalAlign: "top" }} className="hint">{fmtTime(b.start)}–{fmtTime(b.end)}<br />{(b.end - b.start).toFixed(1)} с</td>
+                      <td style={{ padding: "6px", verticalAlign: "top", whiteSpace: "nowrap" }}>
+                        <span style={{ background: m.bg, color: m.fg, borderRadius: 6, padding: "2px 8px", fontWeight: 600, fontSize: 12 }}>{m.text}</span>
+                        <div className="hint" style={{ fontSize: 11, marginTop: 4 }}>{b.purpose} · {b.priority}</div>
+                      </td>
+                      <td style={{ padding: "6px", verticalAlign: "top" }}>
+                        {b.meaning}
+                        {b.displayMode !== "author" && <div className="hint" style={{ opacity: 0.85 }}>{b.visualAction}{b.location ? ` — ${b.location}` : ""}</div>}
+                        {b.reduced && <div className="hint" style={{ color: "#f0b429" }}>{b.reduced}</div>}
+                      </td>
+                      <td style={{ padding: "6px", verticalAlign: "top", whiteSpace: "nowrap" }} className="hint">
+                        {b.displayMode === "author" ? "—" : shots.length ? (
+                          <>
+                            {group?.id}{group?.chain ? " (цепочка)" : ""}<br />
+                            {shots.map((sh) => `${sh.mode} ${sh.veoSeconds}с`).join(" + ")}<br />
+                            {shots[0].generationProfile} · {shots[0].model.replace("-generate-001", "")}{shots[0].useReferences ? " · эталоны" : ""}<br />
+                            ${cost.toFixed(2)}
+                          </>
+                        ) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           {project.aiFilm?.status === "generated" && (
-            <p className="hint">Фильм сгенерирован{typeof project.aiFilm.spent === "number" ? ` · потрачено в последнем запуске $${project.aiFilm.spent.toFixed(2)}` : ""}. Повторный запуск возьмёт готовые сцены из кэша.</p>
+            <p className="hint" style={{ marginTop: 8 }}>Фильм сгенерирован{typeof project.aiFilm.spent === "number" ? ` · потрачено в последнем запуске $${project.aiFilm.spent.toFixed(2)}` : ""}. Повторный запуск возьмёт готовые сцены из кэша.</p>
           )}
         </div>
       )}
@@ -625,10 +699,10 @@ function ProcessStep({
       ) : (
         <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
           {style === "ai_film" ? (
-            filmPlan ? (
+            filmPlan && !planStale ? (
               <>
-                <button className="btn" onClick={() => start("generate")} disabled={!project.rawVideo}>
-                  🎬 Шаг 2: сгенерировать фильм в Veo и смонтировать (~${filmPlan.estimatedCost.toFixed(2)})
+                <button className="btn" onClick={() => start("generate")} disabled={!project.rawVideo || filmPlan.stats.calls === 0}>
+                  🎬 Шаг 2: сгенерировать {filmPlan.stats.calls} сцен в Veo и смонтировать (~${filmPlan.stats.estimatedCost.toFixed(2)})
                 </button>
                 <button className="btn btn-secondary" onClick={() => start("plan")} disabled={!project.rawVideo}>
                   Пересобрать план

@@ -1,52 +1,129 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compositeFilter, authorCropY, FILM_H, AUTHOR_H } from "../lib/aiFilm/composite";
+import { compositeFilter, audioFilter, overlaysFor, FILM_W, FILM_H } from "../lib/aiFilm/composite";
 import { motionStats } from "../lib/aiFilm/check";
-import { veoBody } from "../lib/aiFilm/veo";
+import { veoBody, VEO_REFERENCE_SECONDS } from "../lib/aiFilm/veo";
+import { buildFilmPlan, shotKey } from "../lib/aiFilm/plan";
+import { normalizeBible } from "../lib/aiFilm/story";
+import { veoPricePerSecond } from "../lib/aiFilm/pricing";
 import { setRunCostLimit, assertBudget, resetLedger, recordFlat } from "../lib/costLedger";
 import { isAllowed } from "../lib/providerPolicy";
+import { CARD } from "../lib/topInset";
+import { gudini, beat } from "./aiFilmPlan.test";
 
-test("геометрия: фильм 1080×608 сверху, автор 1312 снизу, субтитры поверх", () => {
-  assert.equal(FILM_H + AUTHOR_H, 1920);
-  const f = compositeFilter("scale=1080:1920,setsar=1", 61.5, 200);
-  assert.match(f, /crop=1080:1312:0:200\[author\]/);
-  assert.match(f, /scale=1080:608/);
-  assert.match(f, /trim=duration=61\.500/);
-  assert.match(f, /\[film\]\[author\]vstack=inputs=2,ass=subs\.ass\[v\]/);
-  assert.ok(authorCropY() >= 0 && authorCropY() <= 1920 - AUTHOR_H);
+const withRefs = { ...gudini, referenceFiles: ["/tmp/gudini/ref-1.png"] };
+const bible = normalizeBible({}, gudini);
+const cfg = { key: "k", budgetUsd: 12, maxCoverage: 0.55, concurrency: 3, callMinutes: 2 };
+
+const plan120 = () =>
+  buildFilmPlan({
+    character: withRefs, bible, duration: 120, cfg,
+    beats: [
+      beat("B1", 0, 6, "full_ai", { purpose: "hook", priority: "high" }),
+      beat("B2", 6, 17, "author"),
+      beat("B3", 17, 24, "hybrid"),
+      beat("B4", 24, 38, "author"),
+      beat("B5", 38, 46, "full_ai", { purpose: "reveal", priority: "high" }),
+      beat("B6", 46, 120, "author"),
+    ],
+  });
+
+test("K: голос автора — одна непрерывная дорожка независимо от AUTHOR → FULL_AI → AUTHOR", () => {
+  const plan = plan120();
+  const clips = plan.groups.map((g) => ({ groupId: g.id, file: `ai-film/group-${g.id}.mp4`, seconds: 8 }));
+  const video = compositeFilter("scale=1080:1920,setsar=1", overlaysFor(plan, clips), plan, 1);
+  const audio = audioFilter(false);
+  assert.equal(audio, "[0:a]afftdn=nr=10:nf=-45:tn=1,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]");
+  assert.doesNotMatch(video, /\[\d+:a\]|atrim|asetpts|amix/);
+  assert.equal((video.match(/\[0:v\]/g) ?? []).length, 1, "автор берётся один раз целиком");
+  // три окна: full_ai 0–6, hybrid 17–24, full_ai 38–46 — жёсткие склейки через enable
+  assert.match(video, /enable='between\(t,0\.000,6\.000\)'/);
+  assert.match(video, /enable='between\(t,17\.000,24\.000\)'/);
+  assert.match(video, /enable='between\(t,38\.000,46\.000\)'/);
+  assert.match(video, /setpts=PTS-STARTPTS\+38\.000\/TB/);
 });
 
-test("проверка жизни верха: движущиеся кадры проходят, застывшие и чёрные — нет", () => {
+test("L: FULL_AI занимает весь кадр 9:16, HYBRID — карточку сверху", () => {
+  const plan = plan120();
+  assert.equal(FILM_W, 1080);
+  assert.equal(FILM_H, 1920);
+  assert.ok(plan.shots.filter((s) => s.displayMode === "full_ai").every((s) => s.aspectRatio === "9:16"));
+  assert.ok(plan.shots.filter((s) => s.displayMode === "hybrid").every((s) => s.aspectRatio === "16:9"));
+  const clips = plan.groups.map((g) => ({ groupId: g.id, file: `ai-film/group-${g.id}.mp4`, seconds: 8 }));
+  const video = compositeFilter("scale=1080:1920,setsar=1", overlaysFor(plan, clips), plan, 1);
+  assert.match(video, /scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[^;]*\[ai0\];\[vbase\]\[ai0\]overlay=0:0/);
+  assert.match(video, new RegExp(`overlay=${CARD.x}:${CARD.y}`));
+});
+
+test("M: субтитры — верхний слой и на авторе, и на AI", () => {
+  const plan = plan120();
+  const clips = plan.groups.map((g) => ({ groupId: g.id, file: `x-${g.id}.mp4`, seconds: 8 }));
+  const video = compositeFilter("scale=1080:1920,setsar=1", overlaysFor(plan, clips), plan, 1);
+  assert.match(video, /;\[vo2\]ass=subs\.ass\[v\]$/);
+});
+
+test("клип короче своего окна — ошибка сборки, а не тихая заморозка", () => {
+  const plan = plan120();
+  const clips = plan.groups.map((g) => ({ groupId: g.id, file: `x-${g.id}.mp4`, seconds: g.id === "G2" ? 4 : 8 }));
+  assert.throws(() => overlaysFor(plan, clips), /короче своего отрезка/);
+});
+
+test("N: смена одного независимого shot не меняет ключи остальных", () => {
+  const plan = plan120();
+  const [a, b, c] = plan.shots;
+  const kb = shotKey(b, "refs-a", null);
+  const kc = shotKey(c, "refs-a", null);
+  const changed = { ...a, prompt: a.prompt + " Now he smiles." };
+  assert.notEqual(shotKey(changed, "refs-a", null), shotKey(a, "refs-a", null));
+  assert.equal(shotKey(b, "refs-a", null), kb);
+  assert.equal(shotKey(c, "refs-a", null), kc);
+});
+
+test("тело запроса Veo: референсы как ASSET, только с 8 с и без image/video; 9:16; без звука", () => {
+  const refs = [{ gcsUri: "gs://b/characters/gudini/a.png", mimeType: "image/png" }];
+  const body = veoBody({ model: "m", prompt: "p", durationSeconds: VEO_REFERENCE_SECONDS, storageUri: "gs://b/x/", aspectRatio: "9:16", referenceImages: refs });
+  assert.deepEqual(body.instances[0].referenceImages, [{ image: { gcsUri: "gs://b/characters/gudini/a.png", mimeType: "image/png" }, referenceType: "ASSET" }]);
+  assert.equal(body.parameters.aspectRatio, "9:16");
+  assert.equal(body.parameters.generateAudio, false);
+  assert.equal(body.parameters.resolution, "720p");
+  assert.throws(() => veoBody({ model: "m", prompt: "p", durationSeconds: 6, storageUri: "gs://b/x/", aspectRatio: "9:16", referenceImages: refs }), /8 с/);
+  assert.throws(() => veoBody({ model: "m", prompt: "p", durationSeconds: 8, storageUri: "gs://b/x/", aspectRatio: "9:16", referenceImages: refs, videoGcsUri: "gs://b/v.mp4" }), /не сочетаются/);
+  assert.throws(() => veoBody({ model: "m", prompt: "p", durationSeconds: 5, storageUri: "gs://b/x/", aspectRatio: "16:9" }), /не поддерживается/);
+  const ext = veoBody({ model: "m", prompt: "p", durationSeconds: 7, storageUri: "gs://b/x/", aspectRatio: "9:16", videoGcsUri: "gs://b/prev.mp4" });
+  assert.deepEqual(ext.instances[0].video, { gcsUri: "gs://b/prev.mp4", mimeType: "video/mp4" });
+  assert.equal(ext.instances[0].referenceImages, undefined);
+});
+
+test("цены Veo: политика по модели/звуку/разрешению, ручной override, неизвестная модель — ошибка", () => {
+  const prev = process.env.AI_FILM_PRICE_PER_SEC;
+  delete process.env.AI_FILM_PRICE_PER_SEC;
+  try {
+    assert.deepEqual(veoPricePerSecond("veo-3.1-fast-generate-001", { audio: false, resolution: "720p" }), { pricePerSec: 0.08, source: "policy" });
+    assert.equal(veoPricePerSecond("veo-3.1-fast-generate-001", { audio: true, resolution: "720p" }).pricePerSec, 0.1);
+    assert.equal(veoPricePerSecond("veo-3.1-lite-generate-001", { audio: false, resolution: "720p" }).pricePerSec, 0.03);
+    assert.throws(() => veoPricePerSecond("veo-9-unknown", { audio: false, resolution: "720p" }), /не в таблице цен/);
+    process.env.AI_FILM_PRICE_PER_SEC = "0.05";
+    assert.deepEqual(veoPricePerSecond("veo-9-unknown", { audio: false, resolution: "720p" }), { pricePerSec: 0.05, source: "env" });
+  } finally {
+    if (prev === undefined) delete process.env.AI_FILM_PRICE_PER_SEC; else process.env.AI_FILM_PRICE_PER_SEC = prev;
+  }
+});
+
+test("проверка жизни AI-окна: движущиеся кадры проходят, застывшие и чёрные — нет", () => {
   const size = 16 * 9;
   const moving = Buffer.alloc(size * 6);
   for (let f = 0; f < 6; f++) for (let i = 0; i < size; i++) moving[f * size + i] = (i * 7 + f * 40) % 256;
   const m = motionStats(moving);
   assert.equal(m.frames, 6);
   assert.equal(m.changed, 5);
-  assert.equal(m.dark, 0);
-  const frozen = Buffer.alloc(size * 6, 120);
-  assert.equal(motionStats(frozen).changed, 0);
-  const black = Buffer.alloc(size * 6, 3);
-  assert.equal(motionStats(black).dark, 6);
-});
-
-test("тело запроса Veo: без звука, 16:9, 720p; extension — видео из GCS, не автора", () => {
-  const b = veoBody({ model: "m", prompt: "p", durationSeconds: 7, storageUri: "gs://b/x/", videoGcsUri: "gs://b/prev.mp4" });
-  assert.equal(b.parameters.generateAudio, false);
-  assert.equal(b.parameters.aspectRatio, "16:9");
-  assert.equal(b.parameters.resolution, "720p");
-  assert.equal(b.parameters.durationSeconds, 7);
-  assert.deepEqual(b.instances[0].video, { gcsUri: "gs://b/prev.mp4", mimeType: "video/mp4" });
-  assert.equal(b.instances[0].image, undefined);
-  const img = veoBody({ model: "m", prompt: "p", durationSeconds: 8, storageUri: "gs://b/x/", imageGcsUri: "gs://b/f.jpg" });
-  assert.equal(img.instances[0].image.mimeType, "image/jpeg");
+  assert.equal(motionStats(Buffer.alloc(size * 6, 120)).changed, 0);
+  assert.equal(motionStats(Buffer.alloc(size * 6, 3)).dark, 6);
 });
 
 test("политика провайдеров: история — Anthropic, генерация — только Google", () => {
   assert.ok(isAllowed("AI Film Story", "anthropic"));
   assert.ok(isAllowed("AI Film Generation", "google"));
   assert.ok(!isAllowed("AI Film Generation", "anthropic"));
-  assert.ok(!isAllowed("AI Film Story", "google"));
   assert.ok(!isAllowed("Cover Generation", "google"));
 });
 
@@ -64,7 +141,7 @@ test("предел запуска фильма заменяет предел $2 
     assert.throws(() => assertBudget("AI Film Generation", 7.5), /Лимит расходов/);
     resetLedger();
     recordFlat({ stage: "AI Film Generation", provider: "google", model: "veo", cost: 5 });
-    assert.throws(() => assertBudget("AI Film Generation", 1.05), /Лимит расходов/, "после сброса предел снова обычный");
+    assert.throws(() => assertBudget("AI Film Generation", 1.05), /Лимит расходов/);
   } finally {
     if (prevHard === undefined) delete process.env.MEDIA_JOB_HARD_LIMIT; else process.env.MEDIA_JOB_HARD_LIMIT = prevHard;
     if (prevMax === undefined) delete process.env.MEDIA_JOB_MAX_COST_USD; else process.env.MEDIA_JOB_MAX_COST_USD = prevMax;

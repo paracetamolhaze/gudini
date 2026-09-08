@@ -228,7 +228,7 @@ async function runJob(id: string): Promise<void> {
     if (done.processing.state === "done" && !done.processedVideo && done.aiFilm?.plan) {
       // план AI-фильма: видео нет, сайт показывает план и цену, генерация — после подтверждения
       await api(`/api/worker/complete/${id}`, { method: "POST", body: JSON.stringify({ aiFilm: done.aiFilm, research: done.research }) });
-      console.log(`✔ Задача ${id}: план AI-фильма отправлен (оценка $${done.aiFilm.plan.estimatedCost.toFixed(2)})`);
+      console.log(`✔ Задача ${id}: план AI-фильма отправлен (оценка $${done.aiFilm.plan.stats.estimatedCost.toFixed(2)}, AI ${done.aiFilm.plan.stats.aiSeconds} с из ${done.aiFilm.plan.stats.speechSeconds} с)`);
     } else if (done.processing.state === "done") {
       const deliverable = {
         subtitlesSource: done.subtitlesSource,

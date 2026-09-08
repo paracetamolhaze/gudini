@@ -1,90 +1,101 @@
 import fs from "fs";
 import path from "path";
-import { probeDuration, runFfmpeg } from "../ffmpeg";
+import { runFfmpeg } from "../ffmpeg";
 import { hasMusic, MUSIC_FILE } from "../store";
-import { filmDir } from "./generate";
-import type { AiFilmPlan } from "./types";
+import { CARD, CARD_FILTER } from "../topInset";
+import type { AiFilmPlan, GroupClip, TimelineSegment } from "./types";
 
 /**
- * Сборка и композиция AI-фильма.
- *
- * Геометрия кадра 1080×1920: сверху фильм 16:9 → 1080×608, снизу автор 1080×1312
- * (вырезка из его кадра 1080×1920 со сдвигом cropY — лицо остаётся в кадре, субтитры
- * ложатся на нижнюю часть, как и в обычном стиле). Звук — оригинал автора той же
- * цепочкой, что и в обычном монтаже. Фильм не растягивается: каждая последовательность
- * сгенерирована не короче своего отрезка речи и подрезается по нему.
+ * Финальная сборка v2: одна дорожка автора целиком (видео и голос), поверх неё в окнах
+ * таймлайна — клипы групп. FULL_AI: клип 9:16 на весь кадр 1080×1920. HYBRID: клип в
+ * карточке сверху, как в обычном стиле (та же геометрия CARD). Субтитры (ass) — самым
+ * верхним слоем, поэтому идут и на авторе, и на AI. Звук берётся только из автора той же
+ * цепочкой, что в обычном монтаже: переключения видеоряда его не касаются.
  */
 
 export const FILM_W = 1080;
-export const FILM_H = 608;
-export const AUTHOR_H = 1920 - FILM_H;
+export const FILM_H = 1920;
 export const FILM_FPS = 30;
 
-export function authorCropY(): number {
-  const v = Number(process.env.AI_FILM_AUTHOR_CROP_Y ?? 200);
-  return Math.max(0, Math.min(1920 - AUTHOR_H, Math.round(v)));
-}
+export type Overlay = { segment: TimelineSegment; clip: GroupClip };
 
-/** Один фильм из последовательностей: каждая обрезана под свой отрезок речи, всё — под длину ролика. */
-export async function assembleFilm(dir: string, plan: AiFilmPlan, sequenceFiles: string[], duration: number): Promise<string> {
-  if (sequenceFiles.length !== plan.sequences.length) throw new Error("AI-фильм: число последовательностей не совпадает с планом");
-  const parts: string[] = [];
-  const filters: string[] = [];
-  for (let i = 0; i < plan.sequences.length; i++) {
-    const seq = plan.sequences[i];
-    const file = path.join(dir, sequenceFiles[i]);
-    const have = await probeDuration(file);
-    const need = i === plan.sequences.length - 1 ? Math.max(seq.end, duration) - seq.start : seq.end - seq.start;
-    if (have + 0.5 < need) {
-      throw new Error(`AI-фильм: последовательность ${i + 1} короче своего отрезка (${have.toFixed(1)} с < ${need.toFixed(1)} с)`);
+/** Окна наложения: по AI-сегментам таймлайна, клип группы стартует с начала группы. */
+export function overlaysFor(plan: AiFilmPlan, clips: GroupClip[]): Overlay[] {
+  const byGroup = new Map(clips.map((c) => [c.groupId, c]));
+  const out: Overlay[] = [];
+  for (const seg of plan.timeline) {
+    if (seg.mode === "author" || !seg.groupId) continue;
+    const clip = byGroup.get(seg.groupId);
+    if (!clip) throw new Error(`AI-фильм: для группы ${seg.groupId} нет клипа`);
+    const group = plan.groups.find((g) => g.id === seg.groupId)!;
+    if (clip.seconds + 0.5 < group.end - group.start) {
+      throw new Error(`AI-фильм: клип группы ${seg.groupId} короче своего отрезка (${clip.seconds.toFixed(1)} с < ${(group.end - group.start).toFixed(1)} с)`);
     }
-    parts.push("-i", file);
-    filters.push(`[${i}:v]fps=${FILM_FPS},scale=1280:720,setsar=1,trim=duration=${need.toFixed(3)},setpts=PTS-STARTPTS[p${i}]`);
+    out.push({ segment: seg, clip });
   }
-  const concat = plan.sequences.map((_, i) => `[p${i}]`).join("") + `concat=n=${plan.sequences.length}:v=1:a=0[v]`;
-  const out = path.join(filmDir(dir), "film.mp4");
-  await runFfmpeg([...parts, "-filter_complex", `${filters.join(";")};${concat}`, "-map", "[v]", "-c:v", "libx264", "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p", out]);
-  const dur = await probeDuration(out);
-  if (dur + 0.5 < duration) throw new Error(`AI-фильм: собранный фильм ${dur.toFixed(1)} с короче ролика ${duration.toFixed(1)} с`);
-  return path.relative(dir, out);
+  return out;
 }
 
-/** Фильтры кадра: верх — фильм, низ — автор, поверх — субтитры. */
-export function compositeFilter(fit: string, effDur: number, cropY: number, subs = "subs.ass"): string {
-  return (
-    `[0:v]${fit},fps=${FILM_FPS},crop=${FILM_W}:${AUTHOR_H}:0:${cropY}[author];` +
-    `[1:v]scale=${FILM_W}:${FILM_H}:force_original_aspect_ratio=increase,crop=${FILM_W}:${FILM_H},setsar=1,fps=${FILM_FPS},` +
-    `tpad=stop_mode=clone:stop_duration=5,trim=duration=${effDur.toFixed(3)},setpts=PTS-STARTPTS[film];` +
-    `[film][author]vstack=inputs=2,ass=${subs}[v]`
-  );
+/**
+ * Фильтр видео: [0:v] автор → наложения → субтитры. Индексы входов клипов начинаются с
+ * firstInput (1 без музыки, 2 с музыкой). Клип обрезается под окно и сдвигается по PTS
+ * на начало окна; enable ограничивает показ окном — жёсткая склейка без эффектов.
+ */
+export function compositeFilter(fit: string, overlays: Overlay[], plan: AiFilmPlan, firstInput: number, subs = "subs.ass"): string {
+  let chain = `[0:v]${fit},fps=${FILM_FPS}[vbase]`;
+  let current = "vbase";
+  overlays.forEach((o, k) => {
+    const group = plan.groups.find((g) => g.id === o.segment.groupId)!;
+    const inputIdx = firstInput + k;
+    const offset = Math.max(0, o.segment.start - group.start); // окно может начинаться не с начала клипа группы
+    const len = o.segment.end - o.segment.start;
+    const scaled =
+      o.segment.mode === "full_ai"
+        ? `scale=${FILM_W}:${FILM_H}:force_original_aspect_ratio=increase,crop=${FILM_W}:${FILM_H},setsar=1`
+        : `${CARD_FILTER},setsar=1`;
+    const pos = o.segment.mode === "full_ai" ? "0:0" : `${CARD.x}:${CARD.y}`;
+    chain +=
+      `;[${inputIdx}:v]${scaled},fps=${FILM_FPS},trim=start=${offset.toFixed(3)}:duration=${len.toFixed(3)},` +
+      `tpad=stop_mode=clone:stop_duration=2,trim=duration=${len.toFixed(3)},setpts=PTS-STARTPTS+${o.segment.start.toFixed(3)}/TB[ai${k}]` +
+      `;[${current}][ai${k}]overlay=${pos}:eof_action=pass:enable='between(t,${o.segment.start.toFixed(3)},${o.segment.end.toFixed(3)})'[vo${k}]`;
+    current = `vo${k}`;
+  });
+  chain += `;[${current}]ass=${subs}[v]`;
+  return chain;
+}
+
+/** Звук: только автор, той же цепочкой, что в обычном монтаже; музыка — вход 1. */
+export function audioFilter(music: boolean): string {
+  const voice = "afftdn=nr=10:nf=-45:tn=1,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000";
+  return music
+    ? `[0:a]${voice}[vo];[1:a]volume=0.22,aresample=48000[mus];[mus][vo]sidechaincompress=threshold=0.05:ratio=12:attack=20:release=500[duck];[vo][duck]amix=inputs=2:duration=first:normalize=0[a]`
+    : `[0:a]${voice}[a]`;
 }
 
 export async function renderFilmComposite(
   dir: string,
   source: string,
-  filmFile: string,
+  plan: AiFilmPlan,
+  clips: GroupClip[],
   effDur: number,
   onProgress: (f: number) => void,
   opts: { threads: number; fit: string },
 ): Promise<void> {
   const music = hasMusic();
-  const { fit, threads } = opts;
   if (!fs.existsSync(path.join(dir, "subs.ass"))) throw new Error("AI-фильм: нет файла субтитров");
-  const voice = "afftdn=nr=10:nf=-45:tn=1,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000";
-  const audioChain = music
-    ? `[0:a]${voice}[vo];` +
-      `[2:a]volume=0.22,aresample=48000[mus];` +
-      `[mus][vo]sidechaincompress=threshold=0.05:ratio=12:attack=20:release=500[duck];` +
-      `[vo][duck]amix=inputs=2:duration=first:normalize=0[a]`
-    : `[0:a]${voice}[a]`;
+  const overlays = overlaysFor(plan, clips);
+  for (const o of overlays) {
+    if (!fs.existsSync(path.join(dir, o.clip.file))) throw new Error(`AI-фильм: нет файла клипа ${o.clip.file}`);
+  }
+  const firstInput = music ? 2 : 1;
   await runFfmpeg(
     [
       "-i", source,
-      "-i", filmFile,
       ...(music ? ["-stream_loop", "-1", "-i", MUSIC_FILE] : []),
-      "-filter_complex", `${compositeFilter(fit, effDur, authorCropY())};${audioChain}`,
+      ...overlays.flatMap((o) => ["-i", o.clip.file]),
+      "-filter_complex", `${compositeFilter(opts.fit, overlays, plan, firstInput)};${audioFilter(music)}`,
       "-map", "[v]", "-map", "[a]",
-      "-threads", String(threads),
+      "-threads", String(opts.threads),
       "-c:v", "libx264", "-preset", "medium", "-crf", "18",
       "-c:a", "aac", "-ar", "48000", "-b:a", "192k",
       "-movflags", "+faststart",

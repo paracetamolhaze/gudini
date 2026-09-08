@@ -1,19 +1,23 @@
 import fs from "fs";
 import path from "path";
 import { runFfmpeg } from "../ffmpeg";
-import { FILM_W, FILM_H } from "./composite";
+import { hashFromGray, hamming, HASH_VF } from "../sceneHash";
+import { CARD } from "../topInset";
+import type { AiFilmPlan } from "./types";
 
 /**
- * Проверка готового ролика: верхняя область (фильм) должна жить — кадры меняться.
- * Застывший или чёрный верх — это не «готово», а ошибка сборки. Дёшево: по кадру
- * каждые 2 секунды, серый 16×9, сравнение соседних.
+ * Проверка готового ролика v2: в каждом AI-окне кадр результата обязан отличаться от
+ * кадра автора в тот же момент (наложение действительно произошло), не быть чёрным и
+ * меняться во времени. Автор-окна не проверяются: там результат и есть автор.
+ * Всё локально, без платных вызовов.
  */
 
 export const FILM_CHECK_STEP_SEC = 2;
 const W = 16;
 const H = 9;
+const MIN_HASH_DISTANCE = 8;
 
-/** Доля пар соседних кадров, где картинка заметно изменилась, и доля почти чёрных кадров. */
+/** Доля пар соседних кадров, где картинка заметно изменилась, и число почти чёрных кадров. */
 export function motionStats(gray: Buffer, w = W, h = H): { frames: number; changed: number; dark: number } {
   const size = w * h;
   const frames = Math.floor(gray.length / size);
@@ -31,18 +35,37 @@ export function motionStats(gray: Buffer, w = W, h = H): { frames: number; chang
   return { frames, changed, dark };
 }
 
-export async function checkFilmAlive(dir: string, outFile = "out.mp4"): Promise<void> {
-  const raw = path.join(dir, "ai-film", "check-top.gray");
-  await runFfmpeg([
-    "-i", outFile,
-    "-vf", `crop=${FILM_W}:${FILM_H}:0:0,fps=1/${FILM_CHECK_STEP_SEC},scale=${W}:${H},format=gray`,
-    "-f", "rawvideo", "-pix_fmt", "gray", raw,
-  ], { cwd: dir });
-  const stats = motionStats(fs.readFileSync(raw));
-  try { fs.rmSync(raw, { force: true }); } catch {}
-  if (stats.frames < 2) throw new Error("Проверка фильма: не удалось прочитать кадры верхней области");
-  if (stats.dark / stats.frames > 0.3) throw new Error(`Проверка фильма: ${stats.dark} из ${stats.frames} кадров верха почти чёрные`);
-  if (stats.changed / (stats.frames - 1) < 0.5) {
-    throw new Error(`Проверка фильма: верх застыл — изменились только ${stats.changed} из ${stats.frames - 1} пар кадров`);
+async function grayFrames(dir: string, file: string, crop: string, start: number, len: number, out: string, vf: string): Promise<Buffer> {
+  await runFfmpeg(
+    ["-ss", start.toFixed(3), "-t", len.toFixed(3), "-i", file, "-vf", `${crop}${crop ? "," : ""}${vf}`, "-f", "rawvideo", "-pix_fmt", "gray", out],
+    { cwd: dir },
+  );
+  const buf = fs.readFileSync(out);
+  try { fs.rmSync(out, { force: true }); } catch {}
+  return buf;
+}
+
+/** Проверка AI-окон: наложение есть (кадр не равен кадру автора), верх/кадр живой и не чёрный. */
+export async function checkAiSegments(dir: string, plan: AiFilmPlan, authorSource: string, outFile = "out.mp4"): Promise<void> {
+  const tmp = path.join(dir, "ai-film");
+  fs.mkdirSync(tmp, { recursive: true });
+  const segments = plan.timeline.filter((s) => s.mode !== "author" && s.end - s.start >= 1.5);
+  if (!segments.length) throw new Error("Проверка AI-фильма: в плане нет AI-окон");
+  for (const seg of segments) {
+    const crop = seg.mode === "hybrid" ? `crop=${CARD.w}:${CARD.h}:${CARD.x}:${CARD.y}` : "";
+    const mid = (seg.start + seg.end) / 2;
+    const a = hashFromGray(await grayFrames(dir, outFile, crop, mid, 0.05, path.join(tmp, "chk-out.gray"), `${HASH_VF},select=eq(n\\,0)`));
+    const b = hashFromGray(await grayFrames(dir, authorSource, crop, mid, 0.05, path.join(tmp, "chk-src.gray"), `${HASH_VF},select=eq(n\\,0)`));
+    if (a == null || b == null) throw new Error(`Проверка AI-фильма: не удалось прочитать кадр на ${mid.toFixed(1)} с`);
+    if (hamming(a, b) < MIN_HASH_DISTANCE) {
+      throw new Error(`Проверка AI-фильма: на ${mid.toFixed(1)} с (${seg.mode}) в кадре автор, а не AI-сцена — наложение не сработало`);
+    }
+    const stats = motionStats(await grayFrames(dir, outFile, crop, seg.start, seg.end - seg.start, path.join(tmp, "chk-mot.gray"), `fps=1/${FILM_CHECK_STEP_SEC},scale=${W}:${H},format=gray`));
+    if (stats.frames >= 2 && stats.dark / stats.frames > 0.5) {
+      throw new Error(`Проверка AI-фильма: окно ${seg.start.toFixed(1)}–${seg.end.toFixed(1)} с почти чёрное`);
+    }
+    if (stats.frames >= 3 && stats.changed === 0) {
+      throw new Error(`Проверка AI-фильма: окно ${seg.start.toFixed(1)}–${seg.end.toFixed(1)} с застыло — кадры не меняются`);
+    }
   }
 }

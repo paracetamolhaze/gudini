@@ -1,133 +1,262 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sentencesFromWords, episodesFromRaw } from "../lib/aiFilm/story";
-import { buildFilmPlan, groupSequences, scenePrompt, sceneKey, contiguousEpisodes } from "../lib/aiFilm/plan";
-import type { FilmEpisode, StoryBible } from "../lib/aiFilm/types";
+import { phrasesFromWords, beatsFromRaw, normalizeBible, MIN_AI_BEAT_SEC, MAX_AI_BEAT_SEC } from "../lib/aiFilm/story";
+import {
+  buildFilmPlan, buildShots, groupBeats, shotKey, shotPrompt, estimateWallMinutes, reduceToBudget, planVersionError, PLAN_VERSION,
+  type PlanConfig,
+} from "../lib/aiFilm/plan";
+import { normalizeVeoDuration } from "../lib/aiFilm/veo";
+import type { CharacterProfile, StoryBeat, StoryBible, DisplayMode, BeatPurpose, Priority } from "../lib/aiFilm/types";
 
 const words = (text: string, secPerWord = 0.4) =>
   text.split(/\s+/).map((w, i) => ({ word: w, start: i * secPerWord, end: i * secPerWord + 0.3 }));
 
-const bible: StoryBible = {
-  visualStyle: "cinematic 35mm",
-  mainCharacter: { description: "a young courier", appearance: "short dark hair", clothes: "red jacket", signature: "red jacket, silver ring" },
-  locations: ["night city"],
-  importantObjects: ["bicycle"],
-  mood: "tense",
-  cameraLanguage: "handheld",
-  storyArc: "courier races through the city",
-  continuityRules: ["same red jacket", "always night"],
+export const gudini: CharacterProfile = {
+  id: "gudini",
+  name: "Gudini",
+  role: "main_protagonist",
+  description: "Gudini, a young shinobi of a hidden village",
+  appearance: "short spiky platinum-blond hair, brown eyes",
+  clothes: "olive utility vest over a black long-sleeve shirt",
+  signature: "platinum spiky hair, forehead plate",
+  styleLock: "stylized cinematic anime, cel shading",
+  world: "an original hidden ninja village",
+  negative: "no hair color change",
+  referenceImages: ["ref-1.png", "ref-2.png"],
+  referenceFiles: [],
+  refHash: "refs-a",
+  dir: "/tmp/gudini",
 };
+const withRefs: CharacterProfile = { ...gudini, referenceFiles: ["/tmp/gudini/ref-1.png", "/tmp/gudini/ref-2.png"] };
 
-const ep = (id: string, start: number, end: number, transition: FilmEpisode["transition"] = "continue"): FilmEpisode => ({
-  id, start, end, meaning: `смысл ${id}`, visualAction: `action ${id}`, location: "city", stateAfter: `state ${id}`, transition,
+const bible: StoryBible = normalizeBible({ bible: { mood: "tense", visualStyle: "photorealism (must be ignored)" }, storyArc: { gudiniRole: "a scout on a mission" } } as any, gudini);
+
+export const beat = (
+  id: string, start: number, end: number, mode: DisplayMode,
+  o: Partial<Pick<StoryBeat, "purpose" | "priority" | "continuityGroup" | "gudiniVisible" | "visualAction">> = {},
+): StoryBeat => ({
+  id, start, end,
+  meaning: `смысл ${id}`, storyBeat: `бит ${id}`,
+  displayMode: mode,
+  purpose: (o.purpose ?? "explain") as BeatPurpose,
+  priority: (o.priority ?? "medium") as Priority,
+  requiresGeneration: mode !== "author",
+  gudiniVisible: mode !== "author" && (o.gudiniVisible ?? true),
+  visualAction: mode === "author" ? "" : o.visualAction ?? `Gudini does action ${id}`,
+  location: mode === "author" ? "" : "village rooftop",
+  stateBefore: "he stands", stateAfter: `state after ${id}`,
+  continuityGroup: o.continuityGroup ?? null,
+  transition: "cut", shotType: "medium", camera: "slow push-in",
+  suggestedDuration: end - start,
 });
 
-test("предложения режутся по знакам конца и длинным паузам", () => {
-  const w = words("Первое предложение здесь. Второе идёт дальше и дальше. Третье");
-  const s = sentencesFromWords(w);
-  assert.equal(s.length, 3);
-  assert.equal(s[0].text, "Первое предложение здесь.");
-  assert.equal(s[2].start, w[8].start);
-});
+const cfg = (over: Partial<PlanConfig> = {}): PlanConfig => ({ key: "k", budgetUsd: 12, maxCoverage: 0.55, concurrency: 3, callMinutes: 2, overheadMinutes: 1, ...over });
 
-test("эпизоды из ответа модели: пропуски и пересечения чинятся, длинные режутся, короткие сливаются", () => {
-  const w = words(Array.from({ length: 60 }, (_, i) => `w${i}${i % 6 === 5 ? "." : ""}`).join(" ")); // 10 предложений по 2.4 с
-  const s = sentencesFromWords(w);
-  assert.equal(s.length, 10);
-  const raw = [
-    { fromSentence: 1, toSentence: 1, meaning: "a", visualAction: "A", location: "", stateAfter: "", transition: "continue" }, // короткий
-    { fromSentence: 3, toSentence: 4, meaning: "b", visualAction: "B", location: "", stateAfter: "", transition: "match_cut" }, // пропуск 2 → растянется
-    { fromSentence: 4, toSentence: 10, meaning: "c", visualAction: "C", location: "", stateAfter: "", transition: "new_sequence" }, // пересечение и длинный
-  ];
-  const eps = episodesFromRaw(raw as any, s);
-  assert.ok(eps.length >= 3);
-  assert.equal(eps[0].start, s[0].start);
-  assert.equal(eps[eps.length - 1].end, s[9].end);
-  for (let i = 1; i < eps.length; i++) assert.ok(eps[i].start >= eps[i - 1].end - 1e-6, "эпизоды идут без пересечений");
-  for (const e of eps) assert.ok(e.end - e.start <= 12.5, `эпизод ${e.id} не длиннее 12 с: ${(e.end - e.start).toFixed(1)}`);
-  assert.ok(eps.every((e) => e.end - e.start >= 2), "коротких эпизодов нет");
-});
-
-test("последовательности: разрыв на new_sequence и по пределу длины", () => {
-  const eps = [ep("E1", 0, 8), ep("E2", 8, 16, "new_sequence"), ep("E3", 16, 24), ep("E4", 24, 40)];
-  const g = groupSequences(eps, 148);
-  assert.equal(g.length, 2);
-  assert.deepEqual(g[0].episodes.map((e) => e.id), ["E1", "E2"]);
-  assert.equal(g[1].byLimit, false);
-  const tight = groupSequences([ep("E1", 0, 8), ep("E2", 8, 20), ep("E3", 20, 30)], 15);
-  assert.equal(tight.length, 3);
-  assert.equal(tight[1].byLimit, true);
-});
-
-test("план: первая сцена 8 с, продолжения по 7 с, фильм не короче речи, цена по секундам", () => {
-  const eps = [ep("E1", 0, 9), ep("E2", 9, 20), ep("E3", 20, 31, "new_sequence"), ep("E4", 31, 44)];
-  const plan = buildFilmPlan(bible, eps, 45, { key: "k", pricePerSec: 0.15, model: "veo-test" });
-  assert.equal(plan.sequences.length, 2);
-  const s1 = plan.sequences[0];
-  assert.equal(s1.scenes[0].seconds, 8);
-  assert.equal(s1.scenes[0].mode, "text");
-  assert.ok(s1.scenes.slice(1).every((s) => s.seconds === 7 && s.mode === "extend"));
-  assert.ok(s1.seconds >= s1.end - s1.start, "последовательность покрывает свой отрезок");
-  const s2 = plan.sequences[1];
-  assert.equal(s2.end, 45, "последняя тянется до конца ролика");
-  assert.ok(s2.seconds >= 45 - 31);
-  assert.equal(plan.totalSeconds, s1.seconds + s2.seconds);
-  assert.equal(plan.estimatedCost, Math.round(plan.totalSeconds * 0.15 * 100) / 100);
-  assert.equal(plan.calls, s1.scenes.length + s2.scenes.length);
-  assert.equal(plan.model, "veo-test");
-  // сцена получает эпизод по времени: вторая сцена первой последовательности (8–15 с) — это E2
-  assert.equal(s1.scenes[1].episodeId, "E2");
-});
-
-test("разрыв только по пределу — следующая последовательность стартует с кадра (image)", () => {
-  const eps = [ep("E1", 0, 10), ep("E2", 10, 20), ep("E3", 20, 30)];
-  const plan = buildFilmPlan(bible, eps, 30, { key: "k", maxSequenceSeconds: 15 });
-  assert.ok(plan.sequences.length >= 2);
-  assert.equal(plan.sequences[1].scenes[0].mode, "image");
-});
-
-test("промпт сцены несёт стиль, героя, действие, непрерывность и запрет текста", () => {
-  const p = scenePrompt(bible, ep("E2", 8, 16), ep("E1", 0, 8), "extend");
-  assert.match(p, /cinematic 35mm/);
-  assert.match(p, /red jacket, silver ring/);
-  assert.match(p, /Continue the same shot without a cut/);
-  assert.match(p, /Previous state: state E1/);
-  assert.match(p, /Action: action E2/);
-  assert.match(p, /No text, no captions/);
-});
-
-test("ключ сцены включает источник: правка сцены не трогает предыдущие, но пересобирает следующие", () => {
-  const eps = [ep("E1", 0, 9), ep("E2", 9, 20)];
-  const plan = buildFilmPlan(bible, eps, 20, { key: "k" });
-  const [a, b] = plan.sequences[0].scenes;
-  const ka = sceneKey(a, plan.model, null);
-  const kb1 = sceneKey(b, plan.model, ka);
-  const kb2 = sceneKey(b, plan.model, "other-source");
-  assert.notEqual(ka, kb1);
-  assert.notEqual(kb1, kb2);
-  assert.equal(sceneKey(a, plan.model, null), ka);
-});
-
-test("эпизоды и последовательности встык: с нуля, без пауз между ними, до конца ролика", () => {
-  const eps = [ep("E1", 0.7, 4.4), ep("E2", 4.6, 14.5, "new_sequence"), ep("E3", 15.0, 31.7), ep("E4", 31.9, 56.0)];
-  const c = contiguousEpisodes(eps, 60);
-  assert.equal(c[0].start, 0);
-  assert.equal(c[1].start, c[0].end);
-  assert.equal(c[3].end, 60);
-  const plan = buildFilmPlan(bible, eps, 60, { key: "k" });
-  assert.equal(plan.sequences[0].start, 0);
-  for (let i = 1; i < plan.sequences.length; i++) assert.equal(plan.sequences[i].start, plan.sequences[i - 1].end);
-  assert.equal(plan.sequences[plan.sequences.length - 1].end, 60);
-  const covered = plan.sequences.reduce((a, s) => a + (s.end - s.start), 0);
-  assert.ok(Math.abs(covered - 60) < 1e-6, "фильм покрывает ролик целиком");
-});
+/** условный 120-секундный ролик: 5 AI-сцен, остальное автор */
+const beats120 = () => [
+  beat("B1", 0, 6, "full_ai", { purpose: "hook", priority: "high" }),
+  beat("B2", 6, 17, "author"),
+  beat("B3", 17, 24, "hybrid", { purpose: "example", priority: "medium" }),
+  beat("B4", 24, 38, "author"),
+  beat("B5", 38, 46, "full_ai", { purpose: "reveal", priority: "high" }),
+  beat("B6", 46, 70, "author"),
+  beat("B7", 70, 78, "full_ai", { purpose: "example", priority: "low" }),
+  beat("B8", 78, 100, "author"),
+  beat("B9", 100, 108, "full_ai", { purpose: "climax", priority: "high" }),
+  beat("B10", 108, 120, "author"),
+];
 
 test("фразы для модели не длиннее 5 с и 14 слов даже без знаков препинания", () => {
-  const w = words(Array.from({ length: 80 }, (_, i) => `слово${i}`).join(" "), 0.4); // 32 с без единого знака
-  const s = sentencesFromWords(w);
-  assert.ok(s.length >= 6, `фраз ${s.length}`);
+  const w = words(Array.from({ length: 80 }, (_, i) => `слово${i}`).join(" "), 0.4);
+  const s = phrasesFromWords(w);
+  assert.ok(s.length >= 6);
   for (const x of s) {
-    assert.ok(x.end - x.start <= 5.5, `фраза ${x.index} длиной ${(x.end - x.start).toFixed(1)} с`);
+    assert.ok(x.end - x.start <= 5.5);
     assert.ok(x.text.split(" ").length <= 14);
   }
+});
+
+test("биты из ответа модели: встык от 0 до конца, AI короче 4 с → автор, AI длиннее 15 с режется", () => {
+  const w = words(Array.from({ length: 100 }, (_, i) => `w${i}${i % 5 === 4 ? "." : ""}`).join(" ")); // 20 фраз по 2 с
+  const phrases = phrasesFromWords(w);
+  assert.equal(phrases.length, 20);
+  const raw = [
+    { fromPhrase: 1, toPhrase: 1, displayMode: "full_ai", visualAction: "Gudini opens a door", priority: "high", purpose: "hook" }, // 1.9 с → автор
+    { fromPhrase: 2, toPhrase: 4, displayMode: "author" },
+    { fromPhrase: 5, toPhrase: 14, displayMode: "full_ai", visualAction: "Gudini walks the rooftops" }, // ~19.9 с → режется
+    { fromPhrase: 15, toPhrase: 20, displayMode: "author" },
+  ];
+  const beats = beatsFromRaw(raw as any, phrases, 42);
+  assert.equal(beats[0].start, 0);
+  assert.equal(beats[beats.length - 1].end, 42);
+  for (let i = 1; i < beats.length; i++) assert.equal(beats[i].start, beats[i - 1].end);
+  assert.equal(beats[0].displayMode, "author");
+  assert.match(beats[0].reduced ?? "", new RegExp(`короче ${MIN_AI_BEAT_SEC}`));
+  const ai = beats.filter((b) => b.displayMode !== "author");
+  assert.ok(ai.length >= 2, "длинный AI-бит разрезан");
+  for (const b of ai) {
+    assert.ok(b.end - b.start <= MAX_AI_BEAT_SEC + 0.5, `${b.id}: ${(b.end - b.start).toFixed(1)} с`);
+    assert.ok(b.end - b.start >= MIN_AI_BEAT_SEC - 1e-6);
+  }
+});
+
+test("Story Bible: стиль и мир берутся из профиля персонажа, модель их не переопределяет", () => {
+  assert.equal(bible.visualStyle, gudini.styleLock);
+  assert.equal(bible.world, gudini.world);
+  assert.equal(bible.characterId, "gudini");
+  assert.equal(bible.storyArc.gudiniRole, "a scout on a mission");
+});
+
+test("A/B/C: 120 с речи не превращаются в 120 с AI; author-биты — 0 вызовов; full_ai — shots", () => {
+  const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
+  assert.equal(plan.version, PLAN_VERSION);
+  assert.equal(plan.stats.speechSeconds, 120);
+  assert.equal(plan.stats.aiSeconds, 37);
+  assert.ok(plan.stats.generatedSeconds <= 60, `Veo-секунд ${plan.stats.generatedSeconds}`);
+  assert.ok(plan.stats.coverage < 0.55);
+  const authorOnly = buildFilmPlan({ character: withRefs, bible, beats: [beat("B1", 0, 60, "author"), beat("B2", 60, 120, "author")], duration: 120, cfg: cfg() });
+  assert.equal(authorOnly.shots.length, 0);
+  assert.equal(authorOnly.stats.calls, 0);
+  assert.equal(authorOnly.stats.estimatedCost, 0);
+  assert.equal(plan.shots.filter((s) => s.displayMode === "full_ai").length, 4);
+  assert.equal(plan.shots.filter((s) => s.displayMode === "hybrid").length, 1);
+  assert.ok(plan.shots.every((s) => s.mode === "text"), "независимые сцены — text-to-video");
+  assert.deepEqual(plan.timeline.map((t) => t.mode), ["full_ai", "author", "hybrid", "author", "full_ai", "author", "full_ai", "author", "full_ai", "author"]);
+});
+
+test("D: главный герой всегда Gudini — в каждом shot с героем его identity из профиля", () => {
+  const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
+  assert.equal(plan.character.id, "gudini");
+  assert.equal(plan.character.refHash, "refs-a");
+  for (const s of plan.shots.filter((s) => s.gudiniVisible)) {
+    assert.match(s.prompt, /Main character GUDINI/);
+    assert.match(s.prompt, /platinum-blond hair/);
+    assert.match(s.prompt, /olive utility vest/);
+    assert.ok(s.useReferences, `${s.id} использует эталоны`);
+    assert.equal(s.veoSeconds, 8, "с референсами Veo принимает только 8 с");
+    assert.equal(s.generationProfile, "character");
+  }
+  const env = buildShots([beat("B1", 0, 6, "full_ai", { gudiniVisible: false, visualAction: "an empty training ground at dawn" }), beat("B2", 6, 30, "author")], withRefs, bible, cfg());
+  assert.equal(env.shots[0].useReferences, false);
+  assert.equal(env.shots[0].generationProfile, "environment");
+  assert.equal(env.shots[0].veoSeconds, 6);
+  assert.doesNotMatch(env.shots[0].prompt, /Main character/);
+});
+
+test("E: смена хэша эталонов меняет ключ кэша сцен с героем и не трогает сцены без него", () => {
+  const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
+  const hero = plan.shots[0];
+  assert.notEqual(shotKey(hero, "refs-a", null), shotKey(hero, "refs-b", null));
+  const env = buildShots([beat("B1", 0, 6, "full_ai", { gudiniVisible: false }), beat("B2", 6, 30, "author")], withRefs, bible, cfg()).shots[0];
+  assert.equal(shotKey(env, "refs-a", null), shotKey(env, "refs-b", null));
+});
+
+test("F/G: независимые группы без зависимостей; цепочка сохраняет dependsOn и extension", () => {
+  const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
+  assert.ok(plan.groups.every((g) => !g.chain));
+  assert.ok(plan.shots.every((s) => s.dependsOn === null));
+  assert.equal(plan.stats.independentGroups, 5);
+  const chainBeats = [
+    beat("B1", 0, 10, "author"),
+    beat("B2", 10, 18, "full_ai", { continuityGroup: "walk" }),
+    beat("B3", 18, 25, "full_ai", { continuityGroup: "walk" }),
+    beat("B4", 25, 60, "author"),
+  ];
+  assert.equal(groupBeats(chainBeats).length, 1);
+  const chained = buildFilmPlan({ character: withRefs, bible, beats: chainBeats, duration: 60, cfg: cfg() });
+  assert.equal(chained.groups.length, 1);
+  assert.ok(chained.groups[0].chain);
+  assert.equal(chained.shots.length, 2);
+  assert.equal(chained.shots[0].mode, "text");
+  assert.equal(chained.shots[1].mode, "extend");
+  assert.equal(chained.shots[1].dependsOn, chained.shots[0].id);
+  assert.equal(chained.shots[1].veoSeconds, 7);
+  assert.equal(chained.shots[1].useReferences, false, "extension без референсов — API их не сочетает");
+  assert.match(chained.shots[1].prompt, /Continue the same shot without a cut/);
+  assert.equal(chained.stats.chains, 1);
+  assert.equal(chained.stats.longestChainCalls, 2);
+  // ключ второго shot зависит от ключа первого
+  const k1 = shotKey(chained.shots[0], "refs-a", null);
+  assert.notEqual(shotKey(chained.shots[1], "refs-a", k1), shotKey(chained.shots[1], "refs-a", "other"));
+  // соседние AI-биты без общей метки — две независимые группы
+  const separate = buildFilmPlan({ character: withRefs, bible, beats: [beat("B1", 0, 8, "full_ai"), beat("B2", 8, 16, "full_ai"), beat("B3", 16, 60, "author")], duration: 60, cfg: cfg() });
+  assert.equal(separate.groups.length, 2);
+  assert.ok(separate.shots.every((s) => s.dependsOn === null));
+});
+
+test("H: оценка времени учитывает параллельность, а не сумму вызовов", () => {
+  const six = new Array(6).fill(0).map((_, i) => ({ shotIds: [`S${i}`] }));
+  assert.equal(estimateWallMinutes(six, 3, 2, 1), 5); // 2 волны по 2 мин + накладные, не 13
+  assert.equal(estimateWallMinutes(six, 1, 2, 1), 13);
+  const mixed = [{ shotIds: ["a", "b", "c"] }, ...new Array(5).fill(0).map((_, i) => ({ shotIds: [`s${i}`] }))];
+  assert.equal(estimateWallMinutes(mixed, 3, 2, 1), 7); // цепочка 6 мин задаёт нижнюю границу
+  assert.equal(estimateWallMinutes([], 3, 2, 1), 0);
+});
+
+test("I: цена считается только по Veo-секундам сгенерированных shots, author — $0", () => {
+  const prev = process.env.AI_FILM_PRICE_PER_SEC;
+  delete process.env.AI_FILM_PRICE_PER_SEC;
+  try {
+    const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
+    const expected = Math.round(plan.stats.generatedSeconds * 0.08 * 100) / 100;
+    assert.equal(plan.stats.estimatedCost, expected);
+    assert.equal(plan.pricing.pricePerSec, 0.08);
+    assert.equal(plan.pricing.source, "policy");
+    assert.ok(plan.stats.estimatedCost < 120 * 0.08, "не цена всего ролика");
+    assert.equal(plan.stats.generatedSeconds, 5 * 8);
+  } finally {
+    if (prev !== undefined) process.env.AI_FILM_PRICE_PER_SEC = prev;
+  }
+});
+
+test("J: редьюсер снимает low, потом medium; hook/reveal/climax с high не трогает", () => {
+  const beats = [
+    beat("B1", 0, 8, "full_ai", { purpose: "hook", priority: "high" }),
+    beat("B2", 8, 16, "full_ai", { priority: "low" }),
+    beat("B3", 16, 24, "full_ai", { priority: "medium" }),
+    beat("B4", 24, 32, "full_ai", { priority: "low" }),
+    beat("B5", 32, 60, "author"),
+  ];
+  const r = reduceToBudget(beats, withRefs, bible, 60, cfg({ maxCoverage: 0.3 }));
+  const byId = Object.fromEntries(r.beats.map((b) => [b.id, b]));
+  assert.equal(byId.B2.displayMode, "author");
+  assert.equal(byId.B4.displayMode, "author");
+  assert.match(byId.B4.reduced ?? "", /покрытию/);
+  assert.equal(byId.B3.displayMode, "full_ai", "medium остаётся, пока хватает low");
+  assert.equal(byId.B1.displayMode, "full_ai");
+  assert.ok(r.stats.coverage <= 0.3);
+  // бюджет: $1 хватает только на одну сцену по $0.64 — остаётся hook
+  const b = reduceToBudget(beats, withRefs, bible, 60, cfg({ budgetUsd: 1 }));
+  assert.equal(b.beats.filter((x) => x.displayMode !== "author").length, 1);
+  assert.equal(b.beats.find((x) => x.displayMode !== "author")!.id, "B1");
+  assert.match(b.beats.find((x) => x.id === "B3")!.reduced ?? "", /бюджету/);
+  // защищённая сцена не влезает — честная ошибка, а не тихое удаление hook
+  assert.throws(() => reduceToBudget(beats, withRefs, bible, 60, cfg({ budgetUsd: 0.1 })), /не помещается в бюджет/);
+});
+
+test("нормализация длительностей Veo: 4/6/8, с референсами 8, extension 7", () => {
+  assert.equal(normalizeVeoDuration(5.3, "text"), 6);
+  assert.equal(normalizeVeoDuration(3, "text"), 4);
+  assert.equal(normalizeVeoDuration(8.5, "text"), 8);
+  assert.equal(normalizeVeoDuration(4, "text", { references: true }), 8);
+  assert.equal(normalizeVeoDuration(3, "extend"), 7);
+});
+
+test("промпт shot: WHO/WHAT/WHERE/WHAT CHANGES, вертикальный кадр, запреты", () => {
+  const b = beat("B1", 0, 8, "full_ai", { visualAction: "Gudini enters an empty training ground and picks up the last scroll" });
+  const p = shotPrompt({ character: gudini, bible, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+  assert.match(p, /Action: Gudini enters/);
+  assert.match(p, /Location: village rooftop/);
+  assert.match(p, /After: state after B1/);
+  assert.match(p, /vertical 9:16 portrait composition/);
+  assert.match(p, /No text, no captions/);
+  assert.match(p, /no hair color change/);
+  const h = shotPrompt({ character: gudini, bible, beat: { ...b, displayMode: "hybrid" }, prev: null, mode: "text", aspectRatio: "16:9" });
+  assert.match(h, /horizontal 16:9/);
+});
+
+test("старый план не интерпретируется: просьба пересобрать", () => {
+  assert.match(planVersionError({ version: 2 })!, /устарел/);
+  assert.equal(planVersionError({ version: PLAN_VERSION }), null);
+  assert.equal(planVersionError(null), null);
 });

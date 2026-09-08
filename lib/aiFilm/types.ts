@@ -1,97 +1,211 @@
 /**
- * AI_FILM — второй стиль монтажа: сверху цельный сгенерированный фильм по истории,
- * снизу автор с субтитрами и своим звуком. Типы плана и состояния.
+ * AI_FILM v2 — «Gudini Narrative Mode».
+ *
+ * Автор идёт непрерывно (голос, субтитры), а видеоряд переключается между
+ * AUTHOR (его видео), FULL_AI (AI-сцена на весь кадр 9:16) и HYBRID (AI в карточке
+ * сверху, автор снизу). AI генерируется только там, где сцена усиливает рассказ.
+ * Главный герой всех AI-сцен — постоянный персонаж Gudini с эталонными картинками.
  */
 
+export type DisplayMode = "author" | "full_ai" | "hybrid";
+export type BeatPurpose = "hook" | "setup" | "explain" | "example" | "reveal" | "emotion" | "transition" | "climax" | "resolution";
+export type Priority = "low" | "medium" | "high";
+export type ShotType = "close" | "medium" | "medium_wide" | "wide" | "full_body";
+export type TransitionIntent = "cut" | "dissolve";
+export type GenerationProfile = "character" | "environment" | "continuation";
+
+/** Постоянный персонаж: identity не зависит от проекта и не генерируется Claude. */
+export type CharacterProfile = {
+  id: string;
+  name: string;
+  role: "main_protagonist";
+  description: string;
+  appearance: string;
+  clothes: string;
+  signature: string;
+  /** единый визуальный стиль всех роликов с этим персонажем */
+  styleLock: string;
+  /** мир/сеттинг, в котором живут истории */
+  world: string;
+  negative?: string;
+  /** файлы эталонов относительно папки персонажа (до 3, порядок важен) */
+  referenceImages: string[];
+  /** абсолютные пути найденных эталонов */
+  referenceFiles: string[];
+  /** хэш байтов эталонов — часть ключа кэша сцен */
+  refHash: string;
+  /** где лежит профиль */
+  dir: string;
+};
+
+export type SupportingCharacter = {
+  name: string;
+  function: "opponent" | "guide" | "witness" | "partner" | "background";
+  appearance: string;
+};
+
+export type StoryArc = {
+  /** что зритель должен понять */
+  understand: string;
+  /** роль Gudini в этой визуальной истории */
+  gudiniRole: string;
+  beginning: string;
+  development: string;
+  conflict: string;
+  climax: string;
+  meaning: string;
+};
+
 export type StoryBible = {
-  /** единый визуальный стиль всех сцен, английский */
+  characterId: string;
+  /** стиль зафиксирован профилем персонажа */
   visualStyle: string;
-  mainCharacter: {
-    description: string;
-    appearance: string;
-    clothes: string;
-    /** заметные детали, по которым герой узнаётся: номер на форме, шрам, кепка */
-    signature: string;
-  } | null;
+  world: string;
+  mood: string;
+  lighting: string;
+  cameraLanguage: string;
   locations: string[];
   importantObjects: string[];
-  mood: string;
-  cameraLanguage: string;
-  storyArc: string;
+  supportingCharacters: SupportingCharacter[];
   continuityRules: string[];
+  storyArc: StoryArc;
 };
 
-export type FilmEpisode = {
+/** Смысловой блок речи. Покрывают всю речь встык; AI есть только у full_ai/hybrid. */
+export type StoryBeat = {
   id: string;
-  /** секунды на чистом таймлайне речи */
   start: number;
   end: number;
-  /** смысл фрагмента речи, русский — для показа пользователю */
+  /** смысл фрагмента речи, русский */
   meaning: string;
-  /** что происходит в кадре, английский — основа промпта */
+  /** место в истории, русский */
+  storyBeat: string;
+  displayMode: DisplayMode;
+  purpose: BeatPurpose;
+  priority: Priority;
+  requiresGeneration: boolean;
+  gudiniVisible: boolean;
+  /** WHO / WHAT HE DOES / WHERE / WHAT CHANGES — английский, одно ясное действие */
   visualAction: string;
   location: string;
-  /** состояние героя/сцены после эпизода — для continuity */
+  stateBefore: string;
   stateAfter: string;
-  /** переход к следующему эпизоду: продолжение той же сцены или сюжетный переход */
-  transition: "continue" | "match_cut" | "new_sequence";
+  /** одинаковая метка у соседних AI-битов = одна непрерывная сцена (extension) */
+  continuityGroup: string | null;
+  transition: TransitionIntent;
+  shotType: ShotType;
+  camera: string;
+  /** сколько секунд AI просил планировщик (до нормализации под Veo) */
+  suggestedDuration: number;
+  /** почему бит переведён в author редьюсером (если переведён) */
+  reduced?: string;
 };
 
-export type FilmScene = {
+export type FilmShot = {
   id: string;
-  sequence: number;
+  groupId: string;
   index: number;
-  episodeId: string;
-  /** полный промпт для Veo: стиль + герой + действие + камера + continuity */
+  beatIds: string[];
+  displayMode: Exclude<DisplayMode, "author">;
+  gudiniVisible: boolean;
+  generationProfile: GenerationProfile;
+  model: string;
+  mode: "text" | "extend";
+  /** сколько секунд клипа реально попадёт в ролик */
+  usedSeconds: number;
+  /** сколько секунд генерирует Veo (нормализовано: 4/6/8, extension 7, референсы 8) */
+  veoSeconds: number;
+  aspectRatio: "16:9" | "9:16";
+  resolution: "720p";
+  useReferences: boolean;
   prompt: string;
-  /** секунды генерации: 8 для первой сцены последовательности, 7 для продолжений */
-  seconds: number;
-  /** "text" — по тексту, "image" — от последнего кадра предыдущей последовательности, "extend" — продолжение */
-  mode: "text" | "image" | "extend";
+  /** предыдущий shot цепочки — только для extend */
+  dependsOn: string | null;
+  /** цена этого вызова */
+  cost: number;
 };
 
-export type FilmSequence = {
-  index: number;
-  scenes: FilmScene[];
-  /** покрываемый отрезок речи */
+export type ContinuityGroup = {
+  id: string;
+  displayMode: Exclude<DisplayMode, "author">;
+  /** отрезок ролика, который закрывает клип группы */
   start: number;
   end: number;
-  /** сумма секунд генерации */
-  seconds: number;
+  shotIds: string[];
+  chain: boolean;
+  aspectRatio: "16:9" | "9:16";
+};
+
+export type TimelineSegment = {
+  start: number;
+  end: number;
+  mode: DisplayMode;
+  groupId?: string;
+  beatIds: string[];
+};
+
+export type PlanStats = {
+  speechSeconds: number;
+  /** секунд ролика с AI на экране */
+  aiSeconds: number;
+  /** секунд, которые генерирует Veo (с округлением до поддерживаемых) */
+  generatedSeconds: number;
+  coverage: number;
+  calls: number;
+  groups: number;
+  independentGroups: number;
+  chains: number;
+  longestChainCalls: number;
+  estimatedCost: number;
+  estimatedWallMinutes: number;
+  concurrency: number;
+  reducedBeats: number;
+};
+
+export type PlanPricing = {
+  model: string;
+  resolution: "720p";
+  audio: false;
+  pricePerSec: number;
+  source: "policy" | "env";
 };
 
 export type AiFilmPlan = {
   version: number;
   createdAt: string;
-  model: string;
-  pricePerSec: number;
-  /** ключ входных данных: расшифровка + сценарий + версия */
   key: string;
   duration: number;
+  character: { id: string; name: string; refHash: string; referenceCount: number };
   bible: StoryBible;
-  episodes: FilmEpisode[];
-  sequences: FilmSequence[];
-  /** секунд генерации всего и оценка стоимости */
-  totalSeconds: number;
-  estimatedCost: number;
-  /** сколько вызовов Veo и примерное время */
-  calls: number;
-  estimatedMinutes: number;
+  beats: StoryBeat[];
+  groups: ContinuityGroup[];
+  shots: FilmShot[];
+  timeline: TimelineSegment[];
+  pricing: PlanPricing;
+  budgetUsd: number;
+  stats: PlanStats;
+  warnings: string[];
 };
 
-export type AiFilmSceneResult = {
-  sceneId: string;
+export type AiFilmShotResult = {
+  shotId: string;
   key: string;
   gcsUri: string;
   file: string;
   operation: string;
-  seconds: number;
+  veoSeconds: number;
   cost: number;
   createdAt: string;
 };
 
+export type GroupClip = {
+  groupId: string;
+  /** файл клипа относительно папки проекта */
+  file: string;
+  seconds: number;
+};
+
 export type AiFilmState = {
-  /** что просил пользователь последним: план или генерация */
   request?: "plan" | "generate";
   plan?: AiFilmPlan;
   status?: "planned" | "generated" | "failed";

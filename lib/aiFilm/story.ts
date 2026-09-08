@@ -1,35 +1,34 @@
 import { mediaComplete, parseJson } from "../mediaLlm";
 import type { Word } from "../transcribe";
-import type { StoryBible, FilmEpisode } from "./types";
+import { characterBlock } from "./character";
+import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent } from "./types";
 
 /**
- * Разбор истории для AI-фильма.
- *
- * Вход — чистая речь автора со временем каждого слова (после чистки), сценарий и
- * краткая справка исследования. Выход — Story Bible (герой, места, предметы, стиль,
- * правила непрерывности) и эпизоды: не по предложениям, а по смыслу, 5–10 секунд,
- * каждый с действием в кадре и состоянием после него. Модель получает предложения
- * с номерами и временем и указывает границы эпизодов номерами предложений — так
- * тайминг остаётся точным, а модель думает про смысл, не про секунды.
+ * Story Planner v2. Модель получает сценарий, чистую речь по фразам с временем, тему,
+ * справку и постоянный Character Bible. Сначала понимает историю целиком (arc), потом
+ * делит речь на смысловые биты и для каждого решает: AUTHOR / FULL_AI / HYBRID.
+ * AI — только там, где сцена усиливает рассказ; identity Gudini модель не меняет.
  */
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
-export const STORY_VERSION = 2;
+export const STORY_VERSION = 3;
 
-export type Sentence = { index: number; start: number; end: number; text: string };
+/** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
+export const MIN_AI_BEAT_SEC = 4;
+export const MAX_AI_BEAT_SEC = 15;
+export const MIN_BEAT_SEC = 2;
 
-/** Фраза не длиннее этого — иначе модель не может разбить речь на эпизоды по 5–10 с. */
+export type Phrase = { index: number; start: number; end: number; text: string };
+
 export const MAX_PHRASE_SEC = 5;
 export const MAX_PHRASE_WORDS = 14;
 
 /**
  * Фразы из слов чистого таймлайна: по знакам конца предложения, по паузе ≥0.5 с,
- * по запятой после 6 слов, и жёстко — по длине (5 с или 14 слов). В расшифровке
- * знаков мало, и «предложения» выходили по 20 секунд: план на «Думсдей» получил
- * эпизоды по 16–24 с из одной фразы, которые нельзя было разрезать.
+ * по запятой после 6 слов, и жёстко — по длине (5 с или 14 слов).
  */
-export function sentencesFromWords(words: Word[]): Sentence[] {
-  const out: Sentence[] = [];
+export function phrasesFromWords(words: Word[]): Phrase[] {
+  const out: Phrase[] = [];
   let cur: Word[] = [];
   const flush = () => {
     if (!cur.length) return;
@@ -50,131 +49,218 @@ export function sentencesFromWords(words: Word[]): Sentence[] {
   return out;
 }
 
-const SYSTEM = `Ты сценарист и художник-постановщик короткого AI-фильма, который идёт в верхней половине вертикального ролика синхронно с речью автора. Автор говорит в нижней половине; фильм НЕ показывает автора и не повторяет его слова буквально — он показывает СМЫСЛ: историю, ситуацию, эмоцию, метафору. Фильм цельный: один визуальный стиль, один главный герой (если история про человека или от лица героя), узнаваемые места и предметы, действие развивается от эпизода к эпизоду.
+/** обратная совместимость с прежним именем */
+export const sentencesFromWords = phrasesFromWords;
 
-Тебе дан текст речи как пронумерованные фразы с временем. Раздели речь на эпизоды по смыслу: каждый эпизод 5–10 секунд речи (минимум 4, максимум 10 — эпизод длиннее 10 секунд недопустим, дели его на два действия), одна сцена-действие, а не одна фраза. Для каждого эпизода — что происходит в кадре (английский, конкретное действие и обстановка, без текста и надписей в кадре, без логотипов), место, состояние героя и сцены после эпизода (чтобы следующий эпизод продолжался из него) и тип перехода к следующему: "continue" (та же сцена, действие продолжается), "match_cut" (та же история, другой ракурс/место, но узнаваемые детали), "new_sequence" (новая глава истории).
+export function storySystemPrompt(character: CharacterProfile, coverage: { target: number; max: number }): string {
+  return `Ты режиссёр и сценарист коротких вертикальных роликов (9:16). Автор ролика говорит на камеру непрерывно; его голос и субтитры идут весь ролик. Ты решаешь, что зритель ВИДИТ: самого автора (AUTHOR), AI-сцену на весь экран (FULL_AI) или AI-сцену в карточке над автором (HYBRID). AI генерируется дорого и не должен покрывать весь ролик: ориентир ${Math.round(coverage.target * 100)}% времени, не больше ${Math.round(coverage.max * 100)}%. Меньше — можно.
 
-Story Bible: единый visualStyle (например "cinematic live-action, 35mm film look, natural light, muted warm palette" или "painterly 2D animation"), mainCharacter (если уместен: description, appearance — лицо, возраст, телосложение, причёска; clothes; signature — 1–3 узнаваемые детали, которые должны быть в каждом кадре с героем) либо null, locations, importantObjects, mood, cameraLanguage, storyArc, continuityRules (5–8 коротких правил на английском для художника: как выглядят герой, места, свет, что нельзя менять).
+ГЛАВНЫЙ ГЕРОЙ ВСЕХ AI-СЦЕН — ПОСТОЯННЫЙ ПЕРСОНАЖ. Его identity задана и не меняется:
+${characterBlock(character)}
+Стиль всех сцен (зафиксирован): ${character.styleLock}.
+Мир, в котором происходят истории: ${character.world}.
+Ты описываешь только его РОЛЬ в этой истории (владелец дела, наблюдатель событий, исследователь странного мира, герой визуальной метафоры), но визуально это всегда он. Никаких новых главных героев, generic people, «young entrepreneur» без связи с ним. Тема ролика переносится в его мир как понятная визуальная история или метафора: если ролик про игру, фильм, технологию или бизнес — покажи, как ${character.name} проживает это в своём мире (миссия, испытание, находка, столкновение), а не пересказывай чужой сюжет.
 
-Правила:
-- Никаких реальных известных людей по имени и внешности, никаких брендов, логотипов, текста в кадре, флагов, оружия крупным планом, детей в опасности.
-- В bible и visualAction не пиши названия франшиз, студий, фильмов и персонажей (Marvel, Avengers, Iron Man, Doom и т.п.) — генератор видео их отфильтрует. Описывай своими словами: «a team of heroes in red-gold ruins», «a faceless armored figure».
-- Не показывать говорящего человека крупным планом как диктора — фильм показывает историю.
-- Если речь — рассуждение без сюжета, придумай сквозную визуальную метафору с героем и местом, которая проходит через все эпизоды.
-- Ответь только JSON: {"bible": {...}, "episodes": [{"fromSentence": 1, "toSentence": 2, "meaning": "русский, 1 фраза", "visualAction": "english, 1–3 sentences", "location": "english", "stateAfter": "english", "transition": "continue|match_cut|new_sequence"}]}
-- Эпизоды покрывают ВСЕ фразы по порядку без пропусков и пересечений.`;
+Сначала пойми историю целиком и заполни storyArc: что зритель должен понять; роль героя; начало; развитие; конфликт или изменение; кульминация; финальный смысл. Не перегружай символизмом: простая читаемая история.
 
-type RawEpisode = {
-  fromSentence: number;
-  toSentence: number;
-  meaning: string;
-  visualAction: string;
-  location: string;
-  stateAfter: string;
-  transition: string;
+Дополнительные персонажи: максимум 1–2 значимых на ролик, только если без них историю не показать; у каждого одна функция: opponent, guide, witness, partner, background. Не создавать толпы похожих людей, не путать, кто главный.
+
+Раздели речь на биты по смыслу (обычно 4–12 с; биты покрывают ВСЕ фразы по порядку без пропусков и пересечений; границы — номера фраз). Для каждого бита выбери displayMode:
+- "author": автор говорит панчлайн; важна его эмоция; плотное объяснение; прямой контакт со зрителем; AI ничего не добавляет.
+- "full_ai": сильный hook; постановочная сцена; яркий пример; reveal; кульминация; история; визуальная метафора сильнее говорящей головы. AI-бит: 4–${MAX_AI_BEAT_SEC} с.
+- "hybrid": полезно видеть автора и контекст одновременно; AI — дополнение. AI-бит: 4–${MAX_AI_BEAT_SEC} с.
+Не злоупотребляй full_ai: обычно первым идёт hook на 5–8 с, дальше AI появляется 4–6 раз на 2 минуты речи.
+
+Каждая AI-сцена: ONE SHOT = ONE CLEAR ACTION, понятная за 1–2 секунды. visualAction (английский) обязан содержать WHO (${character.name}), WHAT HE DOES, WHERE, WHAT CHANGES. Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "${character.name} enters an empty training ground. Every target post has fallen except one. He slowly picks up the single scroll left on it." Без десяти действий сразу, без сюрреалистического мусора, без текста/надписей/логотипов в кадре, без реальных известных людей, без названий франшиз, студий, фильмов и персонажей (описывай своими словами).
+Кадр вертикальный 9:16 (для hybrid — горизонтальный 16:9): герой около центра по вертикали, запас над головой, ничего важного у краёв. shotType: close | medium | medium_wide | wide | full_body. Стейты: stateBefore/stateAfter (английский, коротко) — чтобы соседние сцены не противоречили (взял свиток — дальше он со свитком).
+continuityGroup: одинаковая метка у ДВУХ соседних AI-битов только если это одна непрерывная сцена без монтажной склейки (вошёл → продолжает идти и находит предмет). Иначе null. Не строй длинные цепочки.
+priority: "high" — hook, ключевой reveal, climax; "medium" — примеры, история; "low" — украшение, которое можно убрать без потери смысла. Бюджет ограничен: low-сцены уберут первыми.
+transition: "cut" (по умолчанию) или "dissolve" (редко).
+purpose: hook | setup | explain | example | reveal | emotion | transition | climax | resolution.
+
+Ответь только JSON:
+{"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
+ "bible": {"mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "visualAction": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "transition": "cut", "shotType": "medium", "camera": "english"}]}
+Для author-битов visualAction/location/state можно оставить пустыми строками, gudiniVisible=false.`;
+}
+
+type RawBeat = {
+  fromPhrase: number;
+  toPhrase: number;
+  meaning?: string;
+  storyBeat?: string;
+  displayMode?: string;
+  purpose?: string;
+  priority?: string;
+  gudiniVisible?: boolean;
+  visualAction?: string;
+  location?: string;
+  stateBefore?: string;
+  stateAfter?: string;
+  continuityGroup?: string | null;
+  transition?: string;
+  shotType?: string;
+  camera?: string;
 };
 
-type RawStory = { bible: Partial<StoryBible>; episodes: RawEpisode[] };
+type RawStory = { storyArc?: Partial<StoryBible["storyArc"]>; bible?: any; beats?: RawBeat[] };
 
-function normalizeBible(b: Partial<StoryBible> | undefined): StoryBible {
-  const s = (v: unknown, d = "") => (typeof v === "string" && v.trim() ? v.trim() : d);
-  const arr = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : []);
-  const mc = b?.mainCharacter && typeof b.mainCharacter === "object" ? b.mainCharacter : null;
+const str = (v: unknown, d = "") => (typeof v === "string" && v.trim() ? v.trim() : d);
+const arr = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
+const MODES: DisplayMode[] = ["author", "full_ai", "hybrid"];
+const PURPOSES: BeatPurpose[] = ["hook", "setup", "explain", "example", "reveal", "emotion", "transition", "climax", "resolution"];
+const SHOTS: ShotType[] = ["close", "medium", "medium_wide", "wide", "full_body"];
+const FUNCS = ["opponent", "guide", "witness", "partner", "background"] as const;
+
+export function normalizeBible(raw: RawStory, character: CharacterProfile): StoryBible {
+  const b = raw.bible ?? {};
+  const a = raw.storyArc ?? {};
+  const supporting = (Array.isArray(b.supportingCharacters) ? b.supportingCharacters : [])
+    .map((c: any) => ({
+      name: str(c?.name, "Supporting character"),
+      function: (FUNCS as readonly string[]).includes(c?.function) ? c.function : "background",
+      appearance: str(c?.appearance),
+    }))
+    .filter((c: any) => c.appearance)
+    .slice(0, 2);
   return {
-    visualStyle: s(b?.visualStyle, "cinematic live-action, 35mm film look, natural light, muted warm palette"),
-    mainCharacter: mc && s(mc.description)
-      ? { description: s(mc.description), appearance: s(mc.appearance), clothes: s(mc.clothes), signature: s(mc.signature) }
-      : null,
-    locations: arr(b?.locations),
-    importantObjects: arr(b?.importantObjects),
-    mood: s(b?.mood, "calm, focused"),
-    cameraLanguage: s(b?.cameraLanguage, "steady medium shots, slow push-ins, natural motion"),
-    storyArc: s(b?.storyArc),
-    continuityRules: arr(b?.continuityRules),
+    characterId: character.id,
+    // стиль и мир — из профиля, модель их не меняет
+    visualStyle: character.styleLock,
+    world: character.world,
+    mood: str(b.mood, "calm, focused"),
+    lighting: str(b.lighting, "soft natural light, consistent palette"),
+    cameraLanguage: str(b.cameraLanguage, "steady medium shots, slow push-ins"),
+    locations: arr(b.locations),
+    importantObjects: arr(b.importantObjects),
+    supportingCharacters: supporting,
+    continuityRules: arr(b.continuityRules).slice(0, 8),
+    storyArc: {
+      understand: str(a.understand),
+      gudiniRole: str(a.gudiniRole, `${character.name} lives the story`),
+      beginning: str(a.beginning),
+      development: str(a.development),
+      conflict: str(a.conflict),
+      climax: str(a.climax),
+      meaning: str(a.meaning),
+    },
   };
 }
 
 /**
- * Эпизоды из ответа модели: границы по предложениям → секунды; пропуски и пересечения
- * чинятся (следующий эпизод начинается там, где закончился прошлый); слишком длинные
- * (>10 с) режутся по фразам, слишком короткие (<3 с) сливаются с соседом.
+ * Биты из ответа модели: границы по фразам → секунды; пропуски и пересечения чинятся;
+ * биты встык от 0 до конца ролика; AI-биты короче MIN_AI_BEAT_SEC становятся author,
+ * длиннее MAX_AI_BEAT_SEC режутся по фразам на независимые части.
  */
-export function episodesFromRaw(raw: RawEpisode[], sentences: Sentence[]): FilmEpisode[] {
-  if (!sentences.length) return [];
-  const n = sentences.length;
+export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number): StoryBeat[] {
+  if (!phrases.length) return [];
+  const n = phrases.length;
   const clamp = (v: number) => Math.max(1, Math.min(n, Math.round(Number(v) || 1)));
-  const items: { from: number; to: number; e: RawEpisode }[] = [];
+  const items: { from: number; to: number; e: RawBeat }[] = [];
   let cursor = 1;
   for (const e of raw ?? []) {
-    let from = clamp(e.fromSentence);
-    let to = clamp(e.toSentence);
+    let from = clamp(e.fromPhrase);
+    let to = clamp(e.toPhrase);
     if (to < from) to = from;
-    if (from > cursor) from = cursor; // пропуск — растягиваем назад
-    if (from < cursor) from = cursor; // пересечение — сдвигаем вперёд
+    if (from !== cursor) from = cursor;
     if (from > n) break;
     if (to < from) to = from;
     items.push({ from, to, e });
     cursor = to + 1;
   }
-  if (!items.length) items.push({ from: 1, to: n, e: { fromSentence: 1, toSentence: n, meaning: "", visualAction: "", location: "", stateAfter: "", transition: "continue" } });
-  if (cursor <= n) items[items.length - 1].to = n; // хвост без эпизода — к последнему
+  if (!items.length) items.push({ from: 1, to: n, e: { fromPhrase: 1, toPhrase: n, displayMode: "author" } });
+  if (cursor <= n) items[items.length - 1].to = n;
 
-  // длинные режем по фразам на части ≤ 10 с: набираем фразы, пока часть не выйдет за 10 с
+  // длинные AI-биты режем по фразам на части ≤ MAX_AI_BEAT_SEC
   const split: typeof items = [];
   for (const it of items) {
-    const dur = sentences[it.to - 1].end - sentences[it.from - 1].start;
-    if (dur <= 10 || it.to === it.from) { split.push(it); continue; }
+    const isAi = it.e.displayMode === "full_ai" || it.e.displayMode === "hybrid";
+    const dur = phrases[it.to - 1].end - phrases[it.from - 1].start;
+    if (!isAi || dur <= MAX_AI_BEAT_SEC || it.to === it.from) { split.push(it); continue; }
     let from = it.from;
     while (from <= it.to) {
       let to = from;
-      while (to + 1 <= it.to && sentences[to].end - sentences[from - 1].start <= 10) to++;
-      // хвост короче 3 с — к этой же части
-      if (to < it.to && sentences[it.to - 1].end - sentences[to].start < 3) to = it.to;
-      split.push({ from, to, e: it.e });
+      while (to + 1 <= it.to && phrases[to].end - phrases[from - 1].start <= MAX_AI_BEAT_SEC) to++;
+      if (to < it.to && phrases[it.to - 1].end - phrases[to].start < MIN_AI_BEAT_SEC) to = it.to;
+      split.push({ from, to, e: { ...it.e, continuityGroup: null } });
       from = to + 1;
     }
   }
-  // короткие сливаем с предыдущим (или следующим для первого)
-  const merged: typeof split = [];
-  for (const it of split) {
-    const dur = sentences[it.to - 1].end - sentences[it.from - 1].start;
-    const prev = merged[merged.length - 1];
-    if (dur < 3 && prev && prev.e === it.e) { prev.to = it.to; continue; }
-    if (dur < 3 && prev && sentences[prev.to - 1].end - sentences[prev.from - 1].start < 8) { prev.to = it.to; continue; }
-    merged.push({ ...it });
+
+  const beats: StoryBeat[] = split.map((it, i) => {
+    const e = it.e;
+    let mode = (MODES as string[]).includes(String(e.displayMode)) ? (e.displayMode as DisplayMode) : "author";
+    const start = phrases[it.from - 1].start;
+    const end = phrases[it.to - 1].end;
+    const isAi = mode !== "author";
+    let reduced: string | undefined;
+    if (isAi && !str(e.visualAction)) { mode = "author"; reduced = "нет действия в кадре"; }
+    return {
+      id: `B${i + 1}`,
+      start,
+      end,
+      meaning: str(e.meaning),
+      storyBeat: str(e.storyBeat),
+      displayMode: mode,
+      purpose: (PURPOSES as string[]).includes(String(e.purpose)) ? (e.purpose as BeatPurpose) : "explain",
+      priority: (["low", "medium", "high"] as string[]).includes(String(e.priority)) ? (e.priority as Priority) : "medium",
+      requiresGeneration: mode !== "author",
+      gudiniVisible: mode !== "author" && e.gudiniVisible !== false,
+      visualAction: str(e.visualAction),
+      location: str(e.location),
+      stateBefore: str(e.stateBefore),
+      stateAfter: str(e.stateAfter),
+      continuityGroup: mode !== "author" && typeof e.continuityGroup === "string" && e.continuityGroup.trim() ? e.continuityGroup.trim() : null,
+      transition: (e.transition === "dissolve" ? "dissolve" : "cut") as TransitionIntent,
+      shotType: (SHOTS as string[]).includes(String(e.shotType)) ? (e.shotType as ShotType) : "medium",
+      camera: str(e.camera),
+      suggestedDuration: Math.round((end - start) * 10) / 10,
+      ...(reduced ? { reduced } : {}),
+    };
+  });
+
+  // встык: с нуля, следующий начинается там, где кончился прошлый, последний — до конца ролика
+  for (let i = 0; i < beats.length; i++) {
+    beats[i].start = i === 0 ? 0 : beats[i - 1].end;
+    if (i === beats.length - 1) beats[i].end = Math.max(beats[i].end, duration);
+    if (beats[i].end < beats[i].start) beats[i].end = beats[i].start;
+    beats[i].suggestedDuration = Math.round((beats[i].end - beats[i].start) * 10) / 10;
   }
-  const tr = (v: string): FilmEpisode["transition"] => (v === "match_cut" || v === "new_sequence" ? v : "continue");
-  return merged.map((it, i) => ({
-    id: `E${i + 1}`,
-    start: sentences[it.from - 1].start,
-    end: sentences[it.to - 1].end,
-    meaning: String(it.e.meaning ?? "").trim(),
-    visualAction: String(it.e.visualAction ?? "").trim(),
-    location: String(it.e.location ?? "").trim(),
-    stateAfter: String(it.e.stateAfter ?? "").trim(),
-    transition: tr(String(it.e.transition ?? "continue")),
-  }));
+  // AI-бит короче минимума — автор (AI за 2–3 секунды не прочитать)
+  for (const b of beats) {
+    if (b.displayMode !== "author" && b.end - b.start < MIN_AI_BEAT_SEC - 1e-6) {
+      b.displayMode = "author";
+      b.requiresGeneration = false;
+      b.gudiniVisible = false;
+      b.continuityGroup = null;
+      b.reduced = `AI-бит короче ${MIN_AI_BEAT_SEC} с`;
+    }
+  }
+  return beats;
 }
 
-export async function analyzeStory(args: {
+export async function planStory(args: {
   words: Word[];
   script: string;
-  researchSummary?: string;
   topic?: string;
-}): Promise<{ bible: StoryBible; episodes: FilmEpisode[]; sentences: Sentence[] }> {
-  const sentences = sentencesFromWords(args.words);
-  if (sentences.length < 2) throw new Error("AI-фильм: в речи меньше двух фраз — не из чего строить историю");
-  const list = sentences.map((s) => `${s.index}. [${s.start.toFixed(1)}–${s.end.toFixed(1)} с] ${s.text}`).join("\n");
+  researchSummary?: string;
+  character: CharacterProfile;
+  duration: number;
+  coverage: { target: number; max: number };
+}): Promise<{ bible: StoryBible; beats: StoryBeat[]; phrases: Phrase[] }> {
+  const phrases = phrasesFromWords(args.words);
+  if (phrases.length < 2) throw new Error("AI-фильм: в речи меньше двух фраз — не из чего строить историю");
+  const list = phrases.map((p) => `${p.index}. [${p.start.toFixed(1)}–${p.end.toFixed(1)} с] ${p.text}`).join("\n");
   const user =
     `${args.topic ? `Тема ролика: ${args.topic}\n` : ""}` +
     `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
     `Сценарий (что автор хотел сказать):\n${args.script.slice(0, 4000)}\n\n` +
-    `Речь автора по фразам (чистый таймлайн, всего ${sentences[sentences.length - 1].end.toFixed(1)} с):\n${list}`;
-  // 16000, как у чистки речи и режиссёра: на 6000 разбор речи в 108 с упёрся в лимит с пустым текстом
-  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", system: SYSTEM, user });
+    `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}`;
+  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", system: storySystemPrompt(args.character, args.coverage), user });
   const parsed = parseJson<RawStory>(raw, "AI Film Story");
-  const bible = normalizeBible(parsed.bible);
-  const episodes = episodesFromRaw(parsed.episodes ?? [], sentences);
-  if (!episodes.length) throw new Error("AI Film Story: модель не вернула эпизоды");
-  return { bible, episodes, sentences };
+  const bible = normalizeBible(parsed, args.character);
+  const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration);
+  if (!beats.length) throw new Error("AI Film Story: модель не вернула биты");
+  return { bible, beats, phrases };
 }

@@ -5,19 +5,19 @@ import type { Project } from "../store";
 import type { StoryResearchPack } from "../storyResearch";
 import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
-import { analyzeStory, STORY_VERSION } from "./story";
-import { buildFilmPlan, PLAN_VERSION, VEO_MODEL } from "./plan";
-import { generateSequences } from "./generate";
-import { assembleFilm } from "./composite";
+import { planStory, STORY_VERSION } from "./story";
+import { buildFilmPlan, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
+import { generateGroups } from "./generate";
+import { loadCharacterProfile } from "./character";
 import { veoConfigured } from "./veo";
-import type { AiFilmPlan } from "./types";
+import type { AiFilmPlan, GroupClip } from "./types";
 
 /**
- * Стадия AI-фильма в конвейере. Две фазы по запросу пользователя:
- *   plan     — разбор истории и план сцен с ценой; Veo не вызывается, денег стоит
- *              только один запрос Claude. План показывается в интерфейсе.
- *   generate — только по подтверждённому плану: сцены Veo (кэш по ключу),
- *              сборка фильма. Без плана или с устаревшим планом — стоп.
+ * Стадия AI-фильма v2 в конвейере. Две фазы по запросу пользователя:
+ *   plan     — Character Bible + разбор истории (Claude) → биты → shots/группы →
+ *              редьюсер под покрытие и бюджет → план с ценой и временем. Veo не вызывается.
+ *   generate — только по подтверждённому плану той же версии и того же ключа:
+ *              группы Veo (параллельно, кэш по ключу) → клипы для сборки.
  */
 
 export const PLAN_FILE = "ai-film-plan.json";
@@ -27,15 +27,15 @@ export function filmBudget(): number {
   return Number.isFinite(v) && v > 0 ? v : 12;
 }
 
-/** Ключ входных данных плана: чистая речь + сценарий + версии + модель. */
-export function planKey(words: Word[], script: string): string {
-  return `${textHash(words.map((w) => w.word).join(" "))}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}`;
+/** Ключ входных данных плана: чистая речь + сценарий + версии + модели + персонаж и его эталоны. */
+export function planKey(words: Word[], script: string, character: { id: string; refHash: string }): string {
+  return `${textHash(words.map((w) => w.word).join(" "))}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:${character.id}@${character.refHash}`;
 }
 
 export function loadPlanFile(dir: string): AiFilmPlan | null {
   try {
     const p = JSON.parse(fs.readFileSync(path.join(dir, PLAN_FILE), "utf8"));
-    return p && Array.isArray(p.sequences) ? (p as AiFilmPlan) : null;
+    return p && Array.isArray(p.beats) && Array.isArray(p.shots) ? (p as AiFilmPlan) : null;
   } catch {
     return null;
   }
@@ -43,7 +43,7 @@ export function loadPlanFile(dir: string): AiFilmPlan | null {
 
 export type FilmStageResult =
   | { kind: "plan"; plan: AiFilmPlan }
-  | { kind: "film"; plan: AiFilmPlan; file: string; spent: number; generated: number; cached: number };
+  | { kind: "film"; plan: AiFilmPlan; clips: GroupClip[]; spent: number; generated: number; cached: number };
 
 export async function runAiFilmStage(args: {
   id: string;
@@ -56,48 +56,59 @@ export async function runAiFilmStage(args: {
 }): Promise<FilmStageResult> {
   const { id, dir, project, words, duration } = args;
   const request = project.aiFilm?.request ?? "plan";
-  const key = planKey(words, project.script ?? "");
+  const character = loadCharacterProfile();
+  const key = planKey(words, project.script ?? "", character);
+  const budget = filmBudget();
+  const coverage = coverageConfig();
+  const cfg = { key, budgetUsd: budget, maxCoverage: coverage.max, concurrency: veoConcurrency(), callMinutes: veoCallMinutes() };
 
   if (request === "plan") {
     args.setStep("AI-фильм: разбор истории", 26);
     const research = await args.research.catch(() => null);
-    const summary = research ? research.facts.slice(0, 8).map((f: any) => (typeof f === "string" ? f : f.text ?? f.fact ?? "")).filter(Boolean).join("; ") : "";
-    const story = await analyzeStory({ words, script: project.script ?? "", researchSummary: summary, topic: project.topic });
+    const summary = research ? research.facts.slice(0, 8).map((f) => f.text).filter(Boolean).join("; ") : "";
+    const story = await planStory({ words, script: project.script ?? "", topic: project.topic, researchSummary: summary, character, duration, coverage });
     args.setStep("AI-фильм: план сцен", 30);
-    const plan = buildFilmPlan(story.bible, story.episodes, duration, { key });
+    const plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
     fs.writeFileSync(path.join(dir, PLAN_FILE), JSON.stringify(plan, null, 2), "utf8");
+    const s = plan.stats;
     console.log(
-      `AI-фильм: план — эпизодов ${plan.episodes.length}, последовательностей ${plan.sequences.length}, вызовов Veo ${plan.calls}, ` +
-        `секунд ${plan.totalSeconds}, оценка $${plan.estimatedCost.toFixed(2)}, ~${plan.estimatedMinutes} мин`,
+      `AI-фильм: план — битов ${plan.beats.length}, AI ${s.aiSeconds} с из ${s.speechSeconds} с (${Math.round(s.coverage * 100)}%), ` +
+        `Veo-секунд ${s.generatedSeconds}, вызовов ${s.calls}, групп ${s.groups} (цепочек ${s.chains}), оценка $${s.estimatedCost.toFixed(2)}, ~${s.estimatedWallMinutes} мин при ${s.concurrency} параллельных`,
     );
+    for (const w of plan.warnings) console.warn(`  предупреждение: ${w}`);
     return { kind: "plan", plan };
   }
 
   // generate — только по подтверждённому плану
   const plan = project.aiFilm?.plan ?? loadPlanFile(dir);
   if (!plan) throw new Error("AI-фильм: плана нет — сначала соберите план и подтвердите его");
+  const stale = planVersionError(plan);
+  if (stale) throw new Error(stale);
   if (plan.key !== key) {
-    throw new Error("AI-фильм: план устарел — речь или сценарий изменились с момента его сборки. Соберите план заново");
+    throw new Error("AI-фильм: план устарел — речь, сценарий или эталоны персонажа изменились с момента его сборки. Соберите план заново");
   }
   if (!veoConfigured()) {
     throw new Error("AI-фильм: Google Cloud не подключён к воркеру (нет файла учётных данных ADC). Veo не вызывался");
   }
-  const budget = filmBudget();
-  if (plan.estimatedCost > budget) {
-    throw new Error(`AI-фильм: оценка плана $${plan.estimatedCost.toFixed(2)} выше предела MEDIA_FILM_MAX_COST_USD=$${budget}. Veo не вызывался`);
+  const requireRefs = process.env.AI_FILM_REQUIRE_REFERENCES !== "0";
+  if (requireRefs && plan.shots.some((s) => s.gudiniVisible && s.mode === "text") && character.referenceFiles.length === 0) {
+    throw new Error(`AI-фильм: у персонажа «${character.name}» нет эталонных картинок в ${character.dir}. Добавьте их (см. README там же) или AI_FILM_REQUIRE_REFERENCES=0. Veo не вызывался`);
   }
+  if (plan.stats.estimatedCost > budget) {
+    throw new Error(`AI-фильм: оценка плана $${plan.stats.estimatedCost.toFixed(2)} выше предела MEDIA_FILM_MAX_COST_USD=$${budget}. Veo не вызывался`);
+  }
+  if (!plan.shots.length) throw new Error("AI-фильм: в плане нет ни одной AI-сцены — генерировать нечего");
   // предел этого запуска — бюджет фильма (обычный предел $2 рассчитан на карточки)
   setRunCostLimit(budget);
-  fs.writeFileSync(path.join(dir, PLAN_FILE), JSON.stringify(plan, null, 2), "utf8");
   args.setStep("AI-фильм: генерация сцен", 28);
-  const gen = await generateSequences({
+  const gen = await generateGroups({
     dir,
     projectId: id,
     plan,
-    onProgress: (msg, f) => args.setStep(`AI-фильм: ${msg}`, 28 + Math.round(f * 8)),
+    character,
+    concurrency: cfg.concurrency,
+    onProgress: (msg, f) => args.setStep(`AI-фильм: ${msg}`, 28 + Math.round(f * 9)),
   });
-  console.log(`AI-фильм: сцен сгенерировано ${gen.generated}, из кэша ${gen.cached}, потрачено в этом запуске $${gen.spent.toFixed(2)}`);
-  args.setStep("AI-фильм: сборка фильма", 36);
-  const file = await assembleFilm(dir, plan, gen.files, duration);
-  return { kind: "film", plan, file, spent: gen.spent, generated: gen.generated, cached: gen.cached };
+  console.log(`AI-фильм: shots сгенерировано ${gen.generated}, из кэша ${gen.cached}, потрачено в этом запуске $${gen.spent.toFixed(2)}`);
+  return { kind: "film", plan, clips: gen.clips, spent: gen.spent, generated: gen.generated, cached: gen.cached };
 }

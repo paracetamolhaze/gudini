@@ -14,5 +14,7 @@ COPY tsconfig.json ./
 COPY lib ./lib
 COPY worker ./worker
 COPY fonts ./fonts
+# AI-фильм: Character Bible и эталонные картинки постоянного персонажа
+COPY assets ./assets
 
 CMD ["npx", "tsx", "worker/index.ts"]

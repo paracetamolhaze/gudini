@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import Link from "next/link";
+import Nav from "./components/Nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Гудини — ИИ-студия коротких видео",
-  description: "Сценарий → съёмка → автомонтаж → публикация в TikTok, Shorts и Reels",
+  title: "Гудини",
+  description: "Сценарий, запись, монтаж и публикация коротких видео",
   // на iPhone «На экран Домой» открывает сайт без адресной строки, в тёмной теме
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Гудини" },
   // подтверждение владения доменом для Google Search Console (нужно, чтобы Google показывал
@@ -17,7 +18,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#0a0a11",
+  themeColor: "#101114",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -26,21 +27,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <div className="container">
           <header className="topbar">
-            <Link href="/">
-              <div className="logo">ГУДИНИ 🎩</div>
-              <div className="logo-sub">магия коротких видео: сценарий → монтаж → публикация</div>
+            <Link href="/" className="wordmark" aria-label="Гудини, на главную">
+              Гудини
             </Link>
-            <nav className="row">
-              <Link className="nav-link" href="/">
-                Проекты
-              </Link>
-              <Link className="nav-link" href="/balances">
-                💳 Балансы
-              </Link>
-              <Link className="nav-link" href="/settings">
-                ⚙ Настройки
-              </Link>
-            </nav>
+            <Nav />
           </header>
           {children}
         </div>

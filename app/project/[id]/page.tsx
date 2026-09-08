@@ -1,11 +1,14 @@
 "use client";
 
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
 import Teleprompter from "./Teleprompter";
 import { saveRecording, loadRecording, deleteRecording, shareOrDownload, type StoredRecording } from "@/lib/recordingStore";
+import { BackLink, Button, ErrorState, Field, StatusBadge, TechDetails, VideoPreview, type StatusTone } from "@/app/components/ui";
 
 type Meta = { title: string; description: string; hashtags: string[] };
 type Publication = { platform: string; status: string; url?: string; message?: string; at: string };
+type MontageStyle = "cards" | "ai_film";
 type Project = {
   id: string;
   topic: string;
@@ -21,13 +24,14 @@ type Project = {
   brollCount?: number;
   meta: Meta | null;
   publications: Publication[];
-  montageStyle?: "cards" | "ai_film";
-  outputs?: Partial<Record<"cards" | "ai_film", { file: string; at: string; brollCount?: number; subtitlesSource?: string }>>;
+  montageStyle?: MontageStyle;
+  outputs?: Partial<Record<MontageStyle, { file: string; at: string; brollCount?: number; subtitlesSource?: string }>>;
   aiFilm?: {
     request?: "plan" | "generate";
     status?: "planned" | "generated" | "failed";
     spent?: number;
     generatedAt?: string;
+    error?: string;
     plan?: AiFilmPlanView;
   };
 };
@@ -62,30 +66,62 @@ type AiFilmPlanView = {
 };
 
 const AI_FILM_PLAN_VERSION = 3;
-const MODE_LABEL: Record<string, { text: string; bg: string; fg: string }> = {
-  author: { text: "AUTHOR", bg: "rgba(140,140,160,0.18)", fg: "#b9b9c9" },
-  full_ai: { text: "FULL AI", bg: "rgba(160, 90, 255, 0.22)", fg: "#c9a6ff" },
-  hybrid: { text: "HYBRID", bg: "rgba(60, 160, 255, 0.2)", fg: "#8fc6ff" },
-};
+/** Режимы кадра словами автора; технические имена — только в «Технических сведениях». */
+const MODE_RU: Record<string, string> = { author: "Автор", full_ai: "Сцена на весь экран", hybrid: "Автор + сцена" };
+const MODE_TECH: Record<string, string> = { author: "AUTHOR", full_ai: "FULL_AI", hybrid: "HYBRID" };
+const STYLE_NAME: Record<MontageStyle, string> = { cards: "С картинками", ai_film: "AI-фильм" };
+const STYLE_SUB: Record<MontageStyle, string> = { cards: "Иллюстрации над автором", ai_film: "Видеосцены Google Veo" };
 
 const PLATFORMS = [
-  { key: "tiktok", name: "TikTok", icon: "🎵" },
-  { key: "youtube", name: "YouTube Shorts", icon: "▶️" },
-  { key: "instagram", name: "Instagram Reels", icon: "📸" },
+  { key: "tiktok", name: "TikTok" },
+  { key: "youtube", name: "YouTube Shorts" },
+  { key: "instagram", name: "Instagram Reels" },
 ] as const;
+
+const STEPS = ["Сценарий", "Запись", "Монтаж", "Публикация"];
+
+const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const fmtDuration = (sec: number) => {
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return m ? `${m} мин ${s} с` : `${s} с`;
+};
+const usd = (n: number) => `$${n.toFixed(2)}`;
+
+/** Итог стиля: у старых проектов без outputs последний монтаж — всегда карточки. */
+function styleOutput(project: Project, style: MontageStyle) {
+  const out = project.outputs?.[style];
+  if (out) return { src: `/api/projects/${project.id}/video?which=processed&style=${style}&t=${encodeURIComponent(out.at)}`, legacy: false, info: out };
+  const hasOutputs = Object.keys(project.outputs ?? {}).length > 0;
+  if (!hasOutputs && project.processedVideo && style === "cards") {
+    return { src: `/api/projects/${project.id}/video?which=processed&t=legacy`, legacy: true, info: { at: "", brollCount: project.brollCount, subtitlesSource: project.subtitlesSource } };
+  }
+  return null;
+}
+const hasAnyVideo = (p: Project) => Boolean(p.processedVideo || p.outputs?.cards || p.outputs?.ai_film);
+
+const subtitlesLabel = (src?: string) => (src === "scribe" ? "субтитры по речи" : src === "whisper" ? "субтитры по речи" : "субтитры по тексту сценария");
 
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [project, setProject] = useState<Project | null>(null);
+  const [loadError, setLoadError] = useState("");
   const [step, setStep] = useState(0);
   const [error, setError] = useState("");
 
   const reload = useCallback(async () => {
-    const res = await fetch(`/api/projects/${id}`);
-    if (res.ok) {
-      const p: Project = await res.json();
-      setProject(p);
-      return p;
+    try {
+      const res = await fetch(`/api/projects/${id}`);
+      if (res.ok) {
+        const p: Project = await res.json();
+        setProject(p);
+        setLoadError("");
+        return p;
+      }
+      const j = await res.json().catch(() => ({}));
+      setLoadError(res.status === 404 ? "Проект не найден" : j.error ?? `ответ ${res.status}`);
+    } catch (e: any) {
+      setLoadError(String(e?.message ?? e));
     }
     return null;
   }, [id]);
@@ -93,47 +129,66 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   useEffect(() => {
     reload().then((p) => {
       if (!p) return;
-      if (p.processedVideo) setStep(3);
+      if (hasAnyVideo(p)) setStep(3);
       else if (p.processing.state === "running") setStep(2);
       else if (p.rawVideo) setStep(2);
       else if (p.script) setStep(0);
     });
   }, [reload]);
 
-  if (!project) return <p className="hint">Загрузка…</p>;
+  // ошибка одного шага не тянется на следующий
+  const goStep = (i: number) => {
+    setError("");
+    setStep(i);
+  };
 
+  if (!project) {
+    return (
+      <main>
+        <BackLink href="/">Проекты</BackLink>
+        {loadError ? (
+          <ErrorState title="Не удалось загрузить проект" text={loadError} onRetry={() => void reload()} />
+        ) : (
+          <div className="skeleton" style={{ height: 240 }} aria-busy="true" />
+        )}
+      </main>
+    );
+  }
+
+  // галочка — реально выполненная работа этого этапа
   const stepsDone = [
     Boolean(project.script),
     Boolean(project.rawVideo),
-    Boolean(project.processedVideo),
-    project.publications.length > 0,
+    hasAnyVideo(project),
+    project.publications.some((p) => p.status === "published"),
   ];
 
   return (
     <main>
-      <h1 className="project-title">{project.topic}</h1>
-      <p className="hint" style={{ marginBottom: 18 }}>
-        Проект #{project.id.slice(0, 6)}
-      </p>
+      <BackLink href="/">Проекты</BackLink>
+      <h1 className="page-title">{project.topic}</h1>
 
-      <div className="steps">
-        {["1. Сценарий", "2. Съёмка", "3. Монтаж", "4. Публикация"].map((label, i) => (
+      <nav className="steps" aria-label="Этапы проекта">
+        {STEPS.map((label, i) => (
           <button
             key={label}
-            className={`step ${step === i ? "active" : ""} ${step !== i && stepsDone[i] ? "done" : ""}`}
-            onClick={() => setStep(i)}
+            type="button"
+            className={`step ${step === i ? "active" : ""} ${stepsDone[i] ? "done" : ""}`}
+            aria-current={step === i ? "step" : undefined}
+            onClick={() => goStep(i)}
           >
-            {label} {step !== i && stepsDone[i] ? "✓" : ""}
+            <span className="step-n" aria-hidden>{stepsDone[i] && step !== i ? "✓" : i + 1}</span>
+            <span>{label}</span>
           </button>
         ))}
-      </div>
+      </nav>
 
       {error && <div className="error-box">{error}</div>}
 
-      {step === 0 && <ScriptStep project={project} setProject={setProject} setError={setError} onNext={() => setStep(1)} />}
-      {step === 1 && <RecordStep project={project} reload={reload} setError={setError} onNext={() => setStep(2)} />}
-      {step === 2 && <ProcessStep project={project} reload={reload} setError={setError} onNext={() => setStep(3)} />}
-      {step === 3 && <PublishStep project={project} setProject={setProject} reload={reload} setError={setError} />}
+      {step === 0 && <ScriptStep project={project} setProject={setProject} setError={setError} onNext={() => goStep(1)} />}
+      {step === 1 && <RecordStep project={project} reload={reload} setError={setError} onNext={() => goStep(2)} />}
+      {step === 2 && <ProcessStep project={project} reload={reload} setError={setError} onNext={() => goStep(3)} onBack={() => goStep(1)} />}
+      {step === 3 && <PublishStep project={project} setProject={setProject} reload={reload} setError={setError} onBack={() => goStep(2)} />}
     </main>
   );
 }
@@ -152,12 +207,15 @@ function ScriptStep({
   onNext: () => void;
 }) {
   const [script, setScript] = useState(project.script ?? "");
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const busy = saving || regenerating;
+  const dirty = script !== (project.script ?? "");
   const words = script.trim() ? script.trim().split(/\s+/).length : 0;
   const seconds = Math.round(words / 2.5);
 
   async function regenerate() {
-    setBusy(true);
+    setRegenerating(true);
     setError("");
     try {
       const res = await fetch(`/api/projects/${project.id}/generate`, {
@@ -172,12 +230,13 @@ function ScriptStep({
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
-      setBusy(false);
+      setRegenerating(false);
     }
   }
 
   async function saveAndNext() {
-    setBusy(true);
+    setSaving(true);
+    setError("");
     try {
       const res = await fetch(`/api/projects/${project.id}`, {
         method: "PATCH",
@@ -191,37 +250,46 @@ function ScriptStep({
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
   return (
     <div className="card">
-      <h2>📝 Сценарий на минуту</h2>
+      <div className="card-head">
+        <h2>Сценарий</h2>
+        <span className="spacer" />
+        {saving ? (
+          <StatusBadge tone="accent" busy>Сохраняем</StatusBadge>
+        ) : dirty ? (
+          <StatusBadge tone="warn">Не сохранено</StatusBadge>
+        ) : project.script ? (
+          <StatusBadge tone="success">Сохранено</StatusBadge>
+        ) : null}
+      </div>
       {project.scriptDemo && (
-        <p className="hint" style={{ marginBottom: 10 }}>
-          ⚡ Демо-режим: сценарий сгенерирован по шаблону. Добавь ключ Anthropic в Настройках — и ИИ будет писать
-          уникальные сценарии под каждую тему.
-        </p>
+        <div className="state-box">
+          Сценарий составлен по шаблону: ключ Anthropic не задан. Добавьте его в разделе «Настройки», и следующий вариант напишет модель.
+        </div>
       )}
-      <textarea rows={14} value={script} onChange={(e) => setScript(e.target.value)} />
-      <p className="hint" style={{ margin: "8px 0 14px" }}>
-        {words} слов ≈ {seconds} сек чтения {seconds > 75 ? "— длинновато, сократи" : seconds < 40 && words > 0 ? "— коротковато" : "✓"}
+      <textarea rows={14} value={script} onChange={(e) => setScript(e.target.value)} disabled={regenerating} aria-label="Текст сценария" />
+      <p className="hint" style={{ margin: "8px 0 0" }}>
+        {words} слов · около {fmtDuration(seconds)} чтения
+        {seconds > 75 ? " · длинновато для короткого ролика" : ""}
       </p>
-      <div className="row">
-        <button className="btn btn-secondary" onClick={regenerate} disabled={busy}>
-          {busy ? <span className="spin" /> : "🔄"} Перегенерировать
-        </button>
-        <div className="spacer" />
-        <button className="btn" onClick={saveAndNext} disabled={busy || !script.trim()}>
-          Сохранить и к съёмке →
-        </button>
+      <div className="actions">
+        <Button onClick={saveAndNext} busy={saving} disabled={busy || !script.trim()}>
+          Сохранить и продолжить
+        </Button>
+        <Button variant="secondary" onClick={regenerate} busy={regenerating} disabled={busy}>
+          Другой вариант
+        </Button>
       </div>
     </div>
   );
 }
 
-/* ================== Шаг 2: Съёмка / загрузка ================== */
+/* ================== Шаг 2: Запись / загрузка ================== */
 
 function RecordStep({
   project,
@@ -239,10 +307,13 @@ function RecordStep({
   const [uploadNote, setUploadNote] = useState("");
   const [drag, setDrag] = useState(false);
   const [prompterOpen, setPrompterOpen] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  const [rawDuration, setRawDuration] = useState<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   // Файл и место обрыва держатся в памяти: после ошибки загрузку можно продолжить,
   // а не записывать дубль заново.
   const pendingRef = useRef<{ file: File; offset: number } | null>(null);
+  const [pendingSize, setPendingSize] = useState<number | null>(null);
   // Копия записи в хранилище телефона (IndexedDB): переживает ошибку сети и перезагрузку.
   const [stored, setStored] = useState<StoredRecording | null>(null);
   useEffect(() => {
@@ -304,7 +375,7 @@ function RecordStep({
         setStreamNote(`${mbOf(st.sent)} МБ`);
       } catch (e: any) {
         st.failed = String(e?.message ?? e);
-        setStreamNote("сеть оборвалась — дошлём после записи");
+        setStreamNote("связь прервалась, дошлём после записи");
       }
     });
   }
@@ -325,7 +396,7 @@ function RecordStep({
     setError("");
     setUploading(true);
     setUploadPct(99);
-    setUploadNote("закрываю файл на сервере…");
+    setUploadNote("Завершаем загрузку…");
     let ok = false;
     try {
       ok = await finishStream();
@@ -338,6 +409,7 @@ function RecordStep({
       streamRef.current = null;
       setUploadNote("");
       setUploading(false);
+      setReplacing(false);
       await reload();
       onNext();
       return;
@@ -363,6 +435,7 @@ function RecordStep({
     const name = file.name || "record.webm";
     let offset = startOffset;
     pendingRef.current = { file, offset };
+    setPendingSize(file.size);
     // Телефон гасит экран посреди загрузки, Safari уходит в фон, и соединение рвётся
     // (у сайта в журнале ECONNRESET на 80-м мегабайте). Пока идёт загрузка — экран не гаснет.
     let wakeLock: { release: () => Promise<void> } | null = null;
@@ -390,8 +463,8 @@ function RecordStep({
           } catch (e: any) {
             // сеть оборвалась (экран, фон, Wi-Fi): тот же кусок повторяется, сервер
             // отличит дубль от продолжения по x-offset
-            if (++attempt >= 6) throw new Error(`сеть оборвалась на ${mb(offset)} МБ из ${mb(file.size)} — ${String(e?.message ?? e)}`);
-            setUploadNote(`сеть оборвалась, повтор ${attempt}…`);
+            if (++attempt >= 6) throw new Error(`связь прервалась на ${mb(offset)} МБ из ${mb(file.size)} — ${String(e?.message ?? e)}`);
+            setUploadNote(`связь прервалась, повтор ${attempt}…`);
             await new Promise((r) => setTimeout(r, 2000 * attempt));
             continue;
           }
@@ -413,16 +486,18 @@ function RecordStep({
         setUploadNote(`${mb(offset)} из ${mb(file.size)} МБ`);
       }
       pendingRef.current = null;
+      setPendingSize(null);
       await deleteRecording(project.id);
       setStored(null);
       setUploadNote("");
       setUploading(false);
+      setReplacing(false);
       await reload();
       onNext();
     } catch (e: any) {
       setUploading(false);
       setUploadNote("");
-      setError(`Ошибка загрузки: ${String(e?.message ?? e)}. Файл остался в памяти страницы — нажмите «Продолжить загрузку».`);
+      setError(`Не удалось загрузить запись: ${String(e?.message ?? e)}. Файл остался в памяти страницы, нажмите «Продолжить загрузку».`);
     } finally {
       try {
         await wakeLock?.release();
@@ -436,58 +511,98 @@ function RecordStep({
     void upload(pending.file, pending.offset);
   }
 
+  const pending = !uploading && pendingRef.current ? pendingRef.current : null;
+  const showChooser = !project.rawVideo || replacing;
+
   return (
     <>
       <div className="card">
-        <h2>🎥 Запиши себя, читая сценарий</h2>
-        <p className="hint" style={{ marginBottom: 16 }}>
-          Снимай вертикально (9:16), в хорошем свете, с хорошим звуком. Можно записать прямо здесь с телесуфлёром —
-          текст будет плыть по экрану, пока камера пишет.
-        </p>
-        {stored && !uploading && !pendingRef.current && (
-          <div className="error-box" style={{ marginBottom: 12 }}>
-            Незагруженная запись от {new Date(stored.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}, {mbOf(stored.blob.size)} МБ — она сохранена на этом телефоне.
-            <div className="row" style={{ marginTop: 8 }}>
-              <button className="btn" onClick={() => void uploadStored()}>⤴ Загрузить на сервер</button>
-              <button className="btn btn-secondary" onClick={() => void shareOrDownload(stored.blob, stored.name)}>💾 На телефон</button>
-              <button className="btn btn-secondary" onClick={() => { void deleteRecording(project.id); setStored(null); }}>Удалить</button>
+        <div className="card-head">
+          <h2>Запись</h2>
+          <span className="spacer" />
+          {project.rawVideo && !uploading && <StatusBadge tone="success">Запись загружена</StatusBadge>}
+          {uploading && <StatusBadge tone="accent" busy>Загружается</StatusBadge>}
+        </div>
+
+        {pending && (
+          <div className="state-box">
+            Загрузка прервалась на {mbOf(pending.offset)} МБ из {mbOf(pendingSize ?? pending.file.size)} МБ. Файл остался в памяти страницы.
+            <div className="actions">
+              <Button onClick={resumeUpload}>Продолжить загрузку</Button>
             </div>
           </div>
         )}
-        <div className="row">
-          {!uploading && pendingRef.current && (
-              <button className="btn" onClick={resumeUpload} style={{ marginRight: 8 }}>
-                ⤴ Продолжить загрузку
-              </button>
-            )}
-            <button className="btn" onClick={() => setPrompterOpen(true)}>
-            🎙 Записать с телесуфлёром
-          </button>
-          <span className="hint or">или</span>
-          <button className="btn btn-secondary" onClick={() => fileInput.current?.click()}>
-            📁 Загрузить готовый файл
-          </button>
-        </div>
 
-        <div
-          className={`dropzone ${drag ? "drag" : ""}`}
-          style={{ marginTop: 16 }}
-          onClick={() => fileInput.current?.click()}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDrag(true);
-          }}
-          onDragLeave={() => setDrag(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDrag(false);
-            const file = e.dataTransfer.files?.[0];
-            if (file) upload(file);
-          }}
-        >
-          Перетащи видеофайл сюда (MP4, MOV, WebM…)
-          {project.rawVideo && <div style={{ marginTop: 8, color: "var(--success)" }}>✓ Видео уже загружено — можно заменить</div>}
-        </div>
+        {stored && !uploading && !pending && (
+          <div className="state-box">
+            <div style={{ fontWeight: 600, color: "var(--text)" }}>Запись сохранена на устройстве</div>
+            <div className="hint">
+              {new Date(stored.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })} · {mbOf(stored.blob.size)} МБ · ещё не загружена на сервер
+            </div>
+            <div className="actions">
+              <Button onClick={() => void uploadStored()}>Продолжить загрузку</Button>
+              <Button variant="secondary" onClick={() => void shareOrDownload(stored.blob, stored.name)}>Скачать</Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  if (!confirm("Удалить сохранённую запись с этого устройства?")) return;
+                  void deleteRecording(project.id);
+                  setStored(null);
+                }}
+              >
+                Удалить
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {uploading && (
+          <div className="state-box" aria-live="polite">
+            Загружаем запись: {uploadPct}%{uploadNote ? ` · ${uploadNote}` : ""}
+            <div className="progress-track">
+              <div className="progress-fill" style={{ width: `${uploadPct}%` }} />
+            </div>
+            <div className="hint">Не закрывайте страницу до конца загрузки.</div>
+          </div>
+        )}
+
+        {!uploading && showChooser && (
+          <>
+            <p className="hint" style={{ marginBottom: 14 }}>
+              Снимайте вертикально, при хорошем свете и звуке.
+            </p>
+            <div className="choice-grid">
+              <button type="button" className="choice-card" onClick={() => setPrompterOpen(true)} disabled={!project.script}>
+                <div className="choice-title">Записать с телесуфлёром</div>
+                <div className="choice-sub">{project.script ? "Текст сценария плывёт по экрану, пока камера пишет" : "Сначала сохраните сценарий"}</div>
+              </button>
+              <button
+                type="button"
+                className={`choice-card ${drag ? "drag" : ""}`}
+                onClick={() => fileInput.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDrag(true);
+                }}
+                onDragLeave={() => setDrag(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDrag(false);
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) upload(file);
+                }}
+              >
+                <div className="choice-title">Загрузить видео</div>
+                <div className="choice-sub">MP4, MOV или WebM. Можно перетащить файл сюда</div>
+              </button>
+            </div>
+            {replacing && (
+              <div className="actions">
+                <Button variant="ghost" onClick={() => setReplacing(false)}>Оставить текущую запись</Button>
+              </div>
+            )}
+          </>
+        )}
         <input
           ref={fileInput}
           type="file"
@@ -499,22 +614,32 @@ function RecordStep({
           }}
         />
 
-        {uploading && (
-          <>
-            <div className="progress-track">
-              <div className="progress-fill" style={{ width: `${uploadPct}%` }} />
+        {project.rawVideo && !uploading && !replacing && (
+          <div className="workspace" style={{ marginTop: 8 }}>
+            <div>
+              <p className="hint">
+                Запись загружена{rawDuration ? ` · ${fmtDuration(rawDuration)}` : ""}. Дальше монтаж: субтитры, картинки или AI-сцены.
+              </p>
+              <div className="actions">
+                <Button onClick={onNext}>К монтажу</Button>
+                <Button variant="secondary" onClick={() => setReplacing(true)}>Заменить запись</Button>
+              </div>
             </div>
-            <p className="hint">Загрузка: {uploadPct}%{uploadNote ? ` · ${uploadNote}` : ""}</p>
-          </>
-        )}
-
-        {project.rawVideo && !uploading && (
-          <div className="row" style={{ marginTop: 16 }}>
-            <video className="video-preview" src={`/api/projects/${project.id}/video?which=raw`} controls playsInline style={{ margin: 0, maxWidth: 220 }} />
-            <div className="spacer" />
-            <button className="btn" onClick={onNext}>
-              К монтажу →
-            </button>
+            <div className="preview-col">
+              <div className="preview-box">
+                <video
+                  className="video-preview"
+                  src={`/api/projects/${project.id}/video?which=raw`}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  onLoadedMetadata={(e) => {
+                    const d = e.currentTarget.duration;
+                    if (Number.isFinite(d) && d > 0) setRawDuration(d);
+                  }}
+                />
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -543,18 +668,47 @@ function RecordStep({
 
 /* ================== Шаг 3: Монтаж ================== */
 
+function StylePicker({ value, onChange, disabled, outputs }: { value: MontageStyle; onChange: (s: MontageStyle) => void; disabled?: boolean; outputs: Record<MontageStyle, boolean> }) {
+  return (
+    <div className="style-picker" role="group" aria-label="Стиль монтажа">
+      {(["cards", "ai_film"] as const).map((s) => (
+        <button key={s} type="button" className="style-card" aria-pressed={value === s} onClick={() => onChange(s)} disabled={disabled}>
+          <div className="style-scheme" aria-hidden>
+            {s === "cards" ? (
+              <>
+                <div className="s-top" />
+                <div className="s-author" />
+              </>
+            ) : (
+              <div className="s-top full" />
+            )}
+          </div>
+          <div>
+            <div className="style-name">{STYLE_NAME[s]}</div>
+            <div className="style-sub">{STYLE_SUB[s]}</div>
+            {outputs[s] && <div className="style-sub" style={{ color: "var(--success)" }}>Версия готова</div>}
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ProcessStep({
   project,
   reload,
   setError,
   onNext,
+  onBack,
 }: {
   project: Project;
   reload: () => Promise<Project | null>;
   setError: (e: string) => void;
   onNext: () => void;
+  onBack: () => void;
 }) {
   const processing = project.processing;
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     if (processing.state !== "running") return;
@@ -562,39 +716,35 @@ function ProcessStep({
     return () => clearInterval(timer);
   }, [processing.state, reload]);
 
-  const style = project.montageStyle ?? "cards";
-  const outputs = project.outputs ?? {};
-  const hasOutputs = Object.keys(outputs).length > 0;
-  const styleOutput = outputs[style];
-  const otherStyle: "cards" | "ai_film" = style === "cards" ? "ai_film" : "cards";
-  const otherOutput = outputs[otherStyle];
-  const styleName = (s: "cards" | "ai_film") => (s === "cards" ? "Карточки" : "AI-фильм");
-  // превью: ролик выбранного стиля; у старых проектов без outputs последний монтаж — это
-  // всегда карточки, поэтому он показывается только под стилем «Карточки»
-  const previewSrc = styleOutput
-    ? `/api/projects/${project.id}/video?which=processed&style=${style}&t=${styleOutput.at}`
-    : !hasOutputs && project.processedVideo && style === "cards"
-      ? `/api/projects/${project.id}/video?which=processed&t=${Date.now()}`
-      : null;
+  const style: MontageStyle = project.montageStyle ?? "cards";
+  const otherStyle: MontageStyle = style === "cards" ? "ai_film" : "cards";
+  const current = styleOutput(project, style);
+  const other = styleOutput(project, otherStyle);
   const filmPlan = project.aiFilm?.plan;
   const planStale = Boolean(filmPlan && filmPlan.version !== AI_FILM_PLAN_VERSION);
+  const running = processing.state === "running";
 
   async function start(request?: "plan" | "generate") {
     setError("");
-    const res = await fetch(`/api/projects/${project.id}/process`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request ? { request } : {}),
-    });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      setError(j.error ?? "Ошибка запуска монтажа");
-      return;
+    setStarting(true);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request ? { request } : {}),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "Не удалось запустить монтаж");
+        return;
+      }
+      await reload();
+    } finally {
+      setStarting(false);
     }
-    await reload();
   }
 
-  async function chooseStyle(next: "cards" | "ai_film") {
+  async function chooseStyle(next: MontageStyle) {
     if (next === style) return;
     setError("");
     const res = await fetch(`/api/projects/${project.id}`, {
@@ -606,187 +756,292 @@ function ProcessStep({
     await reload();
   }
 
-  const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+  // после ошибки: карточки — тот же монтаж; AI-фильм — та же фаза, но устаревший план сначала обновляется
+  const retryRequest = style === "ai_film" ? (planStale || !filmPlan ? "plan" : (project.aiFilm?.request ?? "plan")) : undefined;
+
+  const previewStatus: ReactNode = running ? (
+    <StatusBadge tone="accent" busy>Монтируется</StatusBadge>
+  ) : current ? (
+    <StatusBadge tone="success">Видео готово</StatusBadge>
+  ) : (
+    <StatusBadge>Ещё не создана</StatusBadge>
+  );
+  const previewCaption = current
+    ? [subtitlesLabel(current.info.subtitlesSource), current.info.brollCount ? `перебивок: ${current.info.brollCount}` : null, current.legacy ? "последний монтаж до разделения версий" : null]
+        .filter(Boolean)
+        .join(" · ")
+    : undefined;
 
   return (
-    <div className="card">
-      <h2>✂️ Автомонтаж</h2>
-      <div className="row" style={{ marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
-        <button className={`btn ${style === "cards" ? "" : "btn-secondary"}`} onClick={() => chooseStyle("cards")} disabled={processing.state === "running"}>
-          🃏 Карточки
-        </button>
-        <button className={`btn ${style === "ai_film" ? "" : "btn-secondary"}`} onClick={() => chooseStyle("ai_film")} disabled={processing.state === "running"}>
-          🎬 AI-фильм
-        </button>
-      </div>
-      <p className="hint" style={{ marginBottom: 14 }}>
-        {style === "ai_film"
-          ? "Ты остаёшься основой ролика: голос и субтитры идут непрерывно, а видеоряд переключается между тобой (AUTHOR), AI-сценой на весь экран (FULL AI) и AI-карточкой над тобой (HYBRID). Герой всех AI-сцен — Gudini. Шаг 1: план сцен с ценой (Veo не вызывается). Шаг 2: генерация в Veo и монтаж — только после твоего подтверждения."
-          : "Гудини кадрирует видео в 9:16 (1080×1920), нормализует громкость, добавит крупные «горящие» субтитры по словам, карточки-иллюстрации и сгенерирует описание с хэштегами."}
-      </p>
+    <div className="workspace">
+      <div>
+        <div className="card">
+          <div className="card-head">
+            <h2>Монтаж</h2>
+          </div>
+          <StylePicker value={style} onChange={(s) => void chooseStyle(s)} disabled={running} outputs={{ cards: Boolean(styleOutput(project, "cards")), ai_film: Boolean(styleOutput(project, "ai_film")) }} />
 
-      {!project.rawVideo && <div className="error-box">Сначала загрузи видео на шаге «Съёмка»</div>}
-
-      {style === "ai_film" && filmPlan && processing.state !== "running" && planStale && (
-        <div className="error-box" style={{ marginBottom: 14 }}>AI Film plan устарел, пересоберите план.</div>
-      )}
-
-      {style === "ai_film" && filmPlan && !planStale && processing.state !== "running" && (
-        <div style={{ marginBottom: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
-          <b>План AI-фильма</b>
-          <p className="hint" style={{ margin: "6px 0" }}>
-            AI на экране: <b>{filmPlan.stats.aiSeconds} с</b> из {filmPlan.stats.speechSeconds} с · покрытие {Math.round(filmPlan.stats.coverage * 100)}% ·
-            Veo-секунд {filmPlan.stats.generatedSeconds}{typeof filmPlan.stats.overheadSeconds === "number" ? ` (сверх экрана ${filmPlan.stats.overheadSeconds} с, эффективность ${Math.round((filmPlan.stats.generationEfficiency ?? 0) * 100)}%)` : ""} · вызовов {filmPlan.stats.calls} · групп {filmPlan.stats.groups} (параллельных {filmPlan.stats.independentGroups}, цепочек {filmPlan.stats.chains}) ·
-            оценка <b>${filmPlan.stats.estimatedCost.toFixed(2)}</b>{filmPlan.budgetUsd ? ` из бюджета $${filmPlan.budgetUsd}` : ""} · примерно {filmPlan.stats.estimatedWallMinutes} мин при {filmPlan.stats.concurrency} параллельных
-            {filmPlan.pricing ? ` · ${filmPlan.pricing.model} $${filmPlan.pricing.pricePerSec}/с` : ""}
-          </p>
-          <p className="hint" style={{ margin: "6px 0" }}>
-            Персонаж: <b>{filmPlan.character?.name ?? "Gudini"}</b>{filmPlan.character ? ` (эталонов: ${filmPlan.character.referenceCount})` : ""}
-            {filmPlan.bible.storyArc?.gudiniRole ? ` · роль: ${filmPlan.bible.storyArc.gudiniRole}` : ""} · стиль: {filmPlan.bible.visualStyle}
-          </p>
-          <p className="hint" style={{ margin: "6px 0" }}>
-            Мир (Universe Lock): <b>{filmPlan.universe?.name ?? filmPlan.universeId ?? "—"}</b>{filmPlan.universeId ? ` · ${filmPlan.universeId}` : ""}
-          </p>
-          {filmPlan.bible.storyArc && (
-            <p className="hint" style={{ margin: "6px 0" }}>
-              История: {filmPlan.bible.storyArc.beginning} → {filmPlan.bible.storyArc.development} → {filmPlan.bible.storyArc.conflict} → {filmPlan.bible.storyArc.climax}. Смысл: {filmPlan.bible.storyArc.meaning}
-            </p>
+          {!project.rawVideo && (
+            <div className="state-box">
+              Сначала нужна запись: без неё монтировать нечего.
+              <div className="actions">
+                <Button variant="secondary" onClick={onBack}>К записи</Button>
+              </div>
+            </div>
           )}
-          {filmPlan.warnings?.map((w, i) => (
-            <p key={i} className="hint" style={{ color: "#f0b429", margin: "4px 0" }}>⚠ {w}</p>
-          ))}
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 6 }}>
-              <thead>
-                <tr className="hint">
-                  <th style={{ textAlign: "left", padding: "4px 6px" }}>Время</th>
-                  <th style={{ textAlign: "left", padding: "4px 6px" }}>Режим</th>
-                  <th style={{ textAlign: "left", padding: "4px 6px" }}>Смысл и действие</th>
-                  <th style={{ textAlign: "left", padding: "4px 6px" }}>AI</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filmPlan.beats.map((b) => {
-                  const m = MODE_LABEL[b.displayMode] ?? MODE_LABEL.author;
-                  const shots = filmPlan.shots.filter((sh) => sh.beatIds.includes(b.id));
-                  const group = shots[0] ? filmPlan.groups.find((g) => g.id === shots[0].groupId) : undefined;
-                  const cost = shots.reduce((a, sh) => a + sh.cost, 0);
-                  return (
-                    <tr key={b.id} style={{ borderTop: "1px solid var(--border)" }}>
-                      <td style={{ padding: "6px", whiteSpace: "nowrap", verticalAlign: "top" }} className="hint">{fmtTime(b.start)}–{fmtTime(b.end)}<br />{(b.end - b.start).toFixed(1)} с</td>
-                      <td style={{ padding: "6px", verticalAlign: "top", whiteSpace: "nowrap" }}>
-                        <span style={{ background: m.bg, color: m.fg, borderRadius: 6, padding: "2px 8px", fontWeight: 600, fontSize: 12 }}>{m.text}</span>
-                        <div className="hint" style={{ fontSize: 11, marginTop: 4 }}>{b.purpose} · {b.priority}</div>
-                      </td>
-                      <td style={{ padding: "6px", verticalAlign: "top" }}>
-                        {b.meaning}
-                        {b.displayMode !== "author" && b.universeAdaptation && <div className="hint" style={{ color: "#8fc6ff" }}>Что в кадре: {b.universeAdaptation}</div>}
-                        {b.displayMode !== "author" && <div className="hint" style={{ opacity: 0.85 }}>{b.visualAction}{b.location ? ` — ${b.location}` : ""}</div>}
-                        {b.reduced && <div className="hint" style={{ color: "#f0b429" }}>{b.reduced}</div>}
-                      </td>
-                      <td style={{ padding: "6px", verticalAlign: "top", whiteSpace: "nowrap" }} className="hint">
-                        {b.displayMode === "author" ? "—" : shots.length ? (
-                          <>
-                            {group?.id}{group?.chain ? " (цепочка)" : ""}<br />
-                            {shots.map((sh) => `${sh.mode} ${sh.veoSeconds}с`).join(" + ")}<br />
-                            {shots[0].generationProfile} · {shots[0].model.replace("-generate-001", "")}{shots[0].useReferences ? " · эталоны" : ""}<br />
-                            ${cost.toFixed(2)}
-                          </>
-                        ) : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {project.aiFilm?.status === "generated" && (
-            <p className="hint" style={{ marginTop: 8 }}>Фильм сгенерирован{typeof project.aiFilm.spent === "number" ? ` · потрачено в последнем запуске $${project.aiFilm.spent.toFixed(2)}` : ""}. Повторный запуск возьмёт готовые сцены из кэша.</p>
-          )}
-        </div>
-      )}
 
-      {processing.state === "running" ? (
-        <>
-          <div className="row">
-            <span className="spin" />
-            <b>{processing.step}</b>
-          </div>
-          <div className="progress-track">
-            <div className="progress-fill" style={{ width: `${processing.progress}%` }} />
-          </div>
-          <p className="hint">{processing.progress}%</p>
-        </>
-      ) : (
-        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-          {style === "ai_film" ? (
-            filmPlan && !planStale ? (
-              <>
-                <button className="btn" onClick={() => start("generate")} disabled={!project.rawVideo || filmPlan.stats.calls === 0}>
-                  🎬 Шаг 2: сгенерировать {filmPlan.stats.calls} сцен в Veo и смонтировать (~${filmPlan.stats.estimatedCost.toFixed(2)})
+          {running && (
+            <div className="state-box" aria-live="polite">
+              <div className="row">
+                <span className="spin" aria-hidden />
+                <b>{processing.step || "Монтаж"}</b>
+                <span className="spacer" />
+                <span className="hint">{processing.progress}%</span>
+              </div>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${processing.progress}%` }} />
+              </div>
+              <div className="hint">Версия «{STYLE_NAME[project.montageStyle ?? "cards"]}». Страницу можно закрыть, монтаж продолжится на сервере.</div>
+            </div>
+          )}
+
+          {!running && processing.state === "error" && (
+            <ErrorState
+              title="Монтаж не завершился"
+              text={processing.error || project.aiFilm?.error || "Причина не названа"}
+              onRetry={project.rawVideo ? () => void start(retryRequest) : undefined}
+              retryLabel="Повторить"
+              busy={starting}
+            />
+          )}
+
+          {!running && project.rawVideo && !current && other && (
+            <div className="state-box">
+              Эта версия ещё не создана. Есть готовая версия «{STYLE_NAME[otherStyle]}».
+              <div className="actions">
+                <button type="button" className="link-btn" onClick={() => void chooseStyle(otherStyle)}>
+                  Посмотреть {otherStyle === "ai_film" ? "AI-фильм" : "версию с картинками"}
                 </button>
-                <button className="btn btn-secondary" onClick={() => start("plan")} disabled={!project.rawVideo}>
-                  Пересобрать план
-                </button>
-              </>
-            ) : (
-              <button className="btn" onClick={() => start("plan")} disabled={!project.rawVideo}>
-                📝 Шаг 1: собрать план фильма (бесплатно по Veo, оплата на шаге 2)
-              </button>
-            )
-          ) : (
-            <button className="btn" onClick={() => start()} disabled={!project.rawVideo}>
-              🪄 Смонтировать видео
-            </button>
+              </div>
+            </div>
           )}
-          {project.processedVideo && (
+
+          {!running && project.rawVideo && style === "cards" && (
             <>
-              {project.coverStatus === "ok" || !project.coverStatus ? (
-                <span className="badge success">Готово ✓</span>
-              ) : (
-                <span className="badge" style={{ background: "rgba(240, 180, 41, 0.15)", color: "#f0b429" }}>Ролик готов · обложка требует внимания</span>
+              <p className="hint">Кадр 9:16, выровненная громкость, крупные субтитры по словам и картинки-иллюстрации над автором. Заголовок, описание и хэштеги подбираются автоматически.</p>
+              {current && project.coverStatus && project.coverStatus !== "ok" && (
+                <div className="warn-box">Видео готово, но обложка не прошла проверку. Исправить её можно на шаге «Публикация».</div>
               )}
-              <button className="btn btn-secondary" onClick={onNext}>
-                К публикации →
-              </button>
+              <div className="actions">
+                {current ? (
+                  <>
+                    <Button onClick={onNext}>К публикации</Button>
+                    <Button variant="secondary" onClick={() => void start()} busy={starting}>Смонтировать заново</Button>
+                  </>
+                ) : (
+                  <Button onClick={() => void start()} busy={starting}>Смонтировать</Button>
+                )}
+              </div>
             </>
           )}
-        </div>
-      )}
 
-      {processing.state === "error" && <div className="error-box">Ошибка монтажа: {processing.error}</div>}
-
-      {!previewSrc && (otherOutput || (!hasOutputs && project.processedVideo)) && processing.state !== "running" && (
-        <p className="hint" style={{ marginTop: 12 }}>
-          Ролика в стиле «{styleName(style)}» ещё нет. Есть ролик в стиле «{styleName(otherOutput ? otherStyle : "cards")}» — переключи стиль выше, чтобы посмотреть, или смонтируй этот.
-        </p>
-      )}
-      {previewSrc && processing.state !== "running" && (
-        <div style={{ marginTop: 18 }}>
-          {styleOutput && otherOutput && (
-            <p className="hint" style={{ textAlign: "center", marginBottom: 6 }}>
-              Показан ролик стиля «{styleName(style)}». Есть и «{styleName(otherStyle)}»: переключи стиль выше. На шаге публикации можно выбрать любой из них.
-            </p>
+          {!running && project.rawVideo && style === "ai_film" && (
+            <AiFilmPanel project={project} plan={filmPlan} stale={planStale} hasOutput={Boolean(current)} starting={starting} onStart={start} onNext={onNext} />
           )}
-          {!hasOutputs && (
-            <p className="hint" style={{ textAlign: "center", marginBottom: 6 }}>
-              Показан последний смонтированный ролик. Со следующего монтажа каждый стиль хранится отдельно.
-            </p>
-          )}
-          <video className="video-preview" src={previewSrc} controls playsInline />
-          <p className="hint" style={{ textAlign: "center", marginTop: 8 }}>
-            Субтитры:{" "}
-            {project.subtitlesSource === "scribe"
-              ? "по речи (ElevenLabs Scribe)"
-              : project.subtitlesSource === "whisper"
-                ? "по речи (Whisper)"
-                : "по тексту сценария"}
-            {project.brollCount ? ` · перебивок: ${project.brollCount}` : ""}
-          </p>
-          <CoverBlock project={project} reload={reload} />
         </div>
-      )}
+      </div>
+
+      <div className="preview-col">
+        <VideoPreview
+          key={style}
+          src={running ? null : current?.src}
+          title={
+            <>
+              {previewStatus}
+              <span>{STYLE_NAME[style]}</span>
+            </>
+          }
+          caption={previewCaption}
+          empty={running ? "Превью появится после монтажа" : `Здесь появится версия «${STYLE_NAME[style]}»`}
+        />
+      </div>
     </div>
+  );
+}
+
+/* ================== План и генерация AI-фильма ================== */
+
+function AiFilmPanel({
+  project,
+  plan,
+  stale,
+  hasOutput,
+  starting,
+  onStart,
+  onNext,
+}: {
+  project: Project;
+  plan?: AiFilmPlanView;
+  stale: boolean;
+  hasOutput: boolean;
+  starting: boolean;
+  onStart: (request: "plan" | "generate") => Promise<void>;
+  onNext: () => void;
+}) {
+  const intro = <p className="hint">Голос и субтитры идут непрерывно, а картинка переключается между вами и сценами, которые Google Veo рисует по вашей истории. Главный герой сцен всегда один и тот же.</p>;
+
+  if (!plan || stale) {
+    return (
+      <>
+        {intro}
+        {stale ? (
+          <div className="warn-box">План собран старой версией. Обновите план перед генерацией, цена и сцены будут пересчитаны.</div>
+        ) : (
+          <p className="hint">Сначала план: разбор истории и раскадровка без генерации видео. Цена генерации будет видна в плане до запуска.</p>
+        )}
+        <div className="actions">
+          <Button onClick={() => void onStart("plan")} busy={starting}>{stale ? "Обновить план" : "Подготовить план"}</Button>
+          {hasOutput && <Button variant="secondary" onClick={onNext}>К публикации</Button>}
+        </div>
+      </>
+    );
+  }
+
+  const st = plan.stats;
+  const aiBeats = plan.beats.filter((b) => b.displayMode !== "author");
+  const noScenes = st.calls === 0;
+  const generated = project.aiFilm?.status === "generated";
+  const price = usd(st.estimatedCost);
+
+  return (
+    <>
+      {intro}
+      <div className="plan-summary">
+        <div className="tile">
+          <div className="tile-label">Длительность</div>
+          <div className="tile-value">{fmtTime(st.speechSeconds)}</div>
+        </div>
+        <div className="tile">
+          <div className="tile-label">AI-сцены</div>
+          <div className="tile-value">{aiBeats.length}</div>
+          <div className="tile-sub">{st.aiSeconds} с из {st.speechSeconds} с на экране</div>
+        </div>
+        <div className="tile">
+          <div className="tile-label">Генерация</div>
+          <div className="tile-value">≈ {price}</div>
+          <div className="tile-sub">оценка до запуска</div>
+        </div>
+        <div className="tile">
+          <div className="tile-label">Время</div>
+          <div className="tile-value">≈ {st.estimatedWallMinutes} мин</div>
+        </div>
+      </div>
+
+      {plan.warnings?.map((w, i) => (
+        <div key={i} className="warn-box">{w}</div>
+      ))}
+
+      {noScenes && (
+        <div className="state-box">
+          В плане нет AI-сцен: {plan.warnings?.length ? "см. замечания выше" : "разбор истории не выделил эпизодов для генерации"}. Обновите план или измените сценарий.
+        </div>
+      )}
+
+      {generated && (
+        <div className="success-box">
+          Видео создано{typeof project.aiFilm?.spent === "number" ? `. Фактически потрачено в последнем запуске: ${usd(project.aiFilm.spent)}` : ""}. Повторный запуск возьмёт готовые сцены из кэша и заплатит только за новые.
+        </div>
+      )}
+
+      <div className="actions">
+        {hasOutput ? (
+          <>
+            <Button onClick={onNext}>К публикации</Button>
+            <Button variant="secondary" onClick={() => void onStart("generate")} busy={starting} disabled={noScenes}>Создать заново · ≈ {price}</Button>
+          </>
+        ) : (
+          <Button onClick={() => void onStart("generate")} busy={starting} disabled={noScenes}>Создать видео · ≈ {price}</Button>
+        )}
+        <button type="button" className="link-btn" onClick={() => void onStart("plan")} disabled={starting}>Обновить план</button>
+      </div>
+
+      <h3 className="h-block" style={{ fontSize: 16, margin: "20px 0 8px" }}>Сцены</h3>
+      <div className="scene-list">
+        {plan.beats.map((b) => {
+          const ai = b.displayMode !== "author";
+          return (
+            <div className="scene-row" key={b.id}>
+              <div className="scene-time">{fmtTime(b.start)}–{fmtTime(b.end)}</div>
+              <div className={`scene-mode ${b.displayMode === "full_ai" ? "ai" : b.displayMode === "hybrid" ? "hybrid" : ""}`}>{MODE_RU[b.displayMode] ?? b.displayMode}</div>
+              <div className="scene-text">
+                {ai ? b.universeAdaptation || b.visualAction : b.meaning}
+                {ai && <div className="scene-note">{b.meaning}</div>}
+                {b.reduced && <div className="scene-note" style={{ color: "var(--warn)" }}>{b.reduced}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <TechDetails>
+        <p>
+          Персонаж: {plan.character?.name ?? "Gudini"}{plan.character ? ` (${plan.character.id}, эталонов ${plan.character.referenceCount})` : ""} ·
+          мир: {plan.universe?.name ?? plan.universeId ?? "—"}{plan.universe?.hash ? ` · ${plan.universe.hash}` : ""} · план v{plan.version ?? "?"}
+        </p>
+        <p>
+          Стиль: {plan.bible.visualStyle} · настроение: {plan.bible.mood}
+          {plan.bible.storyArc?.gudiniRole ? ` · роль героя: ${plan.bible.storyArc.gudiniRole}` : ""}
+        </p>
+        {plan.bible.storyArc && (
+          <p>
+            История: {plan.bible.storyArc.beginning} → {plan.bible.storyArc.development} → {plan.bible.storyArc.conflict} → {plan.bible.storyArc.climax}. Смысл: {plan.bible.storyArc.meaning}
+          </p>
+        )}
+        <p>
+          Покрытие {Math.round(st.coverage * 100)}% · Veo-секунд {st.generatedSeconds}
+          {typeof st.overheadSeconds === "number" ? ` (сверх экрана ${st.overheadSeconds} с, эффективность ${Math.round((st.generationEfficiency ?? 0) * 100)}%)` : ""} ·
+          вызовов API {st.calls} · групп {st.groups} (независимых {st.independentGroups}, цепочек {st.chains}) · параллельно {st.concurrency}
+          {plan.pricing ? ` · ${plan.pricing.model} $${plan.pricing.pricePerSec}/с (${plan.pricing.source})` : ""}
+          {plan.budgetUsd ? ` · бюджет $${plan.budgetUsd}` : ""}
+        </p>
+        <table className="tech-table">
+          <thead>
+            <tr>
+              <th>Время</th>
+              <th>Режим</th>
+              <th>Цель · приоритет</th>
+              <th>Действие · место</th>
+              <th>Группа · вызовы</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plan.beats.map((b) => {
+              const shots = plan.shots.filter((sh) => sh.beatIds.includes(b.id));
+              const group = shots[0] ? plan.groups.find((g) => g.id === shots[0].groupId) : undefined;
+              const cost = shots.reduce((a, sh) => a + sh.cost, 0);
+              return (
+                <tr key={b.id}>
+                  <td style={{ whiteSpace: "nowrap" }}>{fmtTime(b.start)}–{fmtTime(b.end)}<br />{(b.end - b.start).toFixed(1)} с</td>
+                  <td>{MODE_TECH[b.displayMode] ?? b.displayMode}</td>
+                  <td>{b.purpose} · {b.priority}</td>
+                  <td>{b.displayMode === "author" ? "—" : `${b.visualAction}${b.location ? ` — ${b.location}` : ""}`}</td>
+                  <td>
+                    {b.displayMode === "author" ? "—" : shots.length ? (
+                      <>
+                        {group?.id}{group?.chain ? " (цепочка)" : ""}<br />
+                        {shots.map((sh) => `${sh.mode} ${sh.veoSeconds}с`).join(" + ")}<br />
+                        {shots[0].generationProfile} · {shots[0].model.replace("-generate-001", "")}{shots[0].useReferences ? " · эталоны" : ""}<br />
+                        ${cost.toFixed(2)}
+                      </>
+                    ) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </TechDetails>
+    </>
   );
 }
 
@@ -808,7 +1063,7 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
         body: JSON.stringify(customHeadline ? { headline: customHeadline } : {}),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error ?? "Не удалось перегенерировать");
+      if (!res.ok) throw new Error(data?.error ?? "Не удалось создать обложку");
       await reload();
       setEditing(false);
     } catch (e: any) {
@@ -818,102 +1073,65 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
     }
   };
 
-  if (busy) {
-    return (
-      <div style={{ textAlign: "center", marginTop: 12 }}>
-        <p className="hint">Генерирую обложку и проверяю качество…</p>
-      </div>
-    );
-  }
-
-  if (project.cover) {
-    const rejected = project.coverStatus === "failed";
-    return (
-      <div style={{ textAlign: "center", marginTop: 10 }}>
-        <img
-          src={`/api/projects/${project.id}/video?which=cover&t=${Date.now()}`}
-          alt="Обложка"
-          style={{ maxWidth: 160, borderRadius: 10, border: `1px solid ${rejected ? "var(--danger, #e5484d)" : "var(--border)"}` }}
-        />
-        {rejected ? (
-          <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>
-            Проверка отклонила обложку{project.coverReason ? `: ${project.coverReason}` : ""}. Можно оставить как есть или перегенерировать.
-          </p>
-        ) : (
-          <p className="hint">Обложка (ИИ, прошла контроль качества)</p>
-        )}
-        {editing ? (
-          <div style={{ maxWidth: 320, margin: "8px auto 0" }}>
-            <input
-              className="input"
-              value={headline}
-              onChange={(e) => setHeadline(e.target.value)}
-              placeholder="Короткий заголовок, 2–4 слова"
-              maxLength={40}
-            />
-            <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
-              <button className="btn" disabled={!headline.trim()} onClick={() => regenerate(headline)}>
-                Сгенерировать
-              </button>
-              <button className="btn btn-secondary" onClick={() => setEditing(false)}>
-                Отмена
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
-            <button className={rejected ? "btn" : "btn btn-secondary"} onClick={() => regenerate()}>
-              Перегенерировать обложку
-            </button>
-            <button className="btn btn-secondary" onClick={() => setEditing(true)}>
-              Изменить заголовок
-            </button>
-          </div>
-        )}
-        {error && <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>{error}</p>}
-      </div>
-    );
-  }
-
-  if (project.coverStatus !== "failed" && project.coverStatus !== "headline_failed") return null;
-
+  const rejected = project.coverStatus === "failed";
   const headlineFailed = project.coverStatus === "headline_failed";
+  const status: ReactNode = busy ? (
+    <StatusBadge tone="accent" busy>Создаём обложку</StatusBadge>
+  ) : project.cover && !rejected ? (
+    <StatusBadge tone="success">Прошла проверку</StatusBadge>
+  ) : project.cover && rejected ? (
+    <StatusBadge tone="warn">Не прошла проверку</StatusBadge>
+  ) : headlineFailed ? (
+    <StatusBadge tone="warn">Нет заголовка</StatusBadge>
+  ) : rejected ? (
+    <StatusBadge tone="warn">Не прошла проверку</StatusBadge>
+  ) : (
+    <StatusBadge>Нет обложки</StatusBadge>
+  );
+
+  const reason = rejected
+    ? `Проверка отклонила обложку${project.coverReason ? `: ${project.coverReason}` : ""}.${project.cover ? " Можно оставить как есть или создать заново." : " Создание заново — одна платная генерация."}`
+    : headlineFailed
+      ? "Не удалось подобрать заголовок, сохраняющий тему ролика. Картинка не создавалась, деньги не потрачены."
+      : null;
+
+  const editor = editing ? (
+    <div style={{ marginTop: 10 }}>
+      <Field label="Заголовок обложки, 2–4 слова">
+        <input value={headline} onChange={(e) => setHeadline(e.target.value)} placeholder="Короткий заголовок" maxLength={40} type="text" />
+      </Field>
+      <div className="actions" style={{ marginTop: 10 }}>
+        <Button size="sm" disabled={!headline.trim()} busy={busy} onClick={() => regenerate(headline)}>Создать с этим заголовком</Button>
+        <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Отмена</Button>
+      </div>
+    </div>
+  ) : (
+    <div className="actions" style={{ marginTop: 10 }}>
+      <Button size="sm" variant={project.cover && !rejected ? "secondary" : "primary"} busy={busy} onClick={() => regenerate()}>
+        {headlineFailed ? "Подобрать заголовок заново" : "Создать заново"}
+      </Button>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(true)}>Изменить заголовок</Button>
+    </div>
+  );
+
   return (
-    <div style={{ textAlign: "center", marginTop: 12 }}>
-      <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>
-        {headlineFailed
-          ? "Не удалось подобрать заголовок, сохраняющий тему ролика. Картинка не генерировалась — деньги не потрачены."
-          : `Проверка отклонила обложку${project.coverReason ? `: ${project.coverReason}` : ""}. Перегенерируйте — одна платная генерация.`}
-      </p>
-      {editing ? (
-        <div style={{ maxWidth: 320, margin: "8px auto 0" }}>
-          <input
-            className="input"
-            value={headline}
-            onChange={(e) => setHeadline(e.target.value)}
-            placeholder="Короткий заголовок, 2–4 слова"
-            maxLength={40}
-          />
-          <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
-            <button className="btn" disabled={!headline.trim()} onClick={() => regenerate(headline)}>
-              Сгенерировать
-            </button>
-            <button className="btn btn-secondary" onClick={() => setEditing(false)}>
-              Отмена
-            </button>
-          </div>
-        </div>
+    <div className="cover-block">
+      {project.cover ? (
+        <img src={`/api/projects/${project.id}/video?which=cover&t=${encodeURIComponent(project.outputs?.cards?.at ?? project.outputs?.ai_film?.at ?? "")}`} alt="Обложка" />
       ) : (
-        <div style={{ display: "flex", gap: 8, marginTop: 6, justifyContent: "center" }}>
-          <button className="btn" onClick={() => regenerate()}>
-            {headlineFailed ? "Сгенерировать заголовок заново" : "Перегенерировать"}
-          </button>
-          <button className="btn btn-secondary" onClick={() => setEditing(true)}>
-            Изменить заголовок
-          </button>
-        </div>
+        <div className="thumb" style={{ width: 96, height: 170 }}>—</div>
       )}
-      {error && <p className="hint" style={{ color: "var(--danger, #e5484d)" }}>{error}</p>}
+      <div>
+        <div className="row">
+          <span className="h-block" style={{ fontSize: 16 }}>Обложка</span>
+          {status}
+        </div>
+        {reason && <div className="hint" style={{ marginTop: 6 }}>{reason}</div>}
+        {!reason && project.cover && <div className="hint" style={{ marginTop: 6 }}>Первый кадр ролика и превью на площадках.</div>}
+        {!reason && !project.cover && <div className="hint" style={{ marginTop: 6 }}>Обложка создаётся при монтаже. Можно создать её отдельно.</div>}
+        {editor}
+        {error && <div className="error-box">{error}</div>}
+      </div>
     </div>
   );
 }
@@ -961,7 +1179,7 @@ function TikTokPanel({
   screen: TikTokScreen;
   busy: boolean;
   onPublish: (opts: Record<string, unknown>) => Promise<void>;
-  videoStyle?: "cards" | "ai_film";
+  videoStyle?: MontageStyle;
 }) {
   const [title, setTitle] = useState(screen.caption);
   const [privacy, setPrivacy] = useState("");
@@ -998,15 +1216,15 @@ function TikTokPanel({
   if (!screen.connected || !c) {
     return (
       <div className="card tiktok-panel">
-        <h2>🎵 Публикация в TikTok</h2>
-        <div className="error-box">{screen.error ?? "Аккаунт TikTok не подключён — подключите его в Настройках."}</div>
+        <h2>Публикация в TikTok</h2>
+        <div className="error-box">{screen.error ?? "Аккаунт TikTok не подключён. Подключите его в разделе «Настройки»."}</div>
       </div>
     );
   }
 
   return (
     <div className="card tiktok-panel">
-      <h2>🎵 Публикация в TikTok</h2>
+      <h2>Публикация в TikTok</h2>
       <div className="tiktok-author">
         {c.avatarUrl && <img src={c.avatarUrl} alt="" />}
         <div>
@@ -1023,7 +1241,7 @@ function TikTokPanel({
 
       <div className="tiktok-grid">
         <div>
-          <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed${videoStyle ? `&style=${videoStyle}` : ""}`} controls playsInline />
+          <video className="video-preview" src={`/api/projects/${project.id}/video?which=processed${videoStyle ? `&style=${videoStyle}` : ""}`} controls playsInline preload="metadata" />
           <p className="hint" style={{ textAlign: "center", marginTop: 6 }}>Так ролик увидят в TikTok</p>
         </div>
         <div>
@@ -1123,40 +1341,63 @@ function TikTokPanel({
 
 /* ================== Шаг 4: Публикация ================== */
 
+type AccountView = { id: string; label: string; at: string; active: boolean };
+
+/** Итог публикации словами: успех, черновик, демо, пропуск и ошибка — разные состояния. */
+function publicationView(pub: Publication): { tone: StatusTone; text: string } {
+  if (pub.status === "published") {
+    const draft = /черновик|private/i.test(pub.message ?? "");
+    return draft ? { tone: "accent", text: "Черновик" } : { tone: "success", text: "Опубликовано" };
+  }
+  if (pub.status === "demo") return { tone: "neutral", text: "Демо-режим" };
+  if (pub.status === "skipped") return { tone: "neutral", text: "Пропущено" };
+  if (pub.status === "error") return { tone: "error", text: "Ошибка" };
+  return { tone: "neutral", text: pub.status };
+}
+
 function PublishStep({
   project,
   setProject,
   reload,
   setError,
+  onBack,
 }: {
   project: Project;
   setProject: (p: Project) => void;
   reload: () => Promise<Project | null>;
   setError: (e: string) => void;
+  onBack: () => void;
 }) {
   const meta = project.meta ?? { title: "", description: "", hashtags: [] };
   const [title, setTitle] = useState(meta.title);
   const [description, setDescription] = useState(meta.description);
   const [hashtags, setHashtags] = useState(meta.hashtags.join(" "));
   const [busy, setBusy] = useState<string | null>(null);
+  const [metaState, setMetaState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [captionCopied, setCaptionCopied] = useState(false);
-  const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const [connected, setConnected] = useState<Record<string, boolean> | null>(null);
+  const [accounts, setAccounts] = useState<Partial<Record<string, AccountView[]>>>({});
   // какой ролик публиковать: по умолчанию выбранный стиль, если у него есть итог
-  const availableStyles = (["cards", "ai_film"] as const).filter((k) => project.outputs?.[k]);
-  const [pubStyle, setPubStyle] = useState<"cards" | "ai_film" | undefined>(() => {
+  const availableStyles = (["cards", "ai_film"] as const).filter((k) => styleOutput(project, k));
+  const [pubStyle, setPubStyle] = useState<MontageStyle | undefined>(() => {
     const cur = project.montageStyle ?? "cards";
-    if (project.outputs?.[cur]) return cur;
+    if (styleOutput(project, cur)) return cur;
     return availableStyles[0];
   });
+  const chosen = pubStyle ? styleOutput(project, pubStyle) : null;
 
   useEffect(() => {
     fetch("/api/settings")
       .then((r) => r.json())
-      .then((s) => setConnected(s.connected ?? {}))
-      .catch(() => {});
+      .then((s) => {
+        setConnected(s.connected ?? {});
+        setAccounts(s.accounts ?? {});
+      })
+      .catch(() => setConnected({}));
   }, []);
 
   async function saveMeta() {
+    setMetaState("saving");
     const res = await fetch(`/api/projects/${project.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1167,10 +1408,12 @@ function PublishStep({
     // ответ с ошибкой раньше записывался в проект как есть, и страница ломалась
     const p = await res.json();
     if (!res.ok) {
+      setMetaState("error");
       setError(p.error ?? "Не удалось сохранить описание");
       return false;
     }
     setProject(p);
+    setMetaState("saved");
     return true;
   }
 
@@ -1189,6 +1432,7 @@ function PublishStep({
       setTitle(p.meta?.title ?? "");
       setDescription(p.meta?.description ?? "");
       setHashtags((p.meta?.hashtags ?? []).join(" "));
+      setMetaState("saved");
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
@@ -1198,7 +1442,7 @@ function PublishStep({
 
   const [tiktokScreen, setTiktokScreen] = useState<TikTokScreen | null>(null);
   const [tiktokOpen, setTiktokOpen] = useState(false);
-  const [batchNote, setBatchNote] = useState("");
+  const [batchNote, setBatchNote] = useState<string[]>([]);
   useEffect(() => {
     fetch(`/api/projects/${project.id}/tiktok`)
       .then((r) => r.json())
@@ -1250,12 +1494,12 @@ function PublishStep({
   async function publishAll(mode: "live" | "draft") {
     setBusy("all");
     setError("");
-    setBatchNote("");
+    setBatchNote([]);
     const notes: string[] = [];
     try {
       if (!(await saveMeta())) return;
       for (const { key, name } of PLATFORMS) {
-        if (!connected[key]) {
+        if (!connected?.[key]) {
           notes.push(`${name}: не подключён, пропущен`);
           continue;
         }
@@ -1279,154 +1523,203 @@ function PublishStep({
     } catch (e: any) {
       setError(String(e?.message ?? e));
     } finally {
-      setBatchNote(notes.join(" · "));
+      setBatchNote(notes);
       setBusy(null);
     }
   }
 
-  if (!project.processedVideo) {
+  if (!hasAnyVideo(project)) {
     return (
       <div className="card">
-        <h2>🚀 Публикация</h2>
-        {project.coverStatus === "failed" && (
-          <p className="hint" style={{ color: "#f0b429" }}>
-            Обложка не прошла проверку{project.coverReason ? `: ${project.coverReason}` : ""} — опубликуется как есть. Проверьте её на шаге «Монтаж».
-          </p>
-        )}
-        <div className="error-box">Сначала смонтируй видео на шаге 3</div>
+        <h2>Публикация</h2>
+        <div className="state-box">
+          Сначала нужно смонтировать видео.
+          <div className="actions">
+            <Button variant="secondary" onClick={onBack}>К монтажу</Button>
+          </div>
+        </div>
       </div>
     );
   }
 
-  return (
-    <>
-      <div className="card">
-        <h2>📋 Описание для публикации</h2>
-        <label>Заголовок</label>
-        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveMeta} />
-        <label>Описание</label>
-        <textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} onBlur={saveMeta} />
-        <label>Хэштеги</label>
-        <input type="text" value={hashtags} onChange={(e) => setHashtags(e.target.value)} onBlur={saveMeta} />
-        <div className="hashtags">
-          {hashtags
-            .split(/\s+/)
-            .filter(Boolean)
-            .map((h, i) => (
-              <span className="hashtag" key={i}>
-                {h.startsWith("#") ? h : `#${h}`}
-              </span>
-            ))}
-        </div>
-        <div className="row" style={{ marginTop: 14 }}>
-          <button className="btn btn-secondary btn-sm" onClick={regenMeta} disabled={busy === "meta"}>
-            {busy === "meta" ? <span className="spin" /> : "🔄"} Перегенерировать описание
-          </button>
-        </div>
-      </div>
+  const anyConnected = Boolean(connected && PLATFORMS.some((p) => connected[p.key]));
+  const metaBadge: ReactNode =
+    metaState === "saving" ? <StatusBadge tone="accent" busy>Сохраняем</StatusBadge>
+    : metaState === "saved" ? <StatusBadge tone="success">Сохранено</StatusBadge>
+    : metaState === "error" ? <StatusBadge tone="error">Не сохранено</StatusBadge>
+    : null;
 
-      <div className="card">
-        <h2>🚀 Куда публикуем</h2>
-        {availableStyles.length > 1 && (
-          <div className="row" style={{ marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
-            <span className="hint">Какой ролик публиковать:</span>
-            <button className={`btn btn-sm ${pubStyle === "cards" ? "" : "btn-secondary"}`} onClick={() => setPubStyle("cards")} disabled={busy !== null}>🃏 Карточки</button>
-            <button className={`btn btn-sm ${pubStyle === "ai_film" ? "" : "btn-secondary"}`} onClick={() => setPubStyle("ai_film")} disabled={busy !== null}>🎬 AI-фильм</button>
-            <span className="hint">Можно опубликовать оба по очереди.</span>
-          </div>
-        )}
-        <div className="row" style={{ marginBottom: 14 }}>
-          <button className="btn" onClick={() => publishAll("live")} disabled={busy !== null}>
-            {busy === "all" ? <span className="spin" /> : "🚀"} Опубликовать во все
-          </button>
-          <button className="btn btn-secondary" onClick={() => publishAll("draft")} disabled={busy !== null}>
-            {busy === "all" ? <span className="spin" /> : "📝"} Отправить в черновики
-          </button>
-        </div>
-        {batchNote && <div className="success-box">{batchNote}</div>}
-        <div className="platform-grid">
-          {PLATFORMS.map(({ key, name, icon }) => {
-            const pub = project.publications.find((p) => p.platform === key);
-            return (
-              <div className="platform-card" key={key}>
-                <h3>
-                  {icon} {name}
-                </h3>
-                <div className="platform-status">
-                  {pub?.status === "published" && (
-                    <span style={{ color: "var(--success)" }}>
-                      ✓ Опубликовано{" "}
-                      {pub.url && (
-                        <a href={pub.url} target="_blank" style={{ textDecoration: "underline" }}>
-                          открыть
-                        </a>
-                      )}
-                      {pub.message && <div>{pub.message}</div>}
-                    </span>
-                  )}
-                  {pub?.status === "demo" && <span style={{ color: "var(--warn)" }}>{pub.message}</span>}
-                  {pub?.status === "skipped" && <span>{pub.message}</span>}
-                  {pub?.status === "error" && <span style={{ color: "var(--error)" }}>{pub.message}</span>}
-                  {!pub && (connected[key] ? "Аккаунт подключён" : "Аккаунт не подключён — сработает демо-режим")}
-                </div>
-                <div className="row" style={{ gap: 8 }}>
-                  {key === "tiktok" && tiktokScreen?.direct ? (
-                    <button className="btn btn-sm" onClick={() => setTiktokOpen((o) => !o)} disabled={busy !== null}>
-                      {tiktokOpen ? "Скрыть форму" : pub ? "Опубликовать снова" : "Опубликовать"}
-                    </button>
-                  ) : (
-                    <button className="btn btn-sm" onClick={() => publishTo(key)} disabled={busy !== null}>
-                      {busy === key ? <span className="spin" /> : pub ? "Опубликовать снова" : "Опубликовать"}
-                    </button>
-                  )}
-                  {key !== "instagram" && (
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => publishTo(key, { mode: "draft" })}
-                      disabled={busy !== null}
-                      title={key === "youtube" ? "Приватный черновик в YouTube Studio" : "Черновик в TikTok: Уведомления → Загрузки"}
-                    >
-                      Черновик
-                    </button>
-                  )}
-                </div>
-                {key === "tiktok" && project.meta && !tiktokScreen?.direct && (
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    style={{ marginTop: 8 }}
-                    onClick={copyCaption}
-                    title="TikTok не принимает подпись через API при заливке в черновики — вставьте её в приложении"
-                  >
-                    {captionCopied ? "Скопировано ✓" : "📋 Скопировать подпись"}
+  return (
+    <div className="workspace">
+      <div>
+        <div className="card">
+          <div className="card-head">
+            <h2>Публикация</h2>
+            <span className="spacer" />
+            {availableStyles.length > 1 ? (
+              <div className="version-picker" role="group" aria-label="Какую версию публиковать">
+                {availableStyles.map((s) => (
+                  <button key={s} type="button" aria-pressed={pubStyle === s} onClick={() => setPubStyle(s)} disabled={busy !== null}>
+                    {STYLE_NAME[s]}
                   </button>
-                )}
+                ))}
               </div>
-            );
-          })}
+            ) : (
+              <span className="hint">Версия: {pubStyle ? STYLE_NAME[pubStyle] : "последний монтаж"}</span>
+            )}
+          </div>
+          {availableStyles.length > 1 && <p className="hint" style={{ marginBottom: 14 }}>Готовы обе версии. Опубликовать можно каждую по очереди.</p>}
+          <CoverBlock project={project} reload={reload} />
         </div>
-        {tiktokOpen && tiktokScreen && (
-          <TikTokPanel
-            project={project}
-            screen={tiktokScreen}
-            videoStyle={pubStyle}
-            busy={busy === "tiktok"}
-            onPublish={async (opts) => {
-              await publishTo("tiktok", { tiktok: opts });
-              setTiktokOpen(false);
-            }}
-          />
-        )}
-        <div className="row" style={{ marginTop: 18 }}>
-          <a className="btn btn-secondary" href={`/api/projects/${project.id}/video?which=processed`} download={`gudini-${project.id}.mp4`}>
-            ⬇ Скачать готовое видео
+
+        <div className="card">
+          <div className="card-head">
+            <h2>Описание</h2>
+            <span className="spacer" />
+            {metaBadge}
+          </div>
+          <Field label="Заголовок">
+            <input type="text" value={title} onChange={(e) => { setTitle(e.target.value); setMetaState("idle"); }} onBlur={saveMeta} />
+          </Field>
+          <Field label="Описание">
+            <textarea rows={4} value={description} onChange={(e) => { setDescription(e.target.value); setMetaState("idle"); }} onBlur={saveMeta} />
+          </Field>
+          <Field label="Хэштеги" note="Через пробел, решётка не обязательна">
+            <input type="text" value={hashtags} onChange={(e) => { setHashtags(e.target.value); setMetaState("idle"); }} onBlur={saveMeta} />
+          </Field>
+          <div className="actions" style={{ marginTop: 14 }}>
+            <Button variant="secondary" size="sm" onClick={regenMeta} busy={busy === "meta"} disabled={busy !== null && busy !== "meta"}>
+              Другой вариант описания
+            </Button>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <h2>Платформы</h2>
+          </div>
+          <div className="platform-list">
+            {PLATFORMS.map(({ key, name }) => {
+              const pub = project.publications.find((p) => p.platform === key);
+              const isConnected = connected?.[key] ?? false;
+              const active = accounts[key]?.find((a) => a.active)?.label;
+              const view = pub ? publicationView(pub) : null;
+              return (
+                <div className="platform-row" key={key}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="platform-name">{name}</div>
+                    <div className="platform-account">
+                      {connected === null ? "Проверяем подключение…" : isConnected ? (active ? `Аккаунт: ${active}` : "Аккаунт подключён") : "Аккаунт не подключён"}
+                    </div>
+                    {pub && view && (
+                      <div className="platform-result">
+                        <StatusBadge tone={view.tone}>{view.text}</StatusBadge>{" "}
+                        {pub.url && (
+                          <a href={pub.url} target="_blank" rel="noreferrer" className="link-btn" style={{ marginLeft: 6 }}>
+                            Открыть
+                          </a>
+                        )}
+                        {pub.message && <div className="hint" style={{ marginTop: 4 }}>{pub.message}</div>}
+                      </div>
+                    )}
+                  </div>
+                  <div className="row" style={{ justifyContent: "flex-end" }}>
+                    {isConnected ? (
+                      <>
+                        {key === "tiktok" && tiktokScreen?.direct ? (
+                          <Button size="sm" onClick={() => setTiktokOpen((o) => !o)} disabled={busy !== null}>
+                            {tiktokOpen ? "Скрыть форму" : pub ? "Опубликовать снова" : "Опубликовать"}
+                          </Button>
+                        ) : (
+                          <Button size="sm" onClick={() => publishTo(key)} busy={busy === key} disabled={busy !== null}>
+                            {pub ? "Опубликовать снова" : "Опубликовать"}
+                          </Button>
+                        )}
+                        {key !== "instagram" && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => publishTo(key, { mode: "draft" })}
+                            disabled={busy !== null}
+                            title={key === "youtube" ? "Приватный черновик в YouTube Studio" : "Черновик в TikTok: Уведомления → Загрузки"}
+                          >
+                            В черновики
+                          </Button>
+                        )}
+                        {key === "tiktok" && project.meta && !tiktokScreen?.direct && (
+                          <Button size="sm" variant="ghost" onClick={copyCaption} title="TikTok не принимает подпись через API при заливке в черновики — вставьте её в приложении">
+                            {captionCopied ? "Скопировано" : "Скопировать подпись"}
+                          </Button>
+                        )}
+                      </>
+                    ) : (
+                      <Link href="/settings" className="btn btn-secondary btn-sm">
+                        Подключить
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {tiktokOpen && tiktokScreen && (
+            <TikTokPanel
+              project={project}
+              screen={tiktokScreen}
+              videoStyle={pubStyle}
+              busy={busy === "tiktok"}
+              onPublish={async (opts) => {
+                await publishTo("tiktok", { tiktok: opts });
+                setTiktokOpen(false);
+              }}
+            />
+          )}
+
+          {batchNote.length > 0 && (
+            <div className="state-box">
+              {batchNote.map((n, i) => (
+                <div key={i}>{n}</div>
+              ))}
+            </div>
+          )}
+
+          <div className="actions">
+            <Button variant="secondary" onClick={() => publishAll("live")} busy={busy === "all"} disabled={busy !== null || !anyConnected}>
+              Опубликовать во все подключённые
+            </Button>
+            <Button variant="secondary" onClick={() => publishAll("draft")} disabled={busy !== null || !anyConnected}>
+              Во все черновики
+            </Button>
+          </div>
+          {connected && !anyConnected && <p className="hint" style={{ marginTop: 8 }}>Ни один аккаунт не подключён. Подключите платформы в разделе «Настройки».</p>}
+        </div>
+
+        <div className="actions" style={{ marginTop: 0 }}>
+          <a className="btn btn-secondary" href={`/api/projects/${project.id}/video?which=processed${pubStyle ? `&style=${pubStyle}` : ""}`} download={`gudini-${project.id}${pubStyle ? `-${pubStyle}` : ""}.mp4`}>
+            Скачать видео
           </a>
           {project.cover && (
-            <a className="btn btn-secondary" href={`/api/projects/${project.id}/video?which=cover`} download={`gudini-${project.id}-cover.jpg`}>
-              ⬇ Обложка
+            <a className="btn btn-ghost" href={`/api/projects/${project.id}/video?which=cover`} download={`gudini-${project.id}-cover.jpg`}>
+              Скачать обложку
             </a>
           )}
         </div>
       </div>
-    </>
+
+      <div className="preview-col">
+        <VideoPreview
+          key={pubStyle ?? "any"}
+          src={chosen?.src ?? (project.processedVideo ? `/api/projects/${project.id}/video?which=processed` : null)}
+          title={
+            <>
+              <StatusBadge tone="accent">Для публикации</StatusBadge>
+              <span>{pubStyle ? STYLE_NAME[pubStyle] : "Последний монтаж"}</span>
+            </>
+          }
+          caption={chosen ? subtitlesLabel(chosen.info.subtitlesSource) : undefined}
+        />
+      </div>
+    </div>
   );
 }

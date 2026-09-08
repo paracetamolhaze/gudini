@@ -9,11 +9,11 @@ import {
   fmtWhen,
   manualRemaining,
   money,
-  runsWord,
   spentSince,
   startOfMonth,
   startOfToday,
 } from "@/lib/spendMath";
+import { Button, EmptyState, ErrorState, StatusBadge } from "@/app/components/ui";
 
 type Balance = {
   id: string;
@@ -29,12 +29,12 @@ type Balance = {
 type Payload = { balances: Balance[]; checkedAt: string; spend: SpendRun[]; manual: ManualBalances };
 
 const LEVEL_TITLE: Record<BalanceLevel, string> = {
-  ok: "хватает",
-  low: "осталось мало",
-  empty: "закончился",
-  unknown: "остаток API не отдаёт",
+  ok: "остатка хватает",
+  low: "остаток заканчивается",
+  empty: "остаток исчерпан",
+  unknown: "остаток недоступен по API",
   missing: "ключ не задан",
-  error: "ошибка",
+  error: "ошибка запроса",
 };
 
 const PROVIDER_NAMES: Record<string, string> = {
@@ -47,8 +47,16 @@ const PROVIDER_NAMES: Record<string, string> = {
   local: "локально",
 };
 
+function opsWord(n: number): string {
+  const tail = n % 10;
+  const teen = n % 100 >= 11 && n % 100 <= 14;
+  if (!teen && tail === 1) return "операция";
+  if (!teen && tail >= 2 && tail <= 4) return "операции";
+  return "операций";
+}
+
 /**
- * Карточка провайдера: одна главная цифра, под ней таблица расхода с двумя строками —
+ * Карточка сервиса: одна главная цифра, под ней таблица расхода с двумя строками —
  * что сообщил сам провайдер и что видел журнал Gudini. Ввод остатка из консоли —
  * отдельной строкой, а не внутри текста.
  */
@@ -71,6 +79,10 @@ function BalanceCard({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun
     level = r.level;
     caption = `осталось от ${money(m.balance)}, введённых ${fmtWhen(m.at)}`;
     sinceManual = r.since;
+  } else if (level === "unknown" || level === "missing" || level === "error") {
+    // нет данных — так и пишем, а не показываем ноль
+    caption = `${value} · ${LEVEL_TITLE[level]}`;
+    value = "Недоступно";
   }
   // цифры провайдера показываются в таблице — дублировать их в подписи не нужно
   const note = b.reported ? "" : b.note;
@@ -107,7 +119,7 @@ function BalanceCard({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun
         <span className="balance-name">{b.name}</span>
         <span className="spacer" />
         <a className="balance-link" href={b.consoleUrl} target="_blank" rel="noreferrer">
-          консоль ↗
+          Консоль ↗
         </a>
       </div>
       <div className="balance-role">{b.role}</div>
@@ -125,14 +137,14 @@ function BalanceCard({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun
         <tbody>
           {b.reported && (
             <tr>
-              <td>По данным провайдера</td>
+              <td>По данным сервиса</td>
               <td>{money(b.reported.today)}</td>
               <td>{money(b.reported.month)}</td>
               <td>{money(b.reported.total)}</td>
             </tr>
           )}
           <tr>
-            <td>По журналу Gudini</td>
+            <td>По журналу Гудини</td>
             <td>{money(today)}</td>
             <td>{money(month)}</td>
             <td>{sinceManual == null ? "—" : money(sinceManual)}</td>
@@ -143,7 +155,8 @@ function BalanceCard({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun
       {b.manualAllowed && !editing && (
         <div>
           <button
-            className="btn btn-secondary btn-sm"
+            type="button"
+            className="balance-edit"
             onClick={() => {
               setDraft(m ? String(m.balance) : "");
               setErr("");
@@ -168,12 +181,12 @@ function BalanceCard({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun
               if (e.key === "Escape") setEditing(false);
             }}
           />
-          <button className="btn btn-sm" onClick={save} disabled={saving}>
-            {saving ? <span className="spin" /> : "OK"}
-          </button>
-          <button className="btn btn-secondary btn-sm" onClick={() => setEditing(false)} disabled={saving}>
-            ✕
-          </button>
+          <Button size="sm" onClick={save} busy={saving}>
+            Сохранить
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={saving}>
+            Отмена
+          </Button>
           {err && <span className="balance-err">{err}</span>}
         </div>
       )}
@@ -181,10 +194,10 @@ function BalanceCard({ b, runs, manual, onManual }: { b: Balance; runs: SpendRun
   );
 }
 
-const STATUS_LABEL: Record<SpendRun["status"], { text: string; cls: string }> = {
-  done: { text: "готово", cls: "success" },
-  failed: { text: "упал", cls: "warn" },
-  site: { text: "на сайте", cls: "" },
+const STATUS_LABEL: Record<SpendRun["status"], { text: string; tone: "success" | "error" | "neutral" }> = {
+  done: { text: "выполнено", tone: "success" },
+  failed: { text: "ошибка", tone: "error" },
+  site: { text: "на сайте", tone: "neutral" },
 };
 
 const dayKey = (iso: string) => new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
@@ -217,13 +230,12 @@ export default function BalancesPage() {
 
   const runs = data?.spend ?? [];
   const manual = data?.manual ?? {};
-  const problems = data
-    ? data.balances.filter((b) => {
-        const m = b.manualAllowed ? manual[b.id] : undefined;
-        if (m) return manualRemaining(m, runs, b.id).level !== "ok";
-        return b.level === "low" || b.level === "empty" || b.level === "error";
-      }).length
-    : 0;
+  const levelOf = (b: Balance): BalanceLevel => {
+    const m = b.manualAllowed ? manual[b.id] : undefined;
+    return m ? manualRemaining(m, runs, b.id).level : b.level;
+  };
+  const problems = data ? data.balances.filter((b) => ["low", "empty", "error"].includes(levelOf(b))).length : 0;
+  const noData = data ? data.balances.filter((b) => ["unknown", "missing"].includes(levelOf(b))).length : 0;
   const monthStart = startOfMonth();
   const todayAll = spentSince(runs, null, startOfToday());
   const monthAll = spentSince(runs, null, monthStart);
@@ -240,24 +252,32 @@ export default function BalancesPage() {
 
   return (
     <main>
-      <div className="card balances">
-        <div className="balances-head">
-          <h2 style={{ margin: 0 }}>💳 Балансы API</h2>
-          {data && (
-            <span className={`badge ${problems ? "warn" : "success"}`}>{problems ? `${problems} требует внимания` : "всё в порядке"}</span>
-          )}
-          <span className="spacer" />
-          {data && (
-            <span className="hint">проверено {new Date(data.checkedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span>
-          )}
-          <button className="btn btn-secondary btn-sm" onClick={() => load(true)} disabled={loading}>
-            {loading ? <span className="spin" /> : "Обновить"}
-          </button>
-        </div>
-        {failed && <div className="error-box">{failed}</div>}
-        {!data && loading && <p className="hint">Опрашиваю провайдеров…</p>}
-        {data && (
-          <>
+      <div className="page-head">
+        <h1 className="page-title">Расходы</h1>
+        <span className="spacer" />
+        {data && <span className="page-sub">проверено {new Date(data.checkedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span>}
+        <Button variant="secondary" size="sm" onClick={() => load(true)} busy={loading}>
+          Обновить
+        </Button>
+      </div>
+
+      {failed && !data && <ErrorState title="Не удалось получить данные о расходах" text={failed} onRetry={() => void load(true)} busy={loading} />}
+      {failed && data && <div className="error-box">{failed}</div>}
+      {!data && loading && <div className="skeleton" style={{ height: 260, marginBottom: 16 }} aria-busy="true" />}
+
+      {data && (
+        <>
+          <div className="card balances">
+            <div className="balances-head">
+              <h2 style={{ margin: 0 }}>Остатки сервисов</h2>
+              {problems > 0 ? (
+                <StatusBadge tone="warn">{problems} требует внимания</StatusBadge>
+              ) : noData > 0 ? (
+                <StatusBadge>У {noData} из {data.balances.length} остаток недоступен</StatusBadge>
+              ) : (
+                <StatusBadge tone="success">Остатков хватает</StatusBadge>
+              )}
+            </div>
             <div className="summary-tiles">
               <div className="tile">
                 <div className="tile-label">Сегодня</div>
@@ -267,7 +287,7 @@ export default function BalancesPage() {
                 <div className="tile-label">Этот месяц</div>
                 <div className="tile-value">{money(monthAll)}</div>
                 <div className="tile-sub">
-                  {monthRuns.length} {runsWord(monthRuns.length)}
+                  {monthRuns.length} {opsWord(monthRuns.length)}
                 </div>
               </div>
               <div className="tile">
@@ -279,7 +299,7 @@ export default function BalancesPage() {
                           {PROVIDER_NAMES[p] ?? p} {money(v)}
                         </span>
                       ))
-                    : "—"}
+                    : "нет операций"}
                 </div>
               </div>
             </div>
@@ -289,67 +309,68 @@ export default function BalancesPage() {
               ))}
             </div>
             <p className="hint" style={{ marginTop: 12 }}>
-              <button className="balance-edit" onClick={() => setShowHow((v) => !v)}>
+              <button type="button" className="balance-edit" onClick={() => setShowHow((v) => !v)}>
                 {showHow ? "Скрыть, как это считается" : "Как это считается"}
               </button>
             </p>
             {showHow && (
               <ul className="hint how-list">
-                <li>OpenRouter (и Claude через него) и ElevenLabs отдают остаток по API — это строка «По данным провайдера».</li>
-                <li>Brave и Google остаток не отдают: введите число из их консоли, дальше остаток = введённое − расход по журналу Gudini с момента ввода. После пополнения введите новое число.</li>
-                <li>«По журналу Gudini» — собственный учёт: каждый монтаж и платное действие на сайте. Он видит только те прогоны, чьи леджеры сохранились.</li>
+                <li>OpenRouter (и Claude через него) и ElevenLabs отдают остаток по API: это строка «По данным сервиса».</li>
+                <li>Brave и Google остаток не отдают: введите число из их консоли, дальше остаток = введённое − расход по журналу Гудини с момента ввода. После пополнения введите новое число.</li>
+                <li>«По журналу Гудини» — собственный учёт: каждый монтаж и платное действие на сайте. Он видит только те операции, чьи леджеры сохранились.</li>
                 <li>Google Veo: $0.08 за секунду видео (720p, без звука). Точное списание и остаток кредитов — в биллинге Google Cloud, отчёты там отстают на сутки.</li>
               </ul>
             )}
-          </>
-        )}
-      </div>
-
-      <div className="card">
-        <div className="balances-head">
-          <h2 style={{ margin: 0 }}>📒 Журнал расходов</h2>
-          <span className="spacer" />
-          {data && zeroCount > 0 && (
-            <button className="balance-edit" onClick={() => setShowZero((v) => !v)}>
-              {showZero ? "скрыть нулевые" : `показать нулевые (${zeroCount})`}
-            </button>
-          )}
-        </div>
-        {data && !recent.length && <p className="hint">Пока пусто: журнал заполняется после каждого монтажа и платного действия на сайте.</p>}
-        {recent.length > 0 && (
-          <div className="runs">
-            {recent.map((r, i) => {
-              const day = dayKey(r.at);
-              const newDay = i === 0 || dayKey(recent[i - 1].at) !== day;
-              const chips = Object.entries(r.byProvider).filter(([, v]) => v > 0);
-              return (
-                <div key={r.runId}>
-                  {newDay && <div className="run-day">{day}</div>}
-                  <div className={`run-row${r.total < 0.005 ? " run-row-zero" : ""}`}>
-                    <span className="hint">{new Date(r.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span>
-                    <span className="run-topic">
-                      {r.projectId ? <Link href={`/project/${r.projectId}`}>{r.topic ?? r.projectId}</Link> : (r.topic ?? "—")}
-                    </span>
-                    <span>
-                      {r.label} <span className={`badge ${STATUS_LABEL[r.status].cls}`}>{STATUS_LABEL[r.status].text}</span>
-                    </span>
-                    <span className="run-total">{money(r.total)}</span>
-                    <span>
-                      {chips.length
-                        ? chips.map(([p, v]) => (
-                            <span className="chip" key={p}>
-                              {PROVIDER_NAMES[p] ?? p} {money(v)}
-                            </span>
-                          ))
-                        : r.total >= 0.005 && <span className="chip">без разбивки</span>}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
           </div>
-        )}
-      </div>
+
+          <div className="card">
+            <div className="balances-head">
+              <h2 style={{ margin: 0 }}>История расходов</h2>
+              <span className="spacer" />
+              {zeroCount > 0 && (
+                <button type="button" className="balance-edit" onClick={() => setShowZero((v) => !v)}>
+                  {showZero ? "Скрыть нулевые" : `Показать нулевые (${zeroCount})`}
+                </button>
+              )}
+            </div>
+            {!recent.length && <EmptyState title="Операций пока нет" text="История заполняется после каждого монтажа и платного действия на сайте." />}
+            {recent.length > 0 && (
+              <div className="runs">
+                {recent.map((r, i) => {
+                  const day = dayKey(r.at);
+                  const newDay = i === 0 || dayKey(recent[i - 1].at) !== day;
+                  const chips = Object.entries(r.byProvider).filter(([, v]) => v > 0);
+                  const st = STATUS_LABEL[r.status];
+                  return (
+                    <div key={r.runId}>
+                      {newDay && <div className="run-day">{day}</div>}
+                      <div className={`run-row${r.total < 0.005 ? " run-row-zero" : ""}`}>
+                        <span className="hint">{new Date(r.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</span>
+                        <span className="run-topic">
+                          {r.projectId ? <Link href={`/project/${r.projectId}`}>{r.topic ?? r.projectId}</Link> : (r.topic ?? "—")}
+                        </span>
+                        <span>
+                          {r.label} <StatusBadge tone={st.tone}>{st.text}</StatusBadge>
+                        </span>
+                        <span className="run-total">{money(r.total)}</span>
+                        <span>
+                          {chips.length
+                            ? chips.map(([p, v]) => (
+                                <span className="chip" key={p}>
+                                  {PROVIDER_NAMES[p] ?? p} {money(v)}
+                                </span>
+                              ))
+                            : r.total >= 0.005 && <span className="chip">без разбивки</span>}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </main>
   );
 }

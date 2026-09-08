@@ -395,3 +395,25 @@ test("крошечный author между двумя AI-сценами: сле�
   const tail = closeTinyAuthorGaps([beat("B1", 0, 8, "full_ai"), beat("B1a", 8, 9, "author"), beat("B2", 9, 17, "full_ai")]);
   assert.deepEqual(tail.map((b) => [b.displayMode, Math.round(b.start * 10) / 10, Math.round(b.end * 10) / 10]), [["full_ai", 0, 8], ["full_ai", 8, 16], ["author", 16, 17]]);
 });
+
+test("в промпт сцены попадают только персонажи, упомянутые в её действии", () => {
+  const cast: StoryBible = {
+    ...bible,
+    supportingCharacters: [
+      { name: "Tony Stark", function: "background", appearance: "red-and-gold armor" },
+      { name: "Thanos", function: "opponent", appearance: "giant purple titan with a golden gauntlet" },
+      { name: "Steve Rogers / Captain America", function: "guide", appearance: "star-spangled shield" },
+    ],
+  };
+  const b = beat("B1", 0, 8, "full_ai", { visualAction: "Tony Stark kneels on the battlefield; Gudini kneels beside him" });
+  const p = shotPrompt({ character: gudini, universe, bible: cast, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+  assert.match(p, /Characters in this shot: Tony Stark: red-and-gold armor\./);
+  assert.doesNotMatch(p, /Thanos/);
+  assert.doesNotMatch(p, /Captain America/);
+  const porch = beat("B2", 8, 16, "full_ai", { visualAction: "An elderly Steve Rogers hands his shield to Sam Wilson" });
+  const p2 = shotPrompt({ character: gudini, universe, bible: cast, beat: porch, prev: null, mode: "text", aspectRatio: "9:16" });
+  assert.match(p2, /Steve Rogers \/ Captain America/);
+  assert.doesNotMatch(p2, /Thanos/);
+  const none = beat("B3", 16, 24, "full_ai", { visualAction: "Gudini watches two glowing worlds collide" });
+  assert.doesNotMatch(shotPrompt({ character: gudini, universe, bible: cast, beat: none, prev: null, mode: "text", aspectRatio: "9:16" }), /Characters in this shot/);
+});

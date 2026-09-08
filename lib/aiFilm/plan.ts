@@ -84,8 +84,17 @@ export function shotPrompt(args: {
   lines.push(`Style: ${bible.visualStyle}. Mood: ${bible.mood}. Lighting: ${bible.lighting}.`);
   lines.push(universePromptBlock(universe));
   if (beat.gudiniVisible) lines.push(characterBlock(character));
-  if (bible.supportingCharacters.length) {
-    lines.push(`Supporting characters: ${bible.supportingCharacters.map((c) => `${c.name} (${c.function}): ${c.appearance}`).join("; ")}.`);
+  // в промпт идут только персонажи, которые упомянуты в действии этой сцены: список всех
+  // шести в каждой сцене заставлял генератор рисовать лишних людей
+  const text = `${beat.visualAction} ${beat.stateBefore} ${beat.stateAfter}`.toLowerCase();
+  const inScene = bible.supportingCharacters.filter((c) =>
+    c.name
+      .split(/[\s/()]+/)
+      .filter((w) => w.length >= 3)
+      .some((w) => text.includes(w.toLowerCase())),
+  );
+  if (inScene.length) {
+    lines.push(`Characters in this shot: ${inScene.map((c) => `${c.name}: ${c.appearance}`).join("; ")}.`);
   }
   if (mode === "extend") {
     lines.push(`Continue the same shot without a cut. Previous moment: ${prev?.stateAfter || prev?.visualAction || "the scene continues"}.`);

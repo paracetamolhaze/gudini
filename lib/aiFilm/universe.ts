@@ -3,11 +3,13 @@ import path from "path";
 import crypto from "crypto";
 
 /**
- * Universe Lock — постоянный мир всех AI-фильмов проекта. Профиль лежит в
- * `assets/ai-film/universes/<id>/universe.json` и автоматически попадает в сценариста
- * (с целевым ощущением мира), в планировщик shots и в каждый production-промпт Veo
- * (описательно, без названий франшиз). Хэш профиля входит в ключ плана: другой мир —
- * другой план и другие сцены.
+ * Universe Lock — постоянный СТИЛЬ и мир всех AI-фильмов проекта: рисовка, дизайн
+ * персонажей, архитектура по умолчанию. Содержание сцен при этом буквальное: зритель
+ * видит то, о чём говорит автор (людей, события, предметы, места из речи), нарисованное
+ * в этом стиле; метафоры «клан вместо компании» запрещены. Профиль лежит в
+ * `assets/ai-film/universes/<id>/universe.json` и попадает в сценариста, в планировщик
+ * shots и в каждый production-промпт Veo (описательно, без названий франшиз). Хэш профиля
+ * входит в ключ плана.
  */
 
 export const DEFAULT_UNIVERSE_ID = "gudini-shinobi-world";
@@ -25,7 +27,8 @@ export type UniverseProfile = {
   powerSystem: string;
   recurringObjects: string;
   environmentRules: string;
-  adaptationRules: string[];
+  /** правила буквального содержания: что показываем и как рисуем известных персонажей */
+  contentRules: string[];
   forbiddenDrift: string;
   hash: string;
   file: string;
@@ -54,8 +57,8 @@ export function loadUniverseProfile(id = universeId(), baseDir = universesDir())
   } catch (e: any) {
     throw new Error(`Профиль мира ${file}: не JSON (${e?.message ?? e})`);
   }
-  const rules = Array.isArray(raw.adaptationRules) ? raw.adaptationRules.map((x: unknown) => String(x).trim()).filter(Boolean) : [];
-  if (!rules.length) throw new Error(`Профиль мира ${file}: нет adaptationRules`);
+  const rules = Array.isArray(raw.contentRules) ? raw.contentRules.map((x: unknown) => String(x).trim()).filter(Boolean) : [];
+  if (!rules.length) throw new Error(`Профиль мира ${file}: нет contentRules`);
   return {
     id: req(raw.id ?? id, "id", file),
     name: req(raw.name, "name", file),
@@ -68,34 +71,36 @@ export function loadUniverseProfile(id = universeId(), baseDir = universesDir())
     powerSystem: req(raw.powerSystem, "powerSystem", file),
     recurringObjects: req(raw.recurringObjects, "recurringObjects", file),
     environmentRules: req(raw.environmentRules, "environmentRules", file),
-    adaptationRules: rules,
+    contentRules: rules,
     forbiddenDrift: req(raw.forbiddenDrift, "forbiddenDrift", file),
     hash: crypto.createHash("sha1").update(fs.readFileSync(file)).digest("hex").slice(0, 12),
     file,
   };
 }
 
-/** Блок для production-промпта Veo: описательно, компактно, без названия франшизы. */
+/** Блок для production-промпта Veo: стиль и мир описательно, содержание буквальное, без названия франшизы. */
 export function universePromptBlock(u: UniverseProfile): string {
   return (
     `Universe (the same in every shot): ${u.name}. ${u.visualLanguage}. ` +
     `Setting: ${u.architecture}. Clothing: ${u.clothingRules}. Technology: ${u.technologyRules}. ` +
     `Objects: ${u.recurringObjects}. Powers: ${u.powerSystem}. ${u.environmentRules}. ` +
+    `Content is literal: show exactly the people, events and places of the story, drawn in this style. ` +
     `Never drift into: ${u.forbiddenDrift}.`
   );
 }
 
-/** Блок для сценариста: целевое ощущение мира и правила перевода современных понятий. */
+/** Блок для сценариста: стиль зафиксирован, содержание буквально по речи. */
 export function universePlannerBlock(u: UniverseProfile): string {
   return (
-    `UNIVERSE LOCK. Все AI-сцены без исключений происходят в одном мире «${u.name}» (id ${u.id}). Целевое ощущение: ${u.targetFeel}.\n` +
-    `Визуальный язык: ${u.visualLanguage}. Архитектура и места: ${u.architecture}. Одежда: ${u.clothingRules}. Технологии: ${u.technologyRules}. ` +
-    `Общество: ${u.socialRules}. Силы и оружие: ${u.powerSystem}. Повторяющиеся предметы: ${u.recurringObjects}. Среда: ${u.environmentRules}.\n` +
-    `Современные понятия НЕ вставляются как есть — они ПЕРЕВОДЯТСЯ в правила мира: ${u.adaptationRules.join("; ")}. ` +
-    `Не делать современный город с человеком в жилете ниндзя, если ситуацию можно перевести в правила мира.\n` +
-    `Запрещённый дрейф (anti-drift): ${u.forbiddenDrift}. Каждый shot должен явно принадлежать этому миру.\n` +
-    `Для каждого AI-бита заполни universeAdaptation (английский, 1–2 предложения): как именно исходная мысль автора переведена в события этого мира ` +
-    `(например «компания теряет клиентов» → «Gudini's merchant clan storefront in the village empties as customers move to a newly opened rival clan shop across the street»). ` +
-    `В production-промптах названия франшиз, студий и чужих персонажей не пишутся — только описание мира выше.`
+    `STYLE LOCK. Все AI-сцены без исключений нарисованы в одном стиле «${u.name}» (id ${u.id}). Целевое ощущение: ${u.targetFeel}.\n` +
+    `Визуальный язык: ${u.visualLanguage}. Архитектура по умолчанию: ${u.architecture}. Одежда: ${u.clothingRules}. Технологии: ${u.technologyRules}. ` +
+    `Общество: ${u.socialRules}. Силы и оружие: ${u.powerSystem}. Предметы: ${u.recurringObjects}. Среда: ${u.environmentRules}.\n` +
+    `СОДЕРЖАНИЕ БУКВАЛЬНОЕ. Зритель должен ВИДЕТЬ то, о чём говорит автор: тех самых людей, события, предметы и места, нарисованные в этом стиле. ` +
+    `Если автор говорит про гибель героя в броне, в кадре гибель героя в броне; про титана с перчаткой — титан с перчаткой; про новую команду — эта команда. ` +
+    `Правила: ${u.contentRules.join("; ")}.\n` +
+    `Запрещено: ${u.forbiddenDrift}.\n` +
+    `Для каждого AI-бита заполни universeAdaptation (английский, 1–2 предложения): ЧТО ИМЕННО из сказанного показано в кадре и как узнаваемо нарисованы персонажи ` +
+    `(например «Tony Stark's sacrifice → the red-and-gold armored hero on one knee, chest reactor flickering out, Gudini kneeling beside him»). Здесь имена писать МОЖНО — это пояснение для автора. ` +
+    `В visualAction (он идёт в генератор видео) имена франшиз и персонажей НЕ пишутся: только узнаваемые визуальные признаки (armor colors, gauntlet, shield, metal arm, cape).`
   );
 }

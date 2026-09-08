@@ -666,7 +666,7 @@ function ProcessStep({
                       </td>
                       <td style={{ padding: "6px", verticalAlign: "top" }}>
                         {b.meaning}
-                        {b.displayMode !== "author" && b.universeAdaptation && <div className="hint" style={{ color: "#8fc6ff" }}>Адаптация в мир: {b.universeAdaptation}</div>}
+                        {b.displayMode !== "author" && b.universeAdaptation && <div className="hint" style={{ color: "#8fc6ff" }}>Что в кадре: {b.universeAdaptation}</div>}
                         {b.displayMode !== "author" && <div className="hint" style={{ opacity: 0.85 }}>{b.visualAction}{b.location ? ` — ${b.location}` : ""}</div>}
                         {b.reduced && <div className="hint" style={{ color: "#f0b429" }}>{b.reduced}</div>}
                       </td>

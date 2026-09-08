@@ -271,13 +271,16 @@ test("старый план не интерпретируется: просьб�
 test("Universe Lock: мир из профиля попадает в сценариста, в план и в каждый промпт; без названия франшизы в промпте", () => {
   assert.equal(universe.id, "gudini-shinobi-world");
   const planner = universePlannerBlock(universe);
-  assert.match(planner, /UNIVERSE LOCK/);
-  assert.match(planner, /corporation → powerful clan/);
-  assert.match(planner, /anti-drift/);
+  assert.match(planner, /STYLE LOCK/);
+  assert.match(planner, /СОДЕРЖАНИЕ БУКВАЛЬНОЕ/);
+  assert.match(planner, /CONTENT IS LITERAL/);
+  assert.match(planner, /Do NOT translate the subject into shinobi metaphors/);
   assert.match(planner, /universeAdaptation/);
+  assert.match(planner, /red-and-gold armored hero/);
   const block = universePromptBlock(universe);
   assert.match(block, /hidden shinobi villages/);
-  assert.match(block, /Never drift into: generic medieval fantasy/);
+  assert.match(block, /Content is literal/);
+  assert.match(block, /Never drift into: photorealism/);
   assert.doesNotMatch(block, /Naruto/i, "в production-промпте нет названия франшизы");
   const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
   assert.equal(plan.universeId, "gudini-shinobi-world");

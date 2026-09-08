@@ -1,28 +1,22 @@
 {
   "id": "gudini-shinobi-world",
   "name": "Gudini Shinobi World",
-  "targetFeel": "a Naruto-style shinobi anime universe: the same feel, structure, architecture and visual language; described in production prompts with original wording, never by franchise name",
-  "visualLanguage": "stylized cinematic anime, clean line art, cel shading with soft painterly backgrounds, strong readable silhouettes, cinematic anime lighting, stylized anime action language",
-  "architecture": "hidden shinobi villages with dense streets and tiled roofs; traditional Japanese-inspired wooden architecture mixed with stylized ninja infrastructure; village gates; training grounds; forests surrounding settlements; stone monuments and cliff-side landmarks; mission offices and records rooms; a shinobi academy; clan compounds; ramen and food shops and small village commerce",
-  "clothingRules": "shinobi flak/tactical vests, forehead protectors with original village emblems, wrapped forearms and lower legs, open-toe shinobi sandals, utility pouches, dark high-collar layers; villagers in simple traditional-inspired clothes; no modern streetwear, hoodies, sneakers, suits or ties",
-  "technologyRules": "scrolls, seals, paper documents, notice boards, messenger birds, lanterns, ink and brushes, chakra-based mechanisms and scroll-tech instruments; no smartphones, computers, cars, screens, neon or electronics",
-  "socialRules": "villages, clans and clan leaders, merchant houses, mission administration, senior village officials, academy teachers and students, rival clans and rival merchants, mission ranks and rewards",
-  "powerSystem": "hand signs and chakra-like visible energy appear only when the story needs powers; kunai and shuriken only when the story logically needs them; no guns, no modern weapons",
-  "recurringObjects": "mission scrolls with red ribbons, notice boards, kunai, forehead protectors, paper lanterns, ramen bowls, messenger birds, sealed letters, utility pouches",
-  "environmentRules": "one consistent universe in every shot; dusk lanterns and warm wood in the village, cool blue chakra glow on reveals and powers, green forests and stone cliffs outside; weather and time of day may change, the world never does",
-  "adaptationRules": [
-    "corporation → powerful clan, merchant organization or village institution",
-    "CEO / boss → clan leader, organization head or senior village official",
-    "office → mission administration building, clan headquarters or records room",
-    "bank / money → village treasury, merchant house, coin pouches and ledgers",
-    "market / customers → shinobi village commercial district and its visitors",
-    "technology / lab / AI → shinobi research facility with scrolls, seals, instruments and chakra-based mechanisms",
-    "social networks / media / news → messenger networks, notice boards, scroll distribution, town criers",
-    "military operation / project launch → shinobi mission with a rank and a reward",
-    "competitor → rival clan, rival merchant or rival shinobi organization",
-    "school / learning → shinobi academy, a teacher and students on the training ground",
-    "game / film / release → a legendary scroll, a tournament or a festival in the village",
-    "travel / city → a journey between villages through the forest and over the cliffs"
+  "targetFeel": "a Naruto-style shinobi anime universe: the same drawing style, character design language, architecture and visual language; described in production prompts with original wording, never by franchise name",
+  "visualLanguage": "stylized cinematic anime, clean line art, cel shading with soft painterly backgrounds, strong readable silhouettes, cinematic anime lighting, stylized anime action language; every person in every shot is drawn as a character of this anime, including real-world or other-franchise people",
+  "architecture": "default backdrop when the story has no setting of its own: hidden shinobi villages with dense streets and tiled roofs; traditional Japanese-inspired wooden architecture mixed with stylized ninja infrastructure; village gates; training grounds; forests; stone monuments and cliff-side landmarks; mission offices; a shinobi academy; clan compounds; ramen shops and small village commerce. If the speech has its own places (a city, a lab, a spaceship, a stadium), draw those places in this anime style instead",
+  "clothingRules": "Gudini and shinobi characters: flak/tactical vests, forehead protectors with original village emblems, wrapped forearms and lower legs, open-toe shinobi sandals, utility pouches, dark high-collar layers. Characters from the story keep their own iconic look, redrawn as anime: armor, capes, suits, uniforms are allowed when the story is about them",
+  "technologyRules": "shinobi world props by default: scrolls, seals, paper documents, notice boards, messenger birds, lanterns, ink, chakra mechanisms and scroll-tech. Technology from the story (powered armor, spaceships, phones, computers, cars) is drawn as anime tech when the speech is about it",
+  "socialRules": "villages, clans and clan leaders, merchant houses, mission administration, academy, rival clans — used only when the story itself has no cast or setting",
+  "powerSystem": "hand signs and chakra-like visible energy for shinobi characters; characters from the story keep their own powers, weapons and effects drawn in anime style; no gore, no graphic violence",
+  "recurringObjects": "for Gudini: mission scrolls, forehead protector, kunai, utility pouch, paper lanterns; for the story: its own iconic objects (a glowing chest reactor, a round shield, a golden gauntlet, a metal arm) drawn recognizably",
+  "environmentRules": "one consistent drawing style in every shot; lighting and palette follow the scene, the anime look never changes",
+  "contentRules": [
+    "CONTENT IS LITERAL: the viewer must see exactly what the author is talking about — the people, events, objects and places named in the speech — drawn in this anime style",
+    "Do NOT translate the subject into shinobi metaphors (no clans instead of companies, no scrolls instead of films, no masked warlords instead of real villains)",
+    "Well-known characters are drawn recognizably by their iconic attributes: a hero in red-and-gold powered armor with a glowing chest reactor; a giant purple titan with a golden gauntlet; a soldier with a silver metal arm; a hero with a round star-spangled shield; a sorcerer in a red cape — the visual description carries the identity, the franchise name is not written in the Veo prompt",
+    "Gudini is the constant narrator-hero: he is present as witness, participant or guide inside these events (standing among the heroes, watching the battle, holding the fallen hero's helmet), but the scene shows the story's own cast",
+    "Real settings of the story (New York streets, a battlefield, a lab, a spaceship) are drawn in this anime style; the shinobi village is used only when the speech has no place of its own",
+    "Supporting cast follows the speech: as many story characters as the beat needs, each described by iconic attributes, consistent across shots"
   ],
-  "forbiddenDrift": "generic medieval fantasy; samurai period drama; cyberpunk; modern Tokyo; modern office interiors without shinobi adaptation; superhero universe; western military; generic Chinese wuxia; photorealistic contemporary world; modern streetwear on the hero"
+  "forbiddenDrift": "photorealism; 3D render look; a different anime style mid-video; generic medieval fantasy; replacing the story's real people and events with shinobi metaphors; changing Gudini's design; text, logos or watermarks in frame"
 }

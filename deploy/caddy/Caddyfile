@@ -1,8 +1,17 @@
 {$DOMAIN} {
 	encode zstd gzip
+	# Clipy (AI Reels Remaker) живёт отдельным процессом на хосте (GPU), см. clipy/start.bat;
+	# пароль спрашивает сам Clipy (CLIPY_PASSWORD в clipy/.env)
+	handle /clipy* {
+		reverse_proxy host.docker.internal:8500 {
+			flush_interval -1
+		}
+	}
 	# сайт внутри сети Docker; тела запросов не ограничены — исходники на гигабайт проходят
-	reverse_proxy gudini-site:3000 {
-		flush_interval -1
+	handle {
+		reverse_proxy gudini-site:3000 {
+			flush_interval -1
+		}
 	}
 	tls {
 		dns duckdns {$DUCKDNS_TOKEN}

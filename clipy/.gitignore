@@ -1,0 +1,9 @@
+.venv/
+engines/
+data/
+frontend/node_modules/
+frontend/dist/
+.env
+__pycache__/
+*.pyc
+result-smoke.mp4

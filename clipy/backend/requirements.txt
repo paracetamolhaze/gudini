@@ -1,0 +1,14 @@
+# FaceFusion 3.9.0 runtime (onnxruntime flavour is chosen by setup.ps1)
+numpy==2.4.6
+onnx==1.22.0
+opencv-python-headless==5.0.0.93
+tqdm==4.70.0
+scipy>=1.15,<1.19
+# Clipy backend
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+pydantic>=2.6
+yt-dlp>=2026.1.1
+psutil>=5.9
+pillow>=10.0

@@ -51,11 +51,27 @@ export function summarizeEntries(entries: CostEntry[]): { total: number; byProvi
   return { total: round(total), byProvider };
 }
 
+/**
+ * Подпись прогона по стадиям леджера: план AI-фильма, генерация Veo, карточки или
+ * только речь. Раньше всё подписывалось «Монтаж», и план за $0.07 выглядел так же,
+ * как генерация за $5.12.
+ */
+export function labelFromEntries(entries: Pick<CostEntry, "stage">[]): string {
+  const stages = new Set(entries.map((e) => e.stage));
+  if (stages.has("AI Film Generation")) return "AI-фильм: генерация";
+  if (stages.has("AI Film Story")) return "AI-фильм: план";
+  const cards = ["Creative Director", "Media Research", "Beat Matching", "Vision Verification", "Source Verification", "Script Beats"];
+  if (cards.some((st) => stages.has(st as CostEntry["stage"]))) return "Монтаж: карточки";
+  if (stages.has("Transcription") || stages.has("Speech Cleanup")) return "Монтаж: речь";
+  return "Монтаж";
+}
+
 /** Сводка прогона из файла леджера (pipeline-cost.json или его копии в cost-runs). */
 export function runFromLedgerFile(file: string, projectId: string, status: "done" | "failed", topic?: string): SpendRun {
   const json = JSON.parse(fs.readFileSync(file, "utf8"));
   const entries: CostEntry[] = Array.isArray(json.entries) ? json.entries : [];
   const { total, byProvider } = summarizeEntries(entries);
+  const label = labelFromEntries(entries);
   const stamp = path.basename(file).match(/^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)/);
   const at =
     (typeof json.createdAt === "string" && !Number.isNaN(Date.parse(json.createdAt)) && json.createdAt) ||
@@ -65,7 +81,7 @@ export function runFromLedgerFile(file: string, projectId: string, status: "done
   // иначе разные прогоны слились бы в один
   const base = path.basename(file);
   const runId = base === "pipeline-cost.json" ? `${projectId}:pipeline-cost@${at}` : `${projectId}:${base}`;
-  return { runId, projectId, topic, at, status, label: "Монтаж", total, byProvider };
+  return { runId, projectId, topic, at, status, label, total, byProvider };
 }
 
 /** Имя копии леджера в cost-runs для данного времени создания (как в keepRunLedger). */
@@ -147,10 +163,20 @@ export function dedupeSpendRuns(runs: SpendRun[]): SpendRun[] {
 export function appendSpendRuns(runs: SpendRun[], file = SPEND_FILE): { added: number; total: number } {
   const stored = readSpendLog(file);
   const existing = dedupeSpendRuns(stored);
-  const cleaned = existing.length !== stored.length;
+  let cleaned = existing.length !== stored.length;
   let added = 0;
   for (const r of runs) {
-    if (existing.some((k) => sameSpendRun(k, r))) continue;
+    const known = existing.find((k) => sameSpendRun(k, r));
+    if (known) {
+      // тот же прогон пришёл с более точной подписью или с разбивкой, которой не было
+      // (старый журнал не знал провайдера google): обновляем на месте, не дублируя
+      const better = r.label && r.label !== "Монтаж" && known.label !== r.label;
+      const fuller = Object.keys(r.byProvider).length > Object.keys(known.byProvider).length;
+      if (better) known.label = r.label;
+      if (fuller) known.byProvider = r.byProvider;
+      if (better || fuller) cleaned = true;
+      continue;
+    }
     existing.push(r);
     added++;
   }

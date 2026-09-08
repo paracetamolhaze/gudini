@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { appendSpendRuns, readSpendLog, runFromLedgerFile, sanitizeRun, setManualBalance, readManualBalances, summarizeEntries } from "../lib/spendLog";
+import { appendSpendRuns, readSpendLog, runFromLedgerFile, sanitizeRun, setManualBalance, readManualBalances, summarizeEntries, labelFromEntries } from "../lib/spendLog";
 import type { CostEntry } from "../lib/costLedger";
 
 const entry = (over: Partial<CostEntry>): CostEntry => ({
@@ -75,4 +75,28 @@ test("SpendLog: чужой прогон проверяется по полям, 
   assert.equal(run.total, 0.12);
   assert.equal(run.topic, "тема");
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("подпись прогона по стадиям: план AI-фильма, генерация Veo, карточки, речь", () => {
+  const st = (...stages: string[]) => stages.map((stage) => ({ stage }) as any);
+  assert.equal(labelFromEntries(st("Transcription", "Speech Cleanup", "AI Film Story")), "AI-фильм: план");
+  assert.equal(labelFromEntries(st("AI Film Generation")), "AI-фильм: генерация");
+  assert.equal(labelFromEntries(st("Speech Cleanup", "Media Research", "Creative Director", "Cover Generation")), "Монтаж: карточки");
+  assert.equal(labelFromEntries(st("Transcription", "Speech Cleanup")), "Монтаж: речь");
+  assert.equal(labelFromEntries([]), "Монтаж");
+});
+
+test("повторно присланный прогон обновляет подпись и разбивку на месте, без дубля", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-spend-label-"));
+  const file = path.join(dir, "spend-log.json");
+  const old = { runId: "p1:2026-09-08T11-54-31-143Z-done.json", projectId: "p1", at: "2026-09-08T11:54:31.143Z", status: "done" as const, label: "Монтаж", total: 5.12, byProvider: {} };
+  assert.equal(appendSpendRuns([old], file).added, 1);
+  const fresh = { ...old, label: "AI-фильм: генерация", byProvider: { google: 5.12 } };
+  const r = appendSpendRuns([fresh], file);
+  assert.equal(r.added, 0);
+  assert.equal(r.total, 1);
+  const stored = readSpendLog(file);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].label, "AI-фильм: генерация");
+  assert.deepEqual(stored[0].byProvider, { google: 5.12 });
 });

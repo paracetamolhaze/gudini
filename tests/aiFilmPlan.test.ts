@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { phrasesFromWords, beatsFromRaw, normalizeBible, MIN_AI_BEAT_SEC, MAX_AI_BEAT_SEC } from "../lib/aiFilm/story";
 import {
-  buildFilmPlan, buildShots, groupBeats, shotKey, shotPrompt, estimateWallMinutes, reduceToBudget, planVersionError, enforceShotBudget, PLAN_VERSION,
+  buildFilmPlan, buildShots, groupBeats, shotKey, shotPrompt, estimateWallMinutes, reduceToBudget, planVersionError, enforceShotBudget, closeTinyAuthorGaps, PLAN_VERSION,
   type PlanConfig,
 } from "../lib/aiFilm/plan";
 import { normalizeVeoDuration } from "../lib/aiFilm/veo";
@@ -98,7 +98,8 @@ test("биты из ответа модели: встык от 0 до конца
   assert.equal(beats[0].displayMode, "author");
   assert.match(beats[0].reduced ?? "", new RegExp(`короче ${MIN_AI_BEAT_SEC}`));
   const ai = beats.filter((b) => b.displayMode !== "author");
-  assert.ok(ai.length >= 2, "длинный AI-бит разрезан");
+  assert.equal(ai.length, 1, "длинный AI-бит разрезан: AI остаётся первая часть, хвост — автор");
+  assert.ok(beats.some((b) => b.displayMode === "author" && /продолжение AI-бита/.test(b.reduced ?? "")), "хвост длинного AI-бита стал автором");
   for (const b of ai) {
     assert.ok(b.end - b.start <= MAX_AI_BEAT_SEC + 0.5, `${b.id}: ${(b.end - b.start).toFixed(1)} с`);
     assert.ok(b.end - b.start >= MIN_AI_BEAT_SEC - 1e-6);
@@ -352,4 +353,41 @@ test("разбор истории идёт без скрытых размышл�
   assert.deepEqual(off.usage, { include: true });
   const auto = openrouterRequestBody("anthropic/claude-sonnet-5", 8000, "sys", "user") as any;
   assert.equal("reasoning" in auto, false, "остальные стадии не трогаем");
+});
+
+test("длинный AI-бит из ответа модели: AI только первая часть, остальное автор — без дубля одной сцены", () => {
+  const w = words(Array.from({ length: 100 }, (_, i) => `w${i}${i % 5 === 4 ? "." : ""}`).join(" ")); // 20 фраз по 2 с
+  const phrases = phrasesFromWords(w);
+  const raw = [
+    { fromPhrase: 1, toPhrase: 2, displayMode: "author" },
+    { fromPhrase: 3, toPhrase: 11, displayMode: "full_ai", visualAction: "Gudini raises the banner", priority: "high", purpose: "example" }, // ~17.9 с
+    { fromPhrase: 12, toPhrase: 20, displayMode: "author" },
+  ];
+  const beats = beatsFromRaw(raw as any, phrases, 42);
+  const ai = beats.filter((b) => b.displayMode !== "author");
+  assert.equal(ai.length, 1, "одна AI-сцена, а не две одинаковые");
+  assert.ok(ai[0].end - ai[0].start <= MAX_AI_BEAT_SEC + 0.5);
+  const tail = beats.find((b) => b.reduced && /продолжение AI-бита/.test(b.reduced));
+  assert.ok(tail && tail.displayMode === "author");
+  const plan = buildFilmPlan({ character: withRefs, bible, beats, duration: 42, cfg: cfg() });
+  assert.equal(plan.shots.length, 1);
+  assert.equal(new Set(plan.shots.map((s) => s.prompt)).size, plan.shots.length, "промпты не повторяются");
+});
+
+test("крошечный author между двумя AI-сценами: следующая сцена сдвигается встык, хвост уходит автору", () => {
+  const beats = [beat("B1", 0, 8, "full_ai", { purpose: "hook", priority: "high" }), beat("B1a", 8, 9.7, "author"), beat("B2", 9.7, 17.7, "full_ai", { purpose: "climax", priority: "high" }), beat("B3", 17.7, 40, "author")];
+  const fixed = closeTinyAuthorGaps(beats);
+  assert.deepEqual(fixed.map((b) => [b.id, b.displayMode, Math.round(b.start * 10) / 10, Math.round(b.end * 10) / 10]), [
+    ["B1", "full_ai", 0, 8],
+    ["B2", "full_ai", 8, 16],
+    ["B3", "author", 16, 40],
+  ]);
+  const plan = buildFilmPlan({ character: withRefs, bible, beats, duration: 40, cfg: cfg() });
+  assert.deepEqual(plan.timeline.map((t) => `${t.start}-${t.end} ${t.mode}`), ["0-8 full_ai", "8-16 full_ai", "16-40 author"]);
+  // автор на 3 с и больше остаётся
+  const keep = closeTinyAuthorGaps([beat("B1", 0, 8, "full_ai"), beat("B1a", 8, 11.2, "author"), beat("B2", 11.2, 19.2, "full_ai"), beat("B3", 19.2, 40, "author")]);
+  assert.equal(keep.length, 4);
+  // между двумя AI без author-бита после — хвост становится новым author-битом
+  const tail = closeTinyAuthorGaps([beat("B1", 0, 8, "full_ai"), beat("B1a", 8, 9, "author"), beat("B2", 9, 17, "full_ai")]);
+  assert.deepEqual(tail.map((b) => [b.displayMode, Math.round(b.start * 10) / 10, Math.round(b.end * 10) / 10]), [["full_ai", 0, 8], ["full_ai", 8, 16], ["author", 16, 17]]);
 });

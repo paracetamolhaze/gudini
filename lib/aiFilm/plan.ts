@@ -29,6 +29,8 @@ export const MAX_CHAIN_EXTENSIONS = 2;
 export const PREFERRED_MAX_AI_SHOT_SECONDS = 8;
 /** Ниже этого aiSeconds/generatedSeconds план получает предупреждение. */
 export const MIN_GENERATION_EFFICIENCY = 0.65;
+/** Автор короче этого между двумя AI-сценами — мигание, а не кадр: следующая сцена сдвигается встык. */
+export const MIN_AUTHOR_GAP_SECONDS = 3;
 export const RESOLUTION = "720p" as const;
 
 export function coverageConfig(): { target: number; max: number } {
@@ -170,7 +172,45 @@ export function enforceShotBudget(beats: StoryBeat[]): StoryBeat[] {
     }
     merged.push(b);
   }
-  return merged;
+  return closeTinyAuthorGaps(merged);
+}
+
+/**
+ * Автор на 1–3 с между двумя AI-сценами выглядит как мигание. Следующая AI-сцена
+ * сдвигается встык к предыдущей (её длина сохраняется), а освободившийся хвост
+ * отдаётся автору и сливается со следующим author-битом. AI — метафора смысла,
+ * сдвиг окна на пару секунд ей не вредит, голос идёт непрерывно.
+ */
+export function closeTinyAuthorGaps(beats: StoryBeat[]): StoryBeat[] {
+  const work = beats.map((b) => ({ ...b }));
+  for (let i = 1; i < work.length - 1; i++) {
+    const gap = work[i];
+    const prev = work[i - 1];
+    const next = work[i + 1];
+    const d = gap.end - gap.start;
+    if (gap.displayMode !== "author" || d >= MIN_AUTHOR_GAP_SECONDS || prev.displayMode === "author" || next.displayMode === "author") continue;
+    const len = next.end - next.start;
+    next.start = gap.start;
+    next.end = Math.round((gap.start + len) * 1000) / 1000;
+    next.suggestedDuration = Math.round(len * 10) / 10;
+    const after = work[i + 2];
+    if (after && after.displayMode === "author") {
+      after.start = next.end;
+      after.suggestedDuration = Math.round((after.end - after.start) * 10) / 10;
+    } else {
+      work.splice(i + 2, 0, {
+        ...gap,
+        id: `${next.id}t`,
+        start: next.end,
+        end: Math.round((next.end + d) * 1000) / 1000,
+        suggestedDuration: Math.round(d * 10) / 10,
+        reduced: "хвост после сдвига AI-сцены встык — автор",
+      });
+    }
+    work.splice(i, 1);
+    i--;
+  }
+  return work;
 }
 
 /** Группы непрерывности из битов: соседние AI-биты с одной меткой, одним режимом и continuityRequired. */

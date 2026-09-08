@@ -182,20 +182,19 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
   if (!items.length) items.push({ from: 1, to: n, e: { fromPhrase: 1, toPhrase: n, displayMode: "author" } });
   if (cursor <= n) items[items.length - 1].to = n;
 
-  // длинные AI-биты режем по фразам на части ≤ MAX_AI_BEAT_SEC
-  const split: typeof items = [];
+  // длинный AI-бит режем по фразам: AI остаётся только первая часть (≤ MAX_AI_BEAT_SEC),
+  // остальное — автор. Две одинаковые сцены подряд с одним промптом — это не история,
+  // а дубль за деньги (план «Думсдей» получил один и тот же кадр дважды).
+  const split: (typeof items[number] & { tail?: boolean })[] = [];
   for (const it of items) {
     const isAi = it.e.displayMode === "full_ai" || it.e.displayMode === "hybrid";
     const dur = phrases[it.to - 1].end - phrases[it.from - 1].start;
     if (!isAi || dur <= MAX_AI_BEAT_SEC || it.to === it.from) { split.push(it); continue; }
-    let from = it.from;
-    while (from <= it.to) {
-      let to = from;
-      while (to + 1 <= it.to && phrases[to].end - phrases[from - 1].start <= MAX_AI_BEAT_SEC) to++;
-      if (to < it.to && phrases[it.to - 1].end - phrases[to].start < MIN_AI_BEAT_SEC) to = it.to;
-      split.push({ from, to, e: { ...it.e, continuityGroup: null } });
-      from = to + 1;
-    }
+    let to = it.from;
+    while (to + 1 <= it.to && phrases[to].end - phrases[it.from - 1].start <= MAX_AI_BEAT_SEC) to++;
+    // хвост любой длины — автор: для author-бита минимума нет
+    split.push({ from: it.from, to, e: it.e });
+    if (to < it.to) split.push({ from: to + 1, to: it.to, e: { ...it.e, displayMode: "author", continuityGroup: null, continuityRequired: false }, tail: true });
   }
 
   const beats: StoryBeat[] = split.map((it, i) => {
@@ -206,6 +205,7 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
     const isAi = mode !== "author";
     let reduced: string | undefined;
     if (isAi && !str(e.visualAction)) { mode = "author"; reduced = "нет действия в кадре"; }
+    if (it.tail) reduced = `продолжение AI-бита длиннее ${MAX_AI_BEAT_SEC} с — автор`;
     return {
       id: `B${i + 1}`,
       start,

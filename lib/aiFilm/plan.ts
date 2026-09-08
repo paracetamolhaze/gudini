@@ -25,6 +25,10 @@ export const VEO_MODEL = process.env.AI_FILM_MODEL || "veo-3.1-fast-generate-001
 export const ENVIRONMENT_MODEL = process.env.AI_FILM_ENVIRONMENT_MODEL || VEO_MODEL;
 export const MAX_CHAIN_SECONDS = 22;
 export const MAX_CHAIN_EXTENSIONS = 2;
+/** Один независимый AI-бит — максимум один клип Veo на 8 с (без continuityRequired). */
+export const PREFERRED_MAX_AI_SHOT_SECONDS = 8;
+/** Ниже этого aiSeconds/generatedSeconds план получает предупреждение. */
+export const MIN_GENERATION_EFFICIENCY = 0.65;
 export const RESOLUTION = "720p" as const;
 
 export function coverageConfig(): { target: number; max: number } {
@@ -128,7 +132,48 @@ export function shotKey(shot: FilmShot, refHash: string, sourceKey: string | nul
   );
 }
 
-/** Группы непрерывности из битов: соседние AI-биты с одной меткой и одним режимом. */
+/**
+ * Правило одного клипа: AI-бит длиннее 8 с без явного continuityRequired не превращается
+ * в цепочку extension ради покрытия — AI остаётся на первых 8 с, остаток бита уходит
+ * автору. Голос непрерывен, поэтому AI не обязан закрывать весь смысловой блок.
+ */
+export function enforceShotBudget(beats: StoryBeat[]): StoryBeat[] {
+  const out: StoryBeat[] = [];
+  for (const b of beats) {
+    const dur = b.end - b.start;
+    if (b.displayMode === "author" || b.continuityRequired || dur <= PREFERRED_MAX_AI_SHOT_SECONDS + 1e-6) { out.push(b); continue; }
+    const cut = b.start + PREFERRED_MAX_AI_SHOT_SECONDS;
+    out.push({ ...b, end: cut, suggestedDuration: PREFERRED_MAX_AI_SHOT_SECONDS });
+    out.push({
+      ...b,
+      id: `${b.id}a`,
+      start: cut,
+      displayMode: "author",
+      requiresGeneration: false,
+      gudiniVisible: false,
+      continuityGroup: null,
+      continuityRequired: false,
+      universeAdaptation: "",
+      visualAction: "",
+      location: "",
+      suggestedDuration: Math.round((b.end - cut) * 10) / 10,
+      reduced: `остаток AI-бита после ${PREFERRED_MAX_AI_SHOT_SECONDS} с — автор (без continuityRequired)`,
+    });
+  }
+  // соседние author-остатки сливаются с последующим author-битом
+  const merged: StoryBeat[] = [];
+  for (const b of out) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.displayMode === "author" && b.displayMode === "author" && prev.reduced && !b.reduced) {
+      merged[merged.length - 1] = { ...b, start: prev.start, suggestedDuration: Math.round((b.end - prev.start) * 10) / 10 };
+      continue;
+    }
+    merged.push(b);
+  }
+  return merged;
+}
+
+/** Группы непрерывности из битов: соседние AI-биты с одной меткой, одним режимом и continuityRequired. */
 export function groupBeats(beats: StoryBeat[]): StoryBeat[][] {
   const groups: StoryBeat[][] = [];
   let cur: StoryBeat[] = [];
@@ -137,6 +182,8 @@ export function groupBeats(beats: StoryBeat[]): StoryBeat[][] {
     const last = cur[cur.length - 1];
     const joins =
       last &&
+      last.continuityRequired &&
+      b.continuityRequired &&
       last.continuityGroup &&
       last.continuityGroup === b.continuityGroup &&
       last.displayMode === b.displayMode &&
@@ -171,11 +218,13 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
     const id = `G${gi + 1}`;
     const shotIds: string[] = [];
     const prevBeat = beats[beats.indexOf(first) - 1] ?? null;
+    const continuity = gBeats.some((b) => b.continuityRequired);
     let covered = 0;
     let idx = 0;
     while (covered < span - 0.05) {
       const mode: FilmShot["mode"] = idx === 0 ? "text" : "extend";
-      if (mode === "extend" && idx > MAX_CHAIN_EXTENSIONS) break;
+      // extension — только при явном требовании непрерывности; иначе один клип
+      if (mode === "extend" && (!continuity || idx > MAX_CHAIN_EXTENSIONS)) break;
       const veoSeconds = mode === "text" ? normalizeVeoDuration(Math.min(span, 8), "text", { references: useReferences }) : VEO_EXTEND_SECONDS;
       const from = first.start + covered;
       const to = Math.min(last.end, from + veoSeconds);
@@ -246,6 +295,8 @@ export function computeStats(beats: StoryBeat[], built: BuiltShots, duration: nu
     speechSeconds: Math.round(duration * 10) / 10,
     aiSeconds: Math.round(aiSeconds * 10) / 10,
     generatedSeconds,
+    overheadSeconds: Math.round(Math.max(0, generatedSeconds - aiSeconds) * 10) / 10,
+    generationEfficiency: generatedSeconds > 0 ? Math.round((aiSeconds / generatedSeconds) * 1000) / 1000 : 1,
     coverage: duration > 0 ? Math.round((aiSeconds / duration) * 1000) / 1000 : 0,
     calls: built.shots.length,
     groups: built.groups.length,
@@ -273,7 +324,7 @@ function demote(b: StoryBeat, why: string): void {
  * всего остального план не влезает — ошибка с цифрами, а не тихое урезание истории.
  */
 export function reduceToBudget(beats: StoryBeat[], character: CharacterProfile, bible: StoryBible, duration: number, cfg: PlanConfig): { beats: StoryBeat[]; built: BuiltShots; stats: PlanStats } {
-  const work = beats.map((b) => ({ ...b }));
+  const work = enforceShotBudget(beats).map((b) => ({ ...b }));
   const order: Array<"low" | "medium" | "high"> = ["low", "medium", "high"];
   for (;;) {
     const built = buildShots(work, character, bible, cfg);
@@ -310,6 +361,11 @@ export function buildFilmPlan(args: {
   const { beats, built, stats } = reduceToBudget(args.beats, character, bible, duration, cfg);
   const warnings = [...built.warnings];
   if (stats.reducedBeats) warnings.push(`Сцен переведено в автора редьюсером: ${stats.reducedBeats}`);
+  if (stats.calls > 0 && stats.generationEfficiency < MIN_GENERATION_EFFICIENCY) {
+    warnings.push(
+      `Низкая эффективность генерации: на экране ${stats.aiSeconds} с из ${stats.generatedSeconds} сгенерированных (${Math.round(stats.generationEfficiency * 100)}%, желательно > 75%) — AI-биты короче 8 с или лишние продолжения`,
+    );
+  }
   return {
     version: PLAN_VERSION,
     createdAt: new Date().toISOString(),

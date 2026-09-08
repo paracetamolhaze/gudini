@@ -96,6 +96,8 @@ export type StoryBeat = {
   stateAfter: string;
   /** одинаковая метка у соседних AI-битов = одна непрерывная сцена (extension) */
   continuityGroup: string | null;
+  /** планировщик явно требует непрерывное действие: только тогда разрешён extension */
+  continuityRequired: boolean;
   transition: TransitionIntent;
   shotType: ShotType;
   camera: string;
@@ -154,6 +156,10 @@ export type PlanStats = {
   aiSeconds: number;
   /** секунд, которые генерирует Veo (с округлением до поддерживаемых) */
   generatedSeconds: number;
+  /** сгенерировано сверх того, что попадёт на экран */
+  overheadSeconds: number;
+  /** aiSeconds / generatedSeconds; для sparse-монтажа желательно > 0.75 */
+  generationEfficiency: number;
   coverage: number;
   calls: number;
   groups: number;

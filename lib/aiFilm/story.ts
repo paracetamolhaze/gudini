@@ -17,6 +17,8 @@ export const STORY_VERSION = 3;
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
 export const MAX_AI_BEAT_SEC = 15;
+/** Один независимый AI-бит — максимум один клип Veo на 8 с; длиннее только с continuityRequired. */
+export const PREFERRED_MAX_AI_SHOT_SEC = 8;
 export const MIN_BEAT_SEC = 2;
 
 export type Phrase = { index: number; start: number; end: number; text: string };
@@ -70,8 +72,10 @@ ${universePlannerBlock(universe)}
 
 Раздели речь на биты по смыслу (обычно 4–12 с; биты покрывают ВСЕ фразы по порядку без пропусков и пересечений; границы — номера фраз). Для каждого бита выбери displayMode:
 - "author": автор говорит панчлайн; важна его эмоция; плотное объяснение; прямой контакт со зрителем; AI ничего не добавляет.
-- "full_ai": сильный hook; постановочная сцена; яркий пример; reveal; кульминация; история; визуальная метафора сильнее говорящей головы. AI-бит: 4–${MAX_AI_BEAT_SEC} с.
-- "hybrid": полезно видеть автора и контекст одновременно; AI — дополнение. AI-бит: 4–${MAX_AI_BEAT_SEC} с.
+- "full_ai": сильный hook; постановочная сцена; яркий пример; reveal; кульминация; история; визуальная метафора сильнее говорящей головы. AI-бит: 4–${PREFERRED_MAX_AI_SHOT_SEC} с.
+- "hybrid": полезно видеть автора и контекст одновременно; AI — дополнение. AI-бит: 4–${PREFERRED_MAX_AI_SHOT_SEC} с.
+Длина AI-бита: один AI-бит = один клип Veo на 8 секунд, поэтому предпочитай 7–8 с (короче — секунды клипа пропадают). Если смысловой блок речи длиннее 8 с — НЕ растягивай AI на весь блок: выбери самую сильную часть (по фразам) до 8 с, остальное отдай "author", либо разбей блок на AI + author. Голос автора идёт непрерывно, AI не обязан закрывать весь смысл. Второй независимый AI-бит подряд — только если визуально нужна новая сцена.
+continuityRequired: true только если действие обязано быть непрерывным без склейки (вошёл → идёт → находит) и не помещается в 8 с; тогда допустим бит до ${MAX_AI_BEAT_SEC} с (клип 8 с + продолжение 7 с). Это дорого — используй редко.
 Не злоупотребляй full_ai: обычно первым идёт hook на 5–8 с, дальше AI появляется 4–6 раз на 2 минуты речи.
 
 Каждая AI-сцена: ONE SHOT = ONE CLEAR ACTION, понятная за 1–2 секунды. visualAction (английский) обязан содержать WHO (${character.name}), WHAT HE DOES, WHERE, WHAT CHANGES. Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "${character.name} enters an empty training ground. Every target post has fallen except one. He slowly picks up the single scroll left on it." Без десяти действий сразу, без сюрреалистического мусора, без текста/надписей/логотипов в кадре, без реальных известных людей, без названий франшиз, студий, фильмов и персонажей (описывай своими словами).
@@ -84,7 +88,7 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "universeAdaptation": "english: how the author's idea is translated into this world", "visualAction": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "transition": "cut", "shotType": "medium", "camera": "english"}]}
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "universeAdaptation": "english: how the author's idea is translated into this world", "visualAction": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english"}]}
 Для author-битов universeAdaptation/visualAction/location/state можно оставить пустыми строками, gudiniVisible=false.`;
 }
 
@@ -103,6 +107,7 @@ type RawBeat = {
   stateBefore?: string;
   stateAfter?: string;
   continuityGroup?: string | null;
+  continuityRequired?: boolean;
   transition?: string;
   shotType?: string;
   camera?: string;
@@ -218,6 +223,7 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       stateBefore: str(e.stateBefore),
       stateAfter: str(e.stateAfter),
       continuityGroup: mode !== "author" && typeof e.continuityGroup === "string" && e.continuityGroup.trim() ? e.continuityGroup.trim() : null,
+      continuityRequired: mode !== "author" && (e.continuityRequired === true || (typeof e.continuityGroup === "string" && e.continuityGroup.trim().length > 0)),
       transition: (e.transition === "dissolve" ? "dissolve" : "cut") as TransitionIntent,
       shotType: (SHOTS as string[]).includes(String(e.shotType)) ? (e.shotType as ShotType) : "medium",
       camera: str(e.camera),

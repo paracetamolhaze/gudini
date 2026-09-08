@@ -54,7 +54,7 @@ type AiFilmPlanView = {
   pricing?: { model: string; pricePerSec: number; source: string };
   budgetUsd?: number;
   stats: {
-    speechSeconds: number; aiSeconds: number; generatedSeconds: number; coverage: number; calls: number;
+    speechSeconds: number; aiSeconds: number; generatedSeconds: number; overheadSeconds?: number; generationEfficiency?: number; coverage: number; calls: number;
     groups: number; independentGroups: number; chains: number; estimatedCost: number; estimatedWallMinutes: number; concurrency: number;
   };
   warnings?: string[];
@@ -622,7 +622,7 @@ function ProcessStep({
           <b>План AI-фильма</b>
           <p className="hint" style={{ margin: "6px 0" }}>
             AI на экране: <b>{filmPlan.stats.aiSeconds} с</b> из {filmPlan.stats.speechSeconds} с · покрытие {Math.round(filmPlan.stats.coverage * 100)}% ·
-            Veo-секунд {filmPlan.stats.generatedSeconds} · вызовов {filmPlan.stats.calls} · групп {filmPlan.stats.groups} (параллельных {filmPlan.stats.independentGroups}, цепочек {filmPlan.stats.chains}) ·
+            Veo-секунд {filmPlan.stats.generatedSeconds}{typeof filmPlan.stats.overheadSeconds === "number" ? ` (сверх экрана ${filmPlan.stats.overheadSeconds} с, эффективность ${Math.round((filmPlan.stats.generationEfficiency ?? 0) * 100)}%)` : ""} · вызовов {filmPlan.stats.calls} · групп {filmPlan.stats.groups} (параллельных {filmPlan.stats.independentGroups}, цепочек {filmPlan.stats.chains}) ·
             оценка <b>${filmPlan.stats.estimatedCost.toFixed(2)}</b>{filmPlan.budgetUsd ? ` из бюджета $${filmPlan.budgetUsd}` : ""} · примерно {filmPlan.stats.estimatedWallMinutes} мин при {filmPlan.stats.concurrency} параллельных
             {filmPlan.pricing ? ` · ${filmPlan.pricing.model} $${filmPlan.pricing.pricePerSec}/с` : ""}
           </p>

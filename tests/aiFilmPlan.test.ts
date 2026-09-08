@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { phrasesFromWords, beatsFromRaw, normalizeBible, MIN_AI_BEAT_SEC, MAX_AI_BEAT_SEC } from "../lib/aiFilm/story";
 import {
-  buildFilmPlan, buildShots, groupBeats, shotKey, shotPrompt, estimateWallMinutes, reduceToBudget, planVersionError, PLAN_VERSION,
+  buildFilmPlan, buildShots, groupBeats, shotKey, shotPrompt, estimateWallMinutes, reduceToBudget, planVersionError, enforceShotBudget, PLAN_VERSION,
   type PlanConfig,
 } from "../lib/aiFilm/plan";
 import { normalizeVeoDuration } from "../lib/aiFilm/veo";
@@ -49,6 +49,7 @@ export const beat = (
   location: mode === "author" ? "" : "village rooftop",
   stateBefore: "he stands", stateAfter: `state after ${id}`,
   continuityGroup: o.continuityGroup ?? null,
+  continuityRequired: Boolean(o.continuityGroup),
   transition: "cut", shotType: "medium", camera: "slow push-in",
   suggestedDuration: end - start,
 });
@@ -299,4 +300,46 @@ test("Universe Lock: биты из ответа модели сохраняют 
   const beats = beatsFromRaw(raw as any, phrases, 16);
   assert.equal(beats[0].universeAdaptation, "the company report becomes the clan ledger");
   assert.equal(beats[1].universeAdaptation, "");
+});
+
+test("правило одного клипа: AI-бит 9.6 с без continuityRequired → 8 с AI + остаток автору, без extension", () => {
+  const beats = [beat("B1", 0, 10.8, "author"), beat("B2", 10.8, 20.4, "full_ai", { purpose: "reveal", priority: "high" }), beat("B3", 20.4, 62, "author")];
+  const fixed = enforceShotBudget(beats);
+  assert.deepEqual(fixed.map((b) => [b.id, b.displayMode, Math.round(b.start * 10) / 10, Math.round(b.end * 10) / 10]), [
+    ["B1", "author", 0, 10.8],
+    ["B2", "full_ai", 10.8, 18.8],
+    ["B3", "author", 18.8, 62],
+  ]);
+  const plan = buildFilmPlan({ character: withRefs, bible, beats, duration: 62, cfg: cfg() });
+  assert.equal(plan.shots.length, 1, "один клип, без extension");
+  assert.equal(plan.shots[0].veoSeconds, 8);
+  assert.equal(plan.stats.aiSeconds, 8);
+  assert.equal(plan.stats.generatedSeconds, 8);
+  assert.equal(plan.stats.overheadSeconds, 0);
+  assert.equal(plan.stats.generationEfficiency, 1);
+  assert.equal(plan.stats.chains, 0);
+  assert.deepEqual(plan.timeline.map((t) => `${t.start}-${t.end} ${t.mode}`), ["0-10.8 author", "10.8-18.8 full_ai", "18.8-62 author"]);
+});
+
+test("extension только при continuityRequired: бит 12 с с непрерывным действием → 8 + 7", () => {
+  const cont = { ...beat("B2", 10, 22, "full_ai", { continuityGroup: "walk" }), continuityRequired: true };
+  const plan = buildFilmPlan({ character: withRefs, bible, beats: [beat("B1", 0, 10, "author"), cont, beat("B3", 22, 60, "author")], duration: 60, cfg: cfg() });
+  assert.equal(plan.shots.length, 2);
+  assert.equal(plan.shots[1].mode, "extend");
+  assert.equal(plan.stats.aiSeconds, 12);
+  assert.equal(plan.stats.generatedSeconds, 15);
+  assert.equal(plan.stats.overheadSeconds, 3);
+  assert.equal(plan.stats.generationEfficiency, 0.8);
+});
+
+test("эффективность генерации: короткие AI-биты дают предупреждение ниже 65%", () => {
+  const beats = [beat("B1", 0, 4, "full_ai", { purpose: "hook", priority: "high" }), beat("B2", 4, 30, "author"), beat("B3", 30, 34.5, "full_ai"), beat("B4", 34.5, 60, "author")];
+  const plan = buildFilmPlan({ character: withRefs, bible, beats, duration: 60, cfg: cfg() });
+  assert.equal(plan.stats.generatedSeconds, 16);
+  assert.equal(plan.stats.aiSeconds, 8.5);
+  assert.ok(plan.stats.generationEfficiency < 0.65);
+  assert.ok(plan.warnings.some((w) => /эффективность/.test(w)), plan.warnings.join(" | "));
+  const good = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
+  assert.ok(good.stats.generationEfficiency >= 0.75, String(good.stats.generationEfficiency));
+  assert.ok(!good.warnings.some((w) => /эффективность/.test(w)));
 });

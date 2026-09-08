@@ -3,9 +3,9 @@ import path from "path";
 import crypto from "crypto";
 import { probeDuration, runFfmpeg } from "../ffmpeg";
 import { ledger, recordFlat, reserveBudget, releaseBudget } from "../costLedger";
-import { shotKey } from "./plan";
+import { shotKey, debrandPrompt } from "./plan";
 import { mimeFor } from "./character";
-import { startVeo, waitVeo, downloadGcs, uploadGcs, veoBody, VeoOperationError, VEO_BUCKET, type VeoReference, type VeoRequest } from "./veo";
+import { startVeo, waitVeo, downloadGcs, uploadGcs, veoBody, VeoOperationError, isThirdPartyContentError, VEO_BUCKET, type VeoReference, type VeoRequest } from "./veo";
 import type { AiFilmPlan, AiFilmShotResult, CharacterProfile, ContinuityGroup, FilmShot, GroupClip } from "./types";
 
 /**
@@ -83,11 +83,12 @@ export async function runPool<T>(tasks: (() => Promise<T>)[], n: number): Promis
   return results;
 }
 
-type RawRecord = { key: string; request: unknown; operation?: string; response?: unknown; file?: string; duration?: number; error?: string; terminalError?: boolean; startedAt?: string; finishedAt?: string; failedAt?: string };
+type RawRecord = { key: string; request: unknown; operation?: string; response?: unknown; file?: string; duration?: number; error?: string; terminalError?: boolean; debranded?: boolean; startedAt?: string; finishedAt?: string; failedAt?: string };
 
 export async function generateShot(args: {
   dir: string;
   projectId: string;
+  plan: AiFilmPlan;
   shot: FilmShot;
   key: string;
   references: VeoReference[];
@@ -123,10 +124,24 @@ export async function generateShot(args: {
   } catch {}
 
   const reservation = reserveBudget("AI Film Generation", operation ? 0 : shot.cost);
+  let debranded = false;
   try {
     if (!operation) {
-      operation = await startVeo(req, (attempt, why) => args.onProgress?.(`shot ${shot.id}: повтор запуска ${attempt} (${why})`));
-      write({ key, request: veoBody(req), operation, startedAt: new Date().toISOString() });
+      try {
+        operation = await startVeo(req, (attempt, why) => args.onProgress?.(`shot ${shot.id}: повтор запуска ${attempt} (${why})`));
+      } catch (e) {
+        // Google отклонил имена чужих персонажей ещё до создания операции (бесплатно):
+        // один повтор с описаниями вместо имён, только для этой сцены
+        if (!isThirdPartyContentError(e)) throw e;
+        const stripped = debrandPrompt(req.prompt, args.plan.bible);
+        if (stripped === req.prompt) throw e;
+        args.onProgress?.(`shot ${shot.id}: Veo отклонил имена персонажей — повтор с описаниями`);
+        console.warn(`AI-фильм: shot ${shot.id}: Veo отклонил промпт по правам третьих лиц, повтор без имён`);
+        req.prompt = stripped;
+        debranded = true;
+        operation = await startVeo(req, (attempt, why) => args.onProgress?.(`shot ${shot.id}: повтор запуска ${attempt} (${why})`));
+      }
+      write({ key, request: veoBody(req), operation, debranded, startedAt: new Date().toISOString() });
       // считаем сразу: операция принята — деньги, скорее всего, уже списаны
       recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: shot.cost, estimated: true });
       // The accepted call is now in the ledger; do not also count its reservation
@@ -137,7 +152,7 @@ export async function generateShot(args: {
     await downloadGcs(result.gcsUri, file);
     const dur = await probeDuration(file);
     if (dur < 1) throw new Error(`Veo: shot ${shot.id} пустой (${dur.toFixed(1)} с)`);
-    write({ key, request: veoBody(req), operation, response: result.raw, file: path.relative(dir, file), duration: dur, finishedAt: new Date().toISOString() });
+    write({ key, request: veoBody(req), operation, response: result.raw, file: path.relative(dir, file), duration: dur, debranded, finishedAt: new Date().toISOString() });
     return { shotId: shot.id, key, gcsUri: result.gcsUri, file: path.relative(dir, file), operation, veoSeconds: shot.veoSeconds, cost: shot.cost, createdAt: new Date().toISOString() };
   } catch (e) {
     write({ key, request: veoBody(req), operation, error: String((e as any)?.message ?? e), terminalError: e instanceof VeoOperationError, failedAt: new Date().toISOString() });
@@ -175,7 +190,7 @@ async function generateGroup(args: {
       args.onProgress?.(`shot ${shot.id}: из кэша`);
     } else {
       args.onProgress?.(`shot ${shot.id}: генерация (${shot.mode}, ${shot.veoSeconds} с, ${shot.aspectRatio}${shot.useReferences ? ", с эталонами" : ""})`);
-      res = await generateShot({ dir, projectId: args.projectId, shot, key, references: args.references, videoGcsUri: sourceGcs ?? undefined, onProgress: args.onProgress });
+      res = await generateShot({ dir, projectId: args.projectId, plan, shot, key, references: args.references, videoGcsUri: sourceGcs ?? undefined, onProgress: args.onProgress });
       cache[key] = res;
       await saveCache(dir, cache);
       generated++;

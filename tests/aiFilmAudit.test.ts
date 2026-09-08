@@ -38,7 +38,7 @@ test("Veo: a failed download resumes the accepted operation without paying for a
       ? new Response(new Uint8Array(download)) : new Response("download unavailable", { status: 503 });
     throw new Error(`Unexpected network request: ${address}`);
   });
-  const args = { dir, projectId: "audit", shot, key: shotKey(shot, "test-refs", null), references: [] };
+  const args = { dir, projectId: "audit", plan: { bible: { supportingCharacters: [] } } as any, shot, key: shotKey(shot, "test-refs", null), references: [] };
   await assert.rejects(generateShot(args), /download unavailable/);
   await assert.rejects(generateShot(args), /download unavailable/);
   assert.equal(starts, 1, "retry must reuse the paid operation after a transport/download error");

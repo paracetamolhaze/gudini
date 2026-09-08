@@ -116,6 +116,58 @@ export function shotPrompt(args: {
   return lines.join("\n");
 }
 
+/** Известные имена и названия → описание, которое Veo принимает. Порядок: длинные сначала. */
+const DEBRAND: [RegExp, string][] = [
+  [/\bRobert Downey(?: Jr\.?)?\b/gi, "the actor"],
+  [/\bIron Man armor\b/gi, "red-and-gold powered armor"],
+  [/\bIron Man\b/gi, "the hero in red-and-gold powered armor"],
+  [/\bTony Stark'?s?\b/gi, "the armored hero with the glowing chest reactor"],
+  [/\bThanos\b/gi, "the giant purple titan with a golden gauntlet"],
+  [/\bSteve Rogers\b/gi, "the older blond soldier"],
+  [/\bCaptain America\b/gi, "the hero with the round star-spangled shield"],
+  [/\bSam Wilson\b/gi, "the winged hero with the star-spangled shield"],
+  [/\bBucky Barnes\b/gi, "the soldier with a silver metal arm"],
+  [/\bNatasha Romanoff\b/gi, "the red-haired spy in a black suit"],
+  [/\bYelena\b/gi, "the blonde fighter in a white tactical suit"],
+  [/\bRed Guardian\b/gi, "the burly bearded man in a red suit"],
+  [/\bJohn Walker\b/gi, "the soldier in a dark tactical suit"],
+  [/\bGhost\b/g, "the phasing figure in a hooded grey suit"],
+  [/\bSentry\b/g, "the glowing golden-caped hero"],
+  [/\bSentinels?\b/gi, "giant purple mutant-hunting robots"],
+  [/\b(?:Doctor|Dr\.?) Doom\b/gi, "the armored sorcerer in a green cloak and iron mask"],
+  [/\bVictor von Doom\b/gi, "the armored sorcerer in a green cloak and iron mask"],
+  [/\bDoom'?s?\b/g, "the armored sorcerer's"],
+  [/\bProfessor X\b/gi, "the bald telepath in a hover-chair"],
+  [/\bMagneto\b/gi, "the man in a red helmet and cape"],
+  [/\bCyclops\b/gi, "the hero with a red visor"],
+  [/\bX-Men\b/gi, "the mutant heroes"],
+  [/\bX-Mansion\b/gi, "the mansion grounds"],
+  [/\bFantastic Four\b/gi, "the four heroes in blue uniforms"],
+  [/\bNew Avengers\b/gi, "the new hero team"],
+  [/\bAvengers\b/gi, "the hero team"],
+  [/\bEndgame\b/gi, "the final battle"],
+  [/\bMarvel\b/gi, "the saga"],
+  [/\b(?:Earth|Land)-828\b/gi, "the chrome tower city"],
+];
+
+/**
+ * Промпт без имён чужих персонажей: замены из таблицы плюс имена персонажей истории
+ * из Story Bible → их описание внешности. Используется только если Veo отклонил
+ * промпт по правам третьих лиц; остальные сцены имена сохраняют.
+ */
+export function debrandPrompt(prompt: string, bible: Pick<StoryBible, "supportingCharacters">): string {
+  let out = prompt;
+  for (const c of bible.supportingCharacters) {
+    const look = c.appearance.split(/[.;]/)[0].trim().toLowerCase();
+    for (const alias of c.name.split("/").map((a) => a.trim()).filter((a) => a.length >= 3)) {
+      const re = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g");
+      out = out.replace(re, look ? `a ${look}` : "the character");
+    }
+  }
+  for (const [re, to] of DEBRAND) out = out.replace(re, to);
+  return out.replace(/\s{2,}/g, " ");
+}
+
 function shortHash(s: string): string {
   return crypto.createHash("sha1").update(s).digest("hex").slice(0, 16);
 }

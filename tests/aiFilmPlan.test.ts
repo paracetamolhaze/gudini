@@ -5,7 +5,8 @@ import {
   buildFilmPlan, buildShots, groupBeats, shotKey, shotPrompt, estimateWallMinutes, reduceToBudget, planVersionError, enforceShotBudget, closeTinyAuthorGaps, PLAN_VERSION,
   type PlanConfig,
 } from "../lib/aiFilm/plan";
-import { normalizeVeoDuration } from "../lib/aiFilm/veo";
+import { normalizeVeoDuration, isThirdPartyContentError } from "../lib/aiFilm/veo";
+import { debrandPrompt } from "../lib/aiFilm/plan";
 import { openrouterRequestBody } from "../lib/mediaLlm";
 import { loadUniverseProfile, universePromptBlock, universePlannerBlock } from "../lib/aiFilm/universe";
 import type { CharacterProfile, StoryBeat, StoryBible, DisplayMode, BeatPurpose, Priority } from "../lib/aiFilm/types";
@@ -416,4 +417,23 @@ test("в промпт сцены попадают только персонаж�
   assert.doesNotMatch(p2, /Thanos/);
   const none = beat("B3", 16, 24, "full_ai", { visualAction: "Gudini watches two glowing worlds collide" });
   assert.doesNotMatch(shotPrompt({ character: gudini, universe, bible: cast, beat: none, prev: null, mode: "text", aspectRatio: "9:16" }), /Characters in this shot/);
+});
+
+test("отказ Veo по правам третьих лиц распознаётся, промпт без имён сохраняет узнаваемость", () => {
+  assert.ok(isThirdPartyContentError(new Error("Vertex 400: The prompt could not be submitted due to the interests of third-party content providers. Support codes: 35561575")));
+  assert.ok(!isThirdPartyContentError(new Error("Vertex 429: quota")));
+  const cast = {
+    supportingCharacters: [
+      { name: "Tony Stark", function: "background" as const, appearance: "red-and-gold powered armor with a glowing chest reactor; faceplate up" },
+      { name: "Doctor Doom / Victor von Doom", function: "opponent" as const, appearance: "tall armored figure in a green cloak and iron mask" },
+    ],
+  };
+  const prompt = "Tony Stark kneels as Thanos crumbles. Doctor Doom watches. Characters in this shot: Tony Stark: red-and-gold armor. The Avengers and the X-Men arrive in Endgame style.";
+  const out = debrandPrompt(prompt, cast);
+  for (const banned of ["Tony Stark", "Thanos", "Doctor Doom", "Avengers", "X-Men", "Endgame"]) assert.ok(!out.includes(banned), `${banned} остался: ${out}`);
+  assert.match(out, /red-and-gold powered armor with a glowing chest reactor/);
+  assert.match(out, /giant purple titan with a golden gauntlet/);
+  assert.match(out, /green cloak and iron mask/);
+  assert.match(out, /the hero team/);
+  assert.equal(debrandPrompt("Gudini stands on a cliff at dusk.", { supportingCharacters: [] }), "Gudini stands on a cliff at dusk.");
 });

@@ -135,6 +135,15 @@ export function veoBody(r: VeoRequest): { instances: any[]; parameters: any } {
   return { instances: [instance], parameters };
 }
 
+/**
+ * Отказ Vertex по правам третьих лиц: промпт с именами чужих персонажей отклонён ДО
+ * создания операции (денег не стоит). «Star и Thanos» отклонены, «Captain America и
+ * Bucky» прошли — список у Google свой, поэтому лечится заменой имён на описания.
+ */
+export function isThirdPartyContentError(e: unknown): boolean {
+  return /third-party content providers|interests of third-party/i.test(String((e as any)?.message ?? e));
+}
+
 /** Ошибки, при которых запуск (до принятия операции) можно повторить с паузой. */
 export function isTransient(e: unknown): boolean {
   const status = (e as VertexError)?.status;

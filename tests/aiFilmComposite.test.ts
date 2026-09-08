@@ -9,11 +9,11 @@ import { veoPricePerSecond } from "../lib/aiFilm/pricing";
 import { setRunCostLimit, assertBudget, resetLedger, recordFlat } from "../lib/costLedger";
 import { isAllowed } from "../lib/providerPolicy";
 import { CARD } from "../lib/topInset";
-import { gudini, beat } from "./aiFilmPlan.test";
+import { gudini, beat, universe } from "./aiFilmPlan.test";
 
 const withRefs = { ...gudini, referenceFiles: ["/tmp/gudini/ref-1.png"] };
-const bible = normalizeBible({}, gudini);
-const cfg = { key: "k", budgetUsd: 12, maxCoverage: 0.55, concurrency: 3, callMinutes: 2 };
+const bible = normalizeBible({}, gudini, universe);
+const cfg = { key: "k", universe, budgetUsd: 12, maxCoverage: 0.55, concurrency: 3, callMinutes: 2 };
 
 const plan120 = () =>
   buildFilmPlan({

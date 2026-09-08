@@ -9,6 +9,7 @@ import { planStory, STORY_VERSION } from "./story";
 import { buildFilmPlan, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
 import { generateGroups } from "./generate";
 import { loadCharacterProfile } from "./character";
+import { loadUniverseProfile } from "./universe";
 import { veoConfigured } from "./veo";
 import type { AiFilmPlan, GroupClip } from "./types";
 
@@ -27,9 +28,9 @@ export function filmBudget(): number {
   return Number.isFinite(v) && v > 0 ? v : 12;
 }
 
-/** Ключ входных данных плана: чистая речь + сценарий + версии + модели + персонаж и его эталоны. */
-export function planKey(words: Word[], script: string, character: { id: string; refHash: string }): string {
-  return `${textHash(words.map((w) => w.word).join(" "))}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:${character.id}@${character.refHash}`;
+/** Ключ входных данных плана: чистая речь + сценарий + версии + модели + персонаж с эталонами + мир. */
+export function planKey(words: Word[], script: string, character: { id: string; refHash: string }, universe: { id: string; hash: string }): string {
+  return `${textHash(words.map((w) => w.word).join(" "))}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:${character.id}@${character.refHash}:${universe.id}@${universe.hash}`;
 }
 
 export function loadPlanFile(dir: string): AiFilmPlan | null {
@@ -57,16 +58,17 @@ export async function runAiFilmStage(args: {
   const { id, dir, project, words, duration } = args;
   const request = project.aiFilm?.request ?? "plan";
   const character = loadCharacterProfile();
-  const key = planKey(words, project.script ?? "", character);
+  const universe = loadUniverseProfile();
+  const key = planKey(words, project.script ?? "", character, universe);
   const budget = filmBudget();
   const coverage = coverageConfig();
-  const cfg = { key, budgetUsd: budget, maxCoverage: coverage.max, concurrency: veoConcurrency(), callMinutes: veoCallMinutes() };
+  const cfg = { key, universe, budgetUsd: budget, maxCoverage: coverage.max, concurrency: veoConcurrency(), callMinutes: veoCallMinutes() };
 
   if (request === "plan") {
     args.setStep("AI-фильм: разбор истории", 26);
     const research = await args.research.catch(() => null);
     const summary = research ? research.facts.slice(0, 8).map((f) => f.text).filter(Boolean).join("; ") : "";
-    const story = await planStory({ words, script: project.script ?? "", topic: project.topic, researchSummary: summary, character, duration, coverage });
+    const story = await planStory({ words, script: project.script ?? "", topic: project.topic, researchSummary: summary, character, universe, duration, coverage });
     args.setStep("AI-фильм: план сцен", 30);
     const plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
     fs.writeFileSync(path.join(dir, PLAN_FILE), JSON.stringify(plan, null, 2), "utf8");
@@ -85,7 +87,7 @@ export async function runAiFilmStage(args: {
   const stale = planVersionError(plan);
   if (stale) throw new Error(stale);
   if (plan.key !== key) {
-    throw new Error("AI-фильм: план устарел — речь, сценарий или эталоны персонажа изменились с момента его сборки. Соберите план заново");
+    throw new Error("AI-фильм: план устарел — речь, сценарий, эталоны персонажа или профиль мира изменились с момента его сборки. Соберите план заново");
   }
   if (!veoConfigured()) {
     throw new Error("AI-фильм: Google Cloud не подключён к воркеру (нет файла учётных данных ADC). Veo не вызывался");

@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { characterBlock } from "./character";
+import { universePromptBlock, type UniverseProfile } from "./universe";
 import { veoPricePerSecond, round2 } from "./pricing";
 import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
 import type {
@@ -46,6 +47,8 @@ export function veoCallMinutes(): number {
 
 export type PlanConfig = {
   key: string;
+  /** Universe Lock — обязателен, попадает в каждый промпт */
+  universe: UniverseProfile;
   budgetUsd: number;
   maxCoverage: number;
   concurrency: number;
@@ -63,15 +66,17 @@ export const protectedBeat = (b: StoryBeat) => b.priority === "high" && (b.purpo
 /** Промпт shot: WHO / WHAT / WHERE / WHAT CHANGES, кадр, камера, непрерывность, запреты. */
 export function shotPrompt(args: {
   character: CharacterProfile;
+  universe: UniverseProfile;
   bible: StoryBible;
   beat: StoryBeat;
   prev: StoryBeat | null;
   mode: "text" | "extend";
   aspectRatio: "16:9" | "9:16";
 }): string {
-  const { character, bible, beat, prev, mode, aspectRatio } = args;
+  const { character, universe, bible, beat, prev, mode, aspectRatio } = args;
   const lines: string[] = [];
-  lines.push(`Style: ${bible.visualStyle}. World: ${bible.world}. Mood: ${bible.mood}. Lighting: ${bible.lighting}.`);
+  lines.push(`Style: ${bible.visualStyle}. Mood: ${bible.mood}. Lighting: ${bible.lighting}.`);
+  lines.push(universePromptBlock(universe));
   if (beat.gudiniVisible) lines.push(characterBlock(character));
   if (bible.supportingCharacters.length) {
     lines.push(`Supporting characters: ${bible.supportingCharacters.map((c) => `${c.name} (${c.function}): ${c.appearance}`).join("; ")}.`);
@@ -192,7 +197,7 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
         aspectRatio,
         resolution: RESOLUTION,
         useReferences: mode === "text" && useReferences,
-        prompt: shotPrompt({ character, bible, beat, prev, mode, aspectRatio }),
+        prompt: shotPrompt({ character, universe: cfg.universe, bible, beat, prev, mode, aspectRatio }),
         dependsOn: idx === 0 ? null : `${id}-${idx}`,
         cost: round2(veoSeconds * priceOf(groupModel)),
       };
@@ -311,6 +316,8 @@ export function buildFilmPlan(args: {
     key: cfg.key,
     duration,
     character: { id: character.id, name: character.name, refHash: character.refHash, referenceCount: character.referenceFiles.length },
+    universeId: cfg.universe.id,
+    universe: { id: cfg.universe.id, name: cfg.universe.name, hash: cfg.universe.hash },
     bible,
     beats,
     groups: built.groups,

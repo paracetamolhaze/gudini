@@ -35,6 +35,8 @@ type AiFilmPlanView = {
   version?: number;
   duration: number;
   character?: { id: string; name: string; referenceCount: number };
+  universeId?: string;
+  universe?: { id: string; name: string; hash: string };
   bible: {
     visualStyle: string;
     mood: string;
@@ -44,6 +46,7 @@ type AiFilmPlanView = {
   beats: {
     id: string; start: number; end: number; meaning: string; storyBeat?: string;
     displayMode: "author" | "full_ai" | "hybrid"; purpose: string; priority: string;
+    universeAdaptation?: string;
     visualAction: string; location: string; continuityGroup: string | null; reduced?: string;
   }[];
   groups: { id: string; start: number; end: number; shotIds: string[]; chain: boolean; displayMode: string }[];
@@ -627,6 +630,9 @@ function ProcessStep({
             Персонаж: <b>{filmPlan.character?.name ?? "Gudini"}</b>{filmPlan.character ? ` (эталонов: ${filmPlan.character.referenceCount})` : ""}
             {filmPlan.bible.storyArc?.gudiniRole ? ` · роль: ${filmPlan.bible.storyArc.gudiniRole}` : ""} · стиль: {filmPlan.bible.visualStyle}
           </p>
+          <p className="hint" style={{ margin: "6px 0" }}>
+            Мир (Universe Lock): <b>{filmPlan.universe?.name ?? filmPlan.universeId ?? "—"}</b>{filmPlan.universeId ? ` · ${filmPlan.universeId}` : ""}
+          </p>
           {filmPlan.bible.storyArc && (
             <p className="hint" style={{ margin: "6px 0" }}>
               История: {filmPlan.bible.storyArc.beginning} → {filmPlan.bible.storyArc.development} → {filmPlan.bible.storyArc.conflict} → {filmPlan.bible.storyArc.climax}. Смысл: {filmPlan.bible.storyArc.meaning}
@@ -660,6 +666,7 @@ function ProcessStep({
                       </td>
                       <td style={{ padding: "6px", verticalAlign: "top" }}>
                         {b.meaning}
+                        {b.displayMode !== "author" && b.universeAdaptation && <div className="hint" style={{ color: "#8fc6ff" }}>Адаптация в мир: {b.universeAdaptation}</div>}
                         {b.displayMode !== "author" && <div className="hint" style={{ opacity: 0.85 }}>{b.visualAction}{b.location ? ` — ${b.location}` : ""}</div>}
                         {b.reduced && <div className="hint" style={{ color: "#f0b429" }}>{b.reduced}</div>}
                       </td>

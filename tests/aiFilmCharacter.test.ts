@@ -5,6 +5,7 @@ import os from "os";
 import path from "path";
 import { loadCharacterProfile, characterBlock, referenceHash, MAX_REFERENCE_IMAGES } from "../lib/aiFilm/character";
 import { runPool } from "../lib/aiFilm/generate";
+import { loadUniverseProfile } from "../lib/aiFilm/universe";
 
 const profile = {
   id: "gudini", name: "Gudini", role: "main_protagonist",
@@ -75,4 +76,14 @@ test("пул: не больше n задач одновременно, посл�
   assert.ok(peak <= 2, `одновременно было ${peak}`);
   assert.ok(started.length < 6, "после ошибки часть задач не стартовала");
   assert.deepEqual(await runPool([async () => 1, async () => 2, async () => 3], 2), [1, 2, 3]);
+});
+
+test("профиль мира в репозитории валиден: правила адаптации, anti-drift, хэш; без профиля — ошибка", () => {
+  const u = loadUniverseProfile("gudini-shinobi-world", path.join(process.cwd(), "assets", "ai-film", "universes"));
+  assert.equal(u.id, "gudini-shinobi-world");
+  assert.ok(u.adaptationRules.length >= 8);
+  assert.match(u.forbiddenDrift, /cyberpunk/);
+  assert.match(u.hash, /^[0-9a-f]{12}$/);
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-univ-"));
+  assert.throws(() => loadUniverseProfile("nope", base), /нет профиля мира «nope»/);
 });

@@ -1,6 +1,7 @@
 import { mediaComplete, parseJson } from "../mediaLlm";
 import type { Word } from "../transcribe";
 import { characterBlock } from "./character";
+import { universePlannerBlock, type UniverseProfile } from "./universe";
 import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent } from "./types";
 
 /**
@@ -52,14 +53,16 @@ export function phrasesFromWords(words: Word[]): Phrase[] {
 /** обратная совместимость с прежним именем */
 export const sentencesFromWords = phrasesFromWords;
 
-export function storySystemPrompt(character: CharacterProfile, coverage: { target: number; max: number }): string {
+export function storySystemPrompt(character: CharacterProfile, universe: UniverseProfile, coverage: { target: number; max: number }): string {
   return `Ты режиссёр и сценарист коротких вертикальных роликов (9:16). Автор ролика говорит на камеру непрерывно; его голос и субтитры идут весь ролик. Ты решаешь, что зритель ВИДИТ: самого автора (AUTHOR), AI-сцену на весь экран (FULL_AI) или AI-сцену в карточке над автором (HYBRID). AI генерируется дорого и не должен покрывать весь ролик: ориентир ${Math.round(coverage.target * 100)}% времени, не больше ${Math.round(coverage.max * 100)}%. Меньше — можно.
 
 ГЛАВНЫЙ ГЕРОЙ ВСЕХ AI-СЦЕН — ПОСТОЯННЫЙ ПЕРСОНАЖ. Его identity задана и не меняется:
 ${characterBlock(character)}
 Стиль всех сцен (зафиксирован): ${character.styleLock}.
-Мир, в котором происходят истории: ${character.world}.
-Ты описываешь только его РОЛЬ в этой истории (владелец дела, наблюдатель событий, исследователь странного мира, герой визуальной метафоры), но визуально это всегда он. Никаких новых главных героев, generic people, «young entrepreneur» без связи с ним. Тема ролика переносится в его мир как понятная визуальная история или метафора: если ролик про игру, фильм, технологию или бизнес — покажи, как ${character.name} проживает это в своём мире (миссия, испытание, находка, столкновение), а не пересказывай чужой сюжет.
+
+${universePlannerBlock(universe)}
+
+Ты описываешь только РОЛЬ ${character.name} в этой истории (глава клана, разведчик, наблюдатель событий, исследователь, герой визуальной метафоры), но визуально это всегда он: лицо, волосы, силуэт, цветовая схема и основной shinobi-образ не меняются; допустимы временная экипировка поверх, следы истории на одежде и предметы миссии. Никаких новых главных героев, generic people, «young entrepreneur» без связи с ним. Тема ролика переносится в его мир как понятная визуальная история: если ролик про игру, фильм, технологию или бизнес — покажи, как ${character.name} проживает это в правилах мира (миссия, испытание, находка, столкновение кланов), а не пересказывай чужой сюжет.
 
 Сначала пойми историю целиком и заполни storyArc: что зритель должен понять; роль героя; начало; развитие; конфликт или изменение; кульминация; финальный смысл. Не перегружай символизмом: простая читаемая история.
 
@@ -81,8 +84,8 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "visualAction": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "transition": "cut", "shotType": "medium", "camera": "english"}]}
-Для author-битов visualAction/location/state можно оставить пустыми строками, gudiniVisible=false.`;
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "universeAdaptation": "english: how the author's idea is translated into this world", "visualAction": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "transition": "cut", "shotType": "medium", "camera": "english"}]}
+Для author-битов universeAdaptation/visualAction/location/state можно оставить пустыми строками, gudiniVisible=false.`;
 }
 
 type RawBeat = {
@@ -94,6 +97,7 @@ type RawBeat = {
   purpose?: string;
   priority?: string;
   gudiniVisible?: boolean;
+  universeAdaptation?: string;
   visualAction?: string;
   location?: string;
   stateBefore?: string;
@@ -113,7 +117,7 @@ const PURPOSES: BeatPurpose[] = ["hook", "setup", "explain", "example", "reveal"
 const SHOTS: ShotType[] = ["close", "medium", "medium_wide", "wide", "full_body"];
 const FUNCS = ["opponent", "guide", "witness", "partner", "background"] as const;
 
-export function normalizeBible(raw: RawStory, character: CharacterProfile): StoryBible {
+export function normalizeBible(raw: RawStory, character: CharacterProfile, universe: UniverseProfile): StoryBible {
   const b = raw.bible ?? {};
   const a = raw.storyArc ?? {};
   const supporting = (Array.isArray(b.supportingCharacters) ? b.supportingCharacters : [])
@@ -126,9 +130,10 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile): Stor
     .slice(0, 2);
   return {
     characterId: character.id,
-    // стиль и мир — из профиля, модель их не меняет
+    universeId: universe.id,
+    // стиль — из профиля персонажа, мир — из Universe Lock; модель их не меняет
     visualStyle: character.styleLock,
-    world: character.world,
+    world: `${universe.name}: ${universe.architecture}`,
     mood: str(b.mood, "calm, focused"),
     lighting: str(b.lighting, "soft natural light, consistent palette"),
     cameraLanguage: str(b.cameraLanguage, "steady medium shots, slow push-ins"),
@@ -207,6 +212,7 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       priority: (["low", "medium", "high"] as string[]).includes(String(e.priority)) ? (e.priority as Priority) : "medium",
       requiresGeneration: mode !== "author",
       gudiniVisible: mode !== "author" && e.gudiniVisible !== false,
+      universeAdaptation: mode !== "author" ? str(e.universeAdaptation) : "",
       visualAction: str(e.visualAction),
       location: str(e.location),
       stateBefore: str(e.stateBefore),
@@ -246,6 +252,7 @@ export async function planStory(args: {
   topic?: string;
   researchSummary?: string;
   character: CharacterProfile;
+  universe: UniverseProfile;
   duration: number;
   coverage: { target: number; max: number };
 }): Promise<{ bible: StoryBible; beats: StoryBeat[]; phrases: Phrase[] }> {
@@ -257,9 +264,9 @@ export async function planStory(args: {
     `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
     `Сценарий (что автор хотел сказать):\n${args.script.slice(0, 4000)}\n\n` +
     `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}`;
-  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", system: storySystemPrompt(args.character, args.coverage), user });
+  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", system: storySystemPrompt(args.character, args.universe, args.coverage), user });
   const parsed = parseJson<RawStory>(raw, "AI Film Story");
-  const bible = normalizeBible(parsed, args.character);
+  const bible = normalizeBible(parsed, args.character, args.universe);
   const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration);
   if (!beats.length) throw new Error("AI Film Story: модель не вернула биты");
   return { bible, beats, phrases };

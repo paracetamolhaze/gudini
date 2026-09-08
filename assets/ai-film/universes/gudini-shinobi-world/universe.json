@@ -1,0 +1,28 @@
+{
+  "id": "gudini-shinobi-world",
+  "name": "Gudini Shinobi World",
+  "targetFeel": "a Naruto-style shinobi anime universe: the same feel, structure, architecture and visual language; described in production prompts with original wording, never by franchise name",
+  "visualLanguage": "stylized cinematic anime, clean line art, cel shading with soft painterly backgrounds, strong readable silhouettes, cinematic anime lighting, stylized anime action language",
+  "architecture": "hidden shinobi villages with dense streets and tiled roofs; traditional Japanese-inspired wooden architecture mixed with stylized ninja infrastructure; village gates; training grounds; forests surrounding settlements; stone monuments and cliff-side landmarks; mission offices and records rooms; a shinobi academy; clan compounds; ramen and food shops and small village commerce",
+  "clothingRules": "shinobi flak/tactical vests, forehead protectors with original village emblems, wrapped forearms and lower legs, open-toe shinobi sandals, utility pouches, dark high-collar layers; villagers in simple traditional-inspired clothes; no modern streetwear, hoodies, sneakers, suits or ties",
+  "technologyRules": "scrolls, seals, paper documents, notice boards, messenger birds, lanterns, ink and brushes, chakra-based mechanisms and scroll-tech instruments; no smartphones, computers, cars, screens, neon or electronics",
+  "socialRules": "villages, clans and clan leaders, merchant houses, mission administration, senior village officials, academy teachers and students, rival clans and rival merchants, mission ranks and rewards",
+  "powerSystem": "hand signs and chakra-like visible energy appear only when the story needs powers; kunai and shuriken only when the story logically needs them; no guns, no modern weapons",
+  "recurringObjects": "mission scrolls with red ribbons, notice boards, kunai, forehead protectors, paper lanterns, ramen bowls, messenger birds, sealed letters, utility pouches",
+  "environmentRules": "one consistent universe in every shot; dusk lanterns and warm wood in the village, cool blue chakra glow on reveals and powers, green forests and stone cliffs outside; weather and time of day may change, the world never does",
+  "adaptationRules": [
+    "corporation → powerful clan, merchant organization or village institution",
+    "CEO / boss → clan leader, organization head or senior village official",
+    "office → mission administration building, clan headquarters or records room",
+    "bank / money → village treasury, merchant house, coin pouches and ledgers",
+    "market / customers → shinobi village commercial district and its visitors",
+    "technology / lab / AI → shinobi research facility with scrolls, seals, instruments and chakra-based mechanisms",
+    "social networks / media / news → messenger networks, notice boards, scroll distribution, town criers",
+    "military operation / project launch → shinobi mission with a rank and a reward",
+    "competitor → rival clan, rival merchant or rival shinobi organization",
+    "school / learning → shinobi academy, a teacher and students on the training ground",
+    "game / film / release → a legendary scroll, a tournament or a festival in the village",
+    "travel / city → a journey between villages through the forest and over the cliffs"
+  ],
+  "forbiddenDrift": "generic medieval fantasy; samurai period drama; cyberpunk; modern Tokyo; modern office interiors without shinobi adaptation; superhero universe; western military; generic Chinese wuxia; photorealistic contemporary world; modern streetwear on the hero"
+}

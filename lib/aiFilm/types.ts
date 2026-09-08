@@ -58,6 +58,8 @@ export type StoryArc = {
 
 export type StoryBible = {
   characterId: string;
+  /** Universe Lock: мир, в котором происходят все AI-сцены */
+  universeId: string;
   /** стиль зафиксирован профилем персонажа */
   visualStyle: string;
   world: string;
@@ -85,6 +87,8 @@ export type StoryBeat = {
   priority: Priority;
   requiresGeneration: boolean;
   gudiniVisible: boolean;
+  /** как исходная мысль автора переведена в события мира (Universe Lock), английский */
+  universeAdaptation: string;
   /** WHO / WHAT HE DOES / WHERE / WHAT CHANGES — английский, одно ясное действие */
   visualAction: string;
   location: string;
@@ -176,6 +180,8 @@ export type AiFilmPlan = {
   key: string;
   duration: number;
   character: { id: string; name: string; refHash: string; referenceCount: number };
+  universeId: string;
+  universe: { id: string; name: string; hash: string };
   bible: StoryBible;
   beats: StoryBeat[];
   groups: ContinuityGroup[];

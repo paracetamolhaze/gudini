@@ -6,6 +6,7 @@ import {
   type PlanConfig,
 } from "../lib/aiFilm/plan";
 import { normalizeVeoDuration } from "../lib/aiFilm/veo";
+import { loadUniverseProfile, universePromptBlock, universePlannerBlock } from "../lib/aiFilm/universe";
 import type { CharacterProfile, StoryBeat, StoryBible, DisplayMode, BeatPurpose, Priority } from "../lib/aiFilm/types";
 
 const words = (text: string, secPerWord = 0.4) =>
@@ -28,8 +29,9 @@ export const gudini: CharacterProfile = {
   dir: "/tmp/gudini",
 };
 const withRefs: CharacterProfile = { ...gudini, referenceFiles: ["/tmp/gudini/ref-1.png", "/tmp/gudini/ref-2.png"] };
+export const universe = loadUniverseProfile();
 
-const bible: StoryBible = normalizeBible({ bible: { mood: "tense", visualStyle: "photorealism (must be ignored)" }, storyArc: { gudiniRole: "a scout on a mission" } } as any, gudini);
+const bible: StoryBible = normalizeBible({ bible: { mood: "tense", visualStyle: "photorealism (must be ignored)" }, storyArc: { gudiniRole: "a scout on a mission" } } as any, gudini, universe);
 
 export const beat = (
   id: string, start: number, end: number, mode: DisplayMode,
@@ -37,6 +39,7 @@ export const beat = (
 ): StoryBeat => ({
   id, start, end,
   meaning: `смысл ${id}`, storyBeat: `бит ${id}`,
+  universeAdaptation: mode === "author" ? "" : `adapted ${id} into the village`,
   displayMode: mode,
   purpose: (o.purpose ?? "explain") as BeatPurpose,
   priority: (o.priority ?? "medium") as Priority,
@@ -50,7 +53,7 @@ export const beat = (
   suggestedDuration: end - start,
 });
 
-const cfg = (over: Partial<PlanConfig> = {}): PlanConfig => ({ key: "k", budgetUsd: 12, maxCoverage: 0.55, concurrency: 3, callMinutes: 2, overheadMinutes: 1, ...over });
+const cfg = (over: Partial<PlanConfig> = {}): PlanConfig => ({ key: "k", universe, budgetUsd: 12, maxCoverage: 0.55, concurrency: 3, callMinutes: 2, overheadMinutes: 1, ...over });
 
 /** условный 120-секундный ролик: 5 AI-сцен, остальное автор */
 const beats120 = () => [
@@ -102,7 +105,8 @@ test("биты из ответа модели: встык от 0 до конца
 
 test("Story Bible: стиль и мир берутся из профиля персонажа, модель их не переопределяет", () => {
   assert.equal(bible.visualStyle, gudini.styleLock);
-  assert.equal(bible.world, gudini.world);
+  assert.equal(bible.world, `${universe.name}: ${universe.architecture}`, "мир — из Universe Lock, не из ответа модели");
+  assert.equal(bible.universeId, universe.id);
   assert.equal(bible.characterId, "gudini");
   assert.equal(bible.storyArc.gudiniRole, "a scout on a mission");
 });
@@ -244,14 +248,14 @@ test("нормализация длительностей Veo: 4/6/8, с реф�
 
 test("промпт shot: WHO/WHAT/WHERE/WHAT CHANGES, вертикальный кадр, запреты", () => {
   const b = beat("B1", 0, 8, "full_ai", { visualAction: "Gudini enters an empty training ground and picks up the last scroll" });
-  const p = shotPrompt({ character: gudini, bible, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+  const p = shotPrompt({ character: gudini, universe, bible, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
   assert.match(p, /Action: Gudini enters/);
   assert.match(p, /Location: village rooftop/);
   assert.match(p, /After: state after B1/);
   assert.match(p, /vertical 9:16 portrait composition/);
   assert.match(p, /No text, no captions/);
   assert.match(p, /no hair color change/);
-  const h = shotPrompt({ character: gudini, bible, beat: { ...b, displayMode: "hybrid" }, prev: null, mode: "text", aspectRatio: "16:9" });
+  const h = shotPrompt({ character: gudini, universe, bible, beat: { ...b, displayMode: "hybrid" }, prev: null, mode: "text", aspectRatio: "16:9" });
   assert.match(h, /horizontal 16:9/);
 });
 
@@ -259,4 +263,40 @@ test("старый план не интерпретируется: просьб�
   assert.match(planVersionError({ version: 2 })!, /устарел/);
   assert.equal(planVersionError({ version: PLAN_VERSION }), null);
   assert.equal(planVersionError(null), null);
+});
+
+test("Universe Lock: мир из профиля попадает в сценариста, в план и в каждый промпт; без названия франшизы в промпте", () => {
+  assert.equal(universe.id, "gudini-shinobi-world");
+  const planner = universePlannerBlock(universe);
+  assert.match(planner, /UNIVERSE LOCK/);
+  assert.match(planner, /corporation → powerful clan/);
+  assert.match(planner, /anti-drift/);
+  assert.match(planner, /universeAdaptation/);
+  const block = universePromptBlock(universe);
+  assert.match(block, /hidden shinobi villages/);
+  assert.match(block, /Never drift into: generic medieval fantasy/);
+  assert.doesNotMatch(block, /Naruto/i, "в production-промпте нет названия франшизы");
+  const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
+  assert.equal(plan.universeId, "gudini-shinobi-world");
+  assert.equal(plan.universe.hash, universe.hash);
+  assert.equal(plan.bible.universeId, "gudini-shinobi-world");
+  for (const s of plan.shots) {
+    assert.match(s.prompt, /Universe \(the same in every shot\): Gudini Shinobi World/);
+    assert.match(s.prompt, /Never drift into/);
+    assert.doesNotMatch(s.prompt, /Naruto/i);
+  }
+  const ai = plan.beats.filter((b) => b.displayMode !== "author");
+  assert.ok(ai.every((b) => b.universeAdaptation.length > 0));
+});
+
+test("Universe Lock: биты из ответа модели сохраняют universeAdaptation только для AI-битов", () => {
+  const w = words(Array.from({ length: 40 }, (_, i) => `w${i}${i % 5 === 4 ? "." : ""}`).join(" "));
+  const phrases = phrasesFromWords(w);
+  const raw = [
+    { fromPhrase: 1, toPhrase: 3, displayMode: "full_ai", visualAction: "Gudini opens the clan ledger", universeAdaptation: "the company report becomes the clan ledger" },
+    { fromPhrase: 4, toPhrase: 8, displayMode: "author", universeAdaptation: "ignored for author" },
+  ];
+  const beats = beatsFromRaw(raw as any, phrases, 16);
+  assert.equal(beats[0].universeAdaptation, "the company report becomes the clan ledger");
+  assert.equal(beats[1].universeAdaptation, "");
 });

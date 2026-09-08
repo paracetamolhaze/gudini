@@ -29,6 +29,11 @@ app = FastAPI(title="Clipy", docs_url=f"{P}/api/docs", openapi_url=f"{P}/api/ope
 store = JobStore()
 queue = JobQueue(store, lambda job: pipeline.run_job(store, job))
 
+# the CUDA self-test takes ~15 s; warm it up at startup so the first page does not wait for it
+import threading as _threading
+
+_threading.Thread(target=hardware.detect, name="clipy-hw-warmup", daemon=True).start()
+
 
 def _auth_cookie_value(password: str) -> str:
     """Same cookie as the Gudini site (middleware.ts): sha256("gudini:<password>") in gudini_auth."""

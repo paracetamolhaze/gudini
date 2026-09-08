@@ -34,7 +34,7 @@ export type ManualBalances = Partial<Record<CostProvider, ManualBalance>>;
 const DATA_DIR = path.join(process.cwd(), "data");
 const SPEND_FILE = path.join(DATA_DIR, "spend-log.json");
 const MANUAL_FILE = path.join(DATA_DIR, "balances-manual.json");
-const PROVIDERS: CostProvider[] = ["anthropic", "openrouter", "brave", "elevenlabs", "openai", "local"];
+const PROVIDERS: CostProvider[] = ["anthropic", "openrouter", "brave", "elevenlabs", "openai", "google", "local"];
 
 const round = (v: number) => Math.round(v * 1e6) / 1e6;
 

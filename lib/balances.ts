@@ -16,7 +16,7 @@ import { mediaTransport, openrouterClaudeKey } from "./mediaLlm";
 export type BalanceLevel = "ok" | "low" | "empty" | "unknown" | "missing" | "error";
 
 export type ProviderBalance = {
-  id: "anthropic" | "openrouter" | "elevenlabs" | "brave";
+  id: "anthropic" | "openrouter" | "elevenlabs" | "brave" | "google";
   name: string;
   /** за что отвечает в Gudini */
   role: string;
@@ -212,7 +212,28 @@ async function brave(): Promise<ProviderBalance> {
   };
 }
 
+// ---------------------------------------------------------------- Google Cloud: сцены Veo для AI-фильма
+async function google(): Promise<ProviderBalance> {
+  const base = {
+    id: "google" as const,
+    name: "Google Cloud (Veo)",
+    role: "AI-фильм: сцены Veo 3.1 Fast",
+    consoleUrl: "https://console.cloud.google.com/billing",
+    manualAllowed: true,
+  };
+  // сайт не ходит в Google сам: учётные данные смонтированы в воркер; здесь видно только, подключено ли
+  const configured = Boolean(process.env.GCLOUD_ADC_FILE || process.env.GOOGLE_APPLICATION_CREDENTIALS);
+  if (!configured) return { ...base, level: "missing", value: "не подключён", note: "AI-фильм не запустится: нет учётных данных Google (ADC)" };
+  // остаток кредитов Google по API не отдаёт; списание видно в биллинге с задержкой до суток
+  return {
+    ...base,
+    level: "unknown",
+    value: "кредиты только в консоли",
+    note: "$0.08 за секунду видео (720p, без звука) · остаток и списания — в биллинге Google Cloud, отчёт отстаёт на сутки · введите остаток кредитов из консоли",
+  };
+}
+
 /** Все провайдеры параллельно; порядок — по доле в цене ролика. */
 export async function collectBalances(): Promise<ProviderBalance[]> {
-  return Promise.all([anthropic(), openrouter(), elevenlabs(), brave()]);
+  return Promise.all([anthropic(), google(), openrouter(), elevenlabs(), brave()]);
 }

@@ -1,6 +1,6 @@
 """End-to-end smoke test against a running Clipy backend.
 
-    python scripts/smoke_test.py --video path/to/source.mp4 --face path/to/face.jpg [--quality fast] [--base http://127.0.0.1:8500/clipy/api]
+    python scripts/smoke_test.py --video path/to/source.mp4 --face path/to/face.jpg [--base http://127.0.0.1:8500/clipy/api]
 
 Uploads the video, waits for the analysis, uploads the face, submits a job, waits for it, downloads result.mp4
 and checks duration / fps / audio against the source.
@@ -52,7 +52,6 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True)
     ap.add_argument("--face", required=True)
-    ap.add_argument("--quality", default="fast")
     ap.add_argument("--base", default="http://127.0.0.1:8500/clipy/api")
     ap.add_argument("--out", default="")
     a = ap.parse_args()
@@ -79,7 +78,7 @@ def main() -> int:
     face = post_file(f"{base}/faces", Path(a.face))["face"]
     print("face:", face["id"], "warnings:", face["warnings"])
 
-    job = post_json(f"{base}/jobs", {"source_id": src["id"], "face_ids": [face["id"]], "face_swap": True, "target_person": "auto", "quality": a.quality})["job"]
+    job = post_json(f"{base}/jobs", {"source_id": src["id"], "assignments": [{"person": "auto", "face_ids": [face["id"]]}]})["job"]
     print("job:", job["id"])
     t1 = time.time()
     last = ""

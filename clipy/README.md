@@ -1,7 +1,7 @@
 # Clipy — AI Reels Remaker (вкладка /clipy сайта Гудини)
 
 Ссылка на TikTok / Instagram Reels / YouTube Shorts или свой MP4 + фото своего лица → тот же ролик, где
-лицо главного человека заменено на ваше. Движения, камера, монтаж, fps, длительность и звук сохраняются.
+лица выбранных людей заменены на ваши. Движения, камера, монтаж, fps, длительность и звук сохраняются.
 Опционально заменяется фон. Всё работает локально на GPU, платных API нет.
 
 ```
@@ -94,12 +94,12 @@ Instagram часто требует вход. Экспортируйте cookies
 ## Smoke-тест
 
 ```
-python scripts/smoke_test.py --video clip.mp4 --face me.jpg --quality fast --base http://127.0.0.1:8500/clipy/api
+python scripts/smoke_test.py --video clip.mp4 --face me.jpg --base http://127.0.0.1:8500/clipy/api
 ```
 
 ## Если что-то не так
 
 * `Backend: CPU` при наличии NVIDIA — проверьте `docker run --rm --gpus all nvidia/cuda:12.9.1-base-ubuntu24.04 nvidia-smi`.
-* `GPU ran out of memory` — режим Balanced/Fast; раннер и сам повторяет с меньшим числом потоков и pixel boost.
-* `Instagram requires authentication` — добавьте `cookies.txt`.
-* Логи: `docker logs gudini-clipy`, в томе `data/logs/clipy.log`, у задачи `data/jobs/<id>/log.txt`, кнопка «Show log» в интерфейсе.
+* «Видеокарте не хватило памяти» — раннер сам повторяет с меньшим числом потоков и меньшей прорисовкой; помогает закрыть другие программы, использующие видеокарту.
+* «Instagram требует входа в аккаунт» — добавьте `cookies.txt`.
+* Логи: `docker logs gudini-clipy`, в томе `data/logs/clipy.log`, у задачи `data/jobs/<id>/log.txt`, кнопка «Показать журнал» в интерфейсе.

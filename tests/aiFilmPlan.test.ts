@@ -276,9 +276,10 @@ test("Universe Lock: мир из профиля попадает в сценар
   assert.match(planner, /CONTENT IS LITERAL/);
   assert.match(planner, /Do NOT translate the subject into shinobi metaphors/);
   assert.match(planner, /universeAdaptation/);
-  assert.match(planner, /red-and-gold armored hero/);
+  assert.match(planner, /Name well-known characters directly/);
+  assert.match(planner, /silent character inside the story/);
   const block = universePromptBlock(universe);
-  assert.match(block, /hidden shinobi villages/);
+  assert.match(block, /hidden shinobi village/);
   assert.match(block, /Content is literal/);
   assert.match(block, /Never drift into: photorealism/);
   assert.doesNotMatch(block, /Naruto/i, "в production-промпте нет названия франшизы");

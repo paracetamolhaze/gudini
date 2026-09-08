@@ -99,8 +99,8 @@ export function universePlannerBlock(u: UniverseProfile): string {
     `Если автор говорит про гибель героя в броне, в кадре гибель героя в броне; про титана с перчаткой — титан с перчаткой; про новую команду — эта команда. ` +
     `Правила: ${u.contentRules.join("; ")}.\n` +
     `Запрещено: ${u.forbiddenDrift}.\n` +
-    `Для каждого AI-бита заполни universeAdaptation (английский, 1–2 предложения): ЧТО ИМЕННО из сказанного показано в кадре и как узнаваемо нарисованы персонажи ` +
-    `(например «Tony Stark's sacrifice → the red-and-gold armored hero on one knee, chest reactor flickering out, Gudini kneeling beside him»). Здесь имена писать МОЖНО — это пояснение для автора. ` +
-    `В visualAction (он идёт в генератор видео) имена франшиз и персонажей НЕ пишутся: только узнаваемые визуальные признаки (armor colors, gauntlet, shield, metal arm, cape).`
+    `Для каждого AI-бита заполни universeAdaptation (английский, 1–2 предложения): ЧТО ИМЕННО из сказанного показано в кадре ` +
+    `(например «Tony Stark's sacrifice → Tony Stark in his red-and-gold armor on one knee, chest reactor flickering out, Gudini kneeling beside him»). ` +
+    `В visualAction (он идёт в генератор видео) известных персонажей называй прямо по имени и добавляй короткий узнаваемый облик (armor colors, gauntlet, shield, metal arm, cape) — генератор знает, кто это.`
   );
 }

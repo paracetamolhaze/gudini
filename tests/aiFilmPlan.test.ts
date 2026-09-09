@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { phrasesFromWords, beatsFromRaw, normalizeBible, MIN_AI_BEAT_SEC, MAX_AI_BEAT_SEC } from "../lib/aiFilm/story";
+import { phrasesFromWords, beatsFromRaw, normalizeBible, renameHeroToCharacter, MIN_AI_BEAT_SEC, MAX_AI_BEAT_SEC } from "../lib/aiFilm/story";
 import {
   buildFilmPlan, buildShots, groupBeats, shotKey, shotPrompt, estimateWallMinutes, reduceToBudget, planVersionError, enforceShotBudget, closeTinyAuthorGaps, PLAN_VERSION,
   type PlanConfig,
@@ -269,6 +269,17 @@ test("старый план не интерпретируется: просьб�
   assert.match(planVersionError({ version: 2 })!, /устарел/);
   assert.equal(planVersionError({ version: PLAN_VERSION }), null);
   assert.equal(planVersionError(null), null);
+});
+
+test("Герой истории и постоянный персонаж — один человек в кадре", () => {
+  const bs = [beat("B1", 0, 8, "full_ai", { visualAction: "Kasper checks Kasper's parachute" })];
+  bs[0].motion = "0-3s: Kasper falls.";
+  const n = renameHeroToCharacter(bs, "Kasper", "Gudini");
+  assert.equal(n, 3);
+  assert.equal(bs[0].visualAction, "Gudini checks Gudini's parachute");
+  assert.equal(bs[0].motion, "0-3s: Gudini falls.");
+  assert.equal(renameHeroToCharacter(bs, "", "Gudini"), 0);
+  assert.equal(renameHeroToCharacter(bs, "Gudini", "Gudini"), 0);
 });
 
 test("Промпт шота: действие впереди, состав кадра назван, лишних людей нет", () => {

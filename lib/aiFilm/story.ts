@@ -67,8 +67,8 @@ ${universePlannerBlock(universe)}
 ${character.name} молчит, никогда не смотрит в камеру и не обращается к зрителю. Визуально он всегда один и тот же: лицо, волосы, силуэт и цветовая схема не меняются.
 
 СКОЛЬКО ЛЮДЕЙ В КАДРЕ — РОВНО СТОЛЬКО, СКОЛЬКО В РЕЧИ. Это жёсткое правило.
-- Речь про одного безымянного человека («парень заказал», «чувак прыгнул», «один тип решил») → этим человеком ЯВЛЯЕТСЯ ${character.name}. В кадре он ОДИН. Отдельного «парня» не выдумывать.
-- Речь называет конкретных людей (Tony Stark, Каспер, друг, брат) → рисуй именно их, столько, сколько названо. ${character.name} появляется только если он может быть ОДНИМ ИЗ НИХ; иначе ставь gudiniVisible=false и рисуй сцену без него.
+- Речь про одного человека, безымянного или названного по имени («парень заказал», «Каспер прыгнул») → этого человека ИГРАЕТ ${character.name}. В кадре он ОДИН. В supportingCharacters этого человека НЕ добавлять: это тот же самый персонаж, а не второй. Имя героя истории запиши в bible.playedByGudini.
+- Речь про мировых знаменитостей (Tony Stark, Thanos) → рисуй их самих; ${character.name} появляется рядом, только если речь подразумевает ещё одного участника, иначе gudiniVisible=false и playedByGudini пустой.
 - Речь про двоих — двое, про троих — трое. Ни одного лишнего человека сверх этого.
 - ЗАПРЕЩЕНО добавлять наблюдателей, свидетелей, прохожих, толпу и «кого-то рядом», кого нет в речи. Никаких фигур на заднем плане, которые просто смотрят.
 Ничего не переводи в метафоры: если автор говорит про фильм, игру, компанию или человека — в кадре именно этот фильм, игра, компания, человек.
@@ -98,7 +98,7 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
- "bible": {"mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
+ "bible": {"mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя истории, которого играет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
  "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "universeAdaptation": "english: how the author's idea is translated into this world", "visualAction": "english", "motion": "english: 0-3s: ... 3-6s: ... 6-8s: ...", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english"}]}
 Для author-битов universeAdaptation/visualAction/location/state можно оставить пустыми строками, gudiniVisible=false.`;
 }
@@ -134,6 +134,29 @@ const PURPOSES: BeatPurpose[] = ["hook", "setup", "explain", "example", "reveal"
 const SHOTS: ShotType[] = ["close", "medium", "medium_wide", "wide", "full_body"];
 const FUNCS = ["opponent", "guide", "witness", "partner", "background"] as const;
 
+/** Имя героя истории в текстах сцен заменяется на имя постоянного персонажа. */
+export function renameHeroToCharacter(beats: StoryBeat[], hero: string, characterName: string): number {
+  const name = hero.trim();
+  if (!name || name.toLowerCase() === characterName.toLowerCase()) return 0;
+  const safe = name.replace(/[^A-Za-z0-9 ]/g, "").trim();
+  const re = safe ? new RegExp("\\b" + safe + "('s|’s)?" + "\\b", "gi") : null;
+  if (!re) return 0;
+  let count = 0;
+  const fix = (v: string) =>
+    v.replace(re, (m) => {
+      count++;
+      return /['’]s$/.test(m) ? `${characterName}'s` : characterName;
+    });
+  for (const b of beats) {
+    b.visualAction = fix(b.visualAction);
+    b.motion = fix(b.motion);
+    b.stateBefore = fix(b.stateBefore);
+    b.stateAfter = fix(b.stateAfter);
+    b.universeAdaptation = fix(b.universeAdaptation);
+  }
+  return count;
+}
+
 export function normalizeBible(raw: RawStory, character: CharacterProfile, universe: UniverseProfile): StoryBible {
   const b = raw.bible ?? {};
   const a = raw.storyArc ?? {};
@@ -145,6 +168,13 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     }))
     .filter((c: any) => c.appearance)
     .slice(0, 6);
+  // Тот, кого играет постоянный персонаж, — это он сам, а не второй человек в кадре.
+  // Без этого планировщик писал «Гудини играет Каспера» и одновременно заводил Каспера
+  // отдельным персонажем, и в кадре оказывалось двое.
+  const playedByGudini = str(b.playedByGudini);
+  const cast = playedByGudini
+    ? supporting.filter((c: any) => c.name.toLowerCase() !== playedByGudini.toLowerCase())
+    : supporting;
   return {
     characterId: character.id,
     universeId: universe.id,
@@ -156,7 +186,8 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     cameraLanguage: str(b.cameraLanguage, "steady medium shots, slow push-ins"),
     locations: arr(b.locations),
     importantObjects: arr(b.importantObjects),
-    supportingCharacters: supporting,
+    supportingCharacters: cast,
+    playedByGudini,
     continuityRules: arr(b.continuityRules).slice(0, 8),
     storyArc: {
       understand: str(a.understand),
@@ -289,5 +320,8 @@ export async function planStory(args: {
   const bible = normalizeBible(parsed, args.character, args.universe);
   const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration);
   if (!beats.length) throw new Error("AI Film Story: модель не вернула биты");
+  // Герой истории и постоянный персонаж — один человек: в тексте сцен остаётся одно имя,
+  // иначе Veo рисует и «Каспера», и Гудини рядом.
+  renameHeroToCharacter(beats, bible.playedByGudini, args.character.name);
   return { bible, beats, phrases };
 }

@@ -69,6 +69,8 @@ export type StoryBible = {
   locations: string[];
   importantObjects: string[];
   supportingCharacters: SupportingCharacter[];
+  /** кого из людей истории играет постоянный персонаж (пусто — никого) */
+  playedByGudini: string;
   continuityRules: string[];
   storyArc: StoryArc;
 };

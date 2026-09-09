@@ -220,6 +220,7 @@ def run_analyze_job(store: JobStore, job: Job) -> None:
             job.log.write(f"  {p['id']}: seen in {p['frames_seen']} frames, coverage {p['coverage']:.0%}, ref frame {p['reference_frame']} pos {p['reference_position']}, nearest other {p['nearest_other_distance']}")
         src["analysis"] = {k: v for k, v in analysis.items() if k != "ok"}
         src["persons"] = persons
+        src["skipped_faces"] = int(analysis.get("skipped_faces") or 0)
         tracker.done(stage, f"{len(persons)} people")
         tracker.done("done")
         src["status"] = "ready"

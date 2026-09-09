@@ -605,7 +605,13 @@ export default function App() {
           {assignments.length > 0 && <span className="status success">Замен: {assignments.length}</span>}
         </div>
         {!sourceReady && <p className="hint">Сначала добавьте видео.</p>}
-        {sourceReady && persons.length === 0 && <div className="box warn"><b>В этом видео не найдено лицо.</b>Заменить лицо не получится, но можно заменить фон.</div>}
+        {sourceReady && persons.length === 0 && (
+          <div className="box warn">
+            <b>В этом видео не найдено лицо, пригодное для замены.</b>
+            {source?.skipped_faces ? "Детектор находил похожие на лицо места, но это не лица человека или они слишком мелкие: так бывает с игровым видео, рисунками и людьми на заднем плане. " : "Лицо должно быть видно и занимать заметную часть кадра. "}
+            Заменить фон при этом можно.
+          </div>
+        )}
         {sourceReady && persons.length > 0 && (
           <>
             <p className="hint" style={{ marginBottom: 10 }}>Кого не выбрали, останется без изменений.</p>

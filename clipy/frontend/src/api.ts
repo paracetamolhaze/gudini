@@ -98,6 +98,7 @@ export type Source = {
   error: ApiError | null;
   info?: { width: number; height: number; fps: number; duration: number; has_audio: boolean };
   persons: Person[];
+  skipped_faces?: number;
   video_url: string | null;
   poster_url: string | null;
   job?: { id: string; status: string; stage: string; stage_label: string; progress: number; stages: Stage[] };

@@ -24,6 +24,11 @@ FF_DIR = (HERE.parent.parent.parent / "engines" / "facefusion").resolve()
 # иначе один человек остаётся разбитым на несколько.
 ASSIGN_SIM = 0.42
 MERGE_SIM = 0.40
+# Минимальный размер лица, которое имеет смысл заменять, в пикселях по большей стороне.
+MIN_FACE_PX = 64
+# Оценка ключевых точек 2dfan4: у настоящего лица 0.95 и выше, у случайного пятна или предмета 0.4.
+# Это надёжнее размера и уверенности детектора: в игровом ролике детектор «находил» череп и щит.
+MIN_LANDMARK = 0.6
 
 
 def emit(obj: dict) -> None:
@@ -206,10 +211,28 @@ def analyze_video(path: str, out_dir: Path, max_samples: int, providers: list[st
     def frames_of(c: dict) -> int:
         return len({m[0] for m in c["members"]})
 
+    def median_of(c: dict, value) -> float:
+        vals = sorted(value(f) for _, f in c["members"])
+        return vals[len(vals) // 2]
+
+    def median_size(c: dict) -> float:
+        return median_of(c, lambda f: max(float(f.bounding_box[2] - f.bounding_box[0]), float(f.bounding_box[3] - f.bounding_box[1])))
+
+    def median_landmark(c: dict) -> float:
+        return median_of(c, lambda f: float(f.score_set.get("landmarker", 0.0)))
+
+    size_floor = max(MIN_FACE_PX, 0.06 * min(width, height))
+
     def significant(c: dict) -> bool:
+        # Не лицо: ключевые точки не складываются в глаза, нос и рот.
+        if median_landmark(c) < MIN_LANDMARK:
+            return False
+        # Слишком мелкое лицо заменять нечем: движок работает с вырезкой 256-512 пикселей.
+        if median_size(c) < size_floor:
+            return False
         return (frames_of(c) >= 2 and frames_of(c) / float(max(1, sampled)) >= 0.02) or area_of(c) >= 0.03
 
-    keep = [c for c in clusters if significant(c)] or clusters[:1]
+    keep = [c for c in clusters if significant(c)]
     dropped = len(clusters) - len(keep)
     if dropped:
         sys.stderr.write(f"skipped {dropped} incidental face(s)\n")
@@ -262,7 +285,7 @@ def analyze_video(path: str, out_dir: Path, max_samples: int, providers: list[st
             "thumbnail": thumb.name,
             "sample": face_to_dict(ref_face, width, height),
         })
-    return {"ok": True, "frames_sampled": sampled, "frames_total": total, "fps": fps, "width": width, "height": height, "persons": persons}
+    return {"ok": True, "frames_sampled": sampled, "frames_total": total, "fps": fps, "width": width, "height": height, "skipped_faces": dropped, "persons": persons}
 
 
 def analyze_image(path: str, out_dir: Path, providers: list[str]) -> dict:

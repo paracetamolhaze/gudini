@@ -64,11 +64,18 @@ ${characterBlock(character)}
 
 ${universePlannerBlock(universe)}
 
-${character.name} — не рассказчик, а обычный персонаж внутри истории, которую рассказывает автор: он молчит, никогда не смотрит в камеру и не обращается к зрителю, а просто играет роль в событиях (боец рядом с героями, свидетель на поле боя, тот, кто поднимает шлем павшего героя). Сцена показывает САМИХ героев и события речи. Визуально ${character.name} всегда один и тот же: лицо, волосы, силуэт, цветовая схема и shinobi-образ не меняются. Персонажей истории столько, сколько нужно речи (до 6 значимых на ролик), каждый узнаваем по своим признакам и одинаков от сцены к сцене. Ничего не переводи в метафоры мира: если автор говорит про фильм, игру, компанию или человека — в кадре именно этот фильм, игра, компания, человек, нарисованные в стиле мира.
+${character.name} молчит, никогда не смотрит в камеру и не обращается к зрителю. Визуально он всегда один и тот же: лицо, волосы, силуэт и цветовая схема не меняются.
+
+СКОЛЬКО ЛЮДЕЙ В КАДРЕ — РОВНО СТОЛЬКО, СКОЛЬКО В РЕЧИ. Это жёсткое правило.
+- Речь про одного безымянного человека («парень заказал», «чувак прыгнул», «один тип решил») → этим человеком ЯВЛЯЕТСЯ ${character.name}. В кадре он ОДИН. Отдельного «парня» не выдумывать.
+- Речь называет конкретных людей (Tony Stark, Каспер, друг, брат) → рисуй именно их, столько, сколько названо. ${character.name} появляется только если он может быть ОДНИМ ИЗ НИХ; иначе ставь gudiniVisible=false и рисуй сцену без него.
+- Речь про двоих — двое, про троих — трое. Ни одного лишнего человека сверх этого.
+- ЗАПРЕЩЕНО добавлять наблюдателей, свидетелей, прохожих, толпу и «кого-то рядом», кого нет в речи. Никаких фигур на заднем плане, которые просто смотрят.
+Ничего не переводи в метафоры: если автор говорит про фильм, игру, компанию или человека — в кадре именно этот фильм, игра, компания, человек.
 
 Сначала пойми историю целиком и заполни storyArc: что зритель должен понять; роль героя; начало; развитие; конфликт или изменение; кульминация; финальный смысл. Не перегружай символизмом: простая читаемая история.
 
-Персонажи истории (supportingCharacters): те, о ком говорит автор, до 6 значимых на ролик; у каждого имя, функция opponent, guide, witness, partner или background и короткое узнаваемое описание внешности. Не создавать толпы похожих людей, не путать, кто главный в кадре.
+Персонажи истории (supportingCharacters): ТОЛЬКО те, кого автор прямо называет или подразумевает, до 6 на ролик; у каждого имя, функция opponent, guide, witness, partner или background и короткое узнаваемое описание внешности. Если история про одного человека и его играет ${character.name}, список остаётся пустым. Не выдумывать людей ради «оживления» кадра.
 
 Раздели речь на биты по смыслу (обычно 4–12 с; биты покрывают ВСЕ фразы по порядку без пропусков и пересечений; границы — номера фраз). Для каждого бита выбери displayMode:
 - "author": автор говорит панчлайн; важна его эмоция; плотное объяснение; прямой контакт со зрителем; AI ничего не добавляет.
@@ -78,7 +85,11 @@ ${character.name} — не рассказчик, а обычный персон�
 continuityRequired: true только если действие обязано быть непрерывным без склейки (вошёл → идёт → находит) и не помещается в 8 с; тогда допустим бит до ${MAX_AI_BEAT_SEC} с (клип 8 с + продолжение 7 с). Это дорого — используй редко.
 Не злоупотребляй full_ai: обычно первым идёт hook на 5–8 с, дальше AI появляется 4–6 раз на 2 минуты речи.
 
-Каждая AI-сцена: ONE SHOT = ONE CLEAR ACTION, понятная за 1–2 секунды. visualAction (английский) обязан содержать WHO (${character.name}), WHAT HE DOES, WHERE, WHAT CHANGES. Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "${character.name} enters an empty training ground. Every target post has fallen except one. He slowly picks up the single scroll left on it." Без десяти действий сразу, без сюрреалистического мусора, без текста/надписей/логотипов в кадре, без крови и графического насилия. Известные персонажи и реальные люди в кадре рисуются как персонажи этого аниме: называй их прямо по имени (Tony Stark, Thanos, Bucky Barnes, Captain America, Doctor Doom) и добавляй короткий узнаваемый облик («Tony Stark in his red-and-gold armor with a glowing chest reactor», «Thanos, a giant purple titan with a golden gauntlet», «Bucky Barnes with his silver metal arm») — генератор знает, кто это. Места берутся из истории (город, поле битвы, лаборатория, корабль), деревня ниндзя не обязательна.
+Каждая AI-сцена: ONE SHOT = ONE CLEAR ACTION, понятная за 1–2 секунды. visualAction (английский) обязан содержать WHO, WHAT HE DOES, WHERE, WHAT CHANGES.
+
+ПРЕДМЕТЫ ИЗ РЕЧИ НАЗЫВАЙ ТОЧНО. Если в речи есть вещь, она в кадре именно такая, какой её назвали, со своими приметами: «заказал за 5 долларов на маркетплейсе» → телефон в руке, на экране карточка товара с ценой и кнопкой заказа; пришедшая посылка → картонная коробка с почтовой наклейкой и пупыркой внутри. Обобщения запрещены: не «a small package», не «an object», не «some gear» — генератор дорисовывает вместо них случайный мусор (в прошлом ролике получился пакет чипсов).
+
+motion (английский) — раскадровка движения внутри клипа по секундам, три отрезка: «0-3s: … 3-6s: … 6-8s: …». В каждом отрезке: что делает тело, куда движется камера, что происходит с предметами и одеждой. Физика настоящая: падение ускоряется, ткань и волосы бьёт ветром, обрывки уносит назад и вверх мимо камеры, ничто не висит в воздухе. Без замедления, если оно не нужно по смыслу. Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "${character.name} enters an empty training ground. Every target post has fallen except one. He slowly picks up the single scroll left on it." Без десяти действий сразу, без сюрреалистического мусора, без текста/надписей/логотипов в кадре, без крови и графического насилия. Известные персонажи и реальные люди в кадре рисуются как персонажи этого аниме: называй их прямо по имени (Tony Stark, Thanos, Bucky Barnes, Captain America, Doctor Doom) и добавляй короткий узнаваемый облик («Tony Stark in his red-and-gold armor with a glowing chest reactor», «Thanos, a giant purple titan with a golden gauntlet», «Bucky Barnes with his silver metal arm») — генератор знает, кто это. Места берутся из истории (город, поле битвы, лаборатория, корабль), деревня ниндзя не обязательна.
 Кадр вертикальный 9:16 (для hybrid — горизонтальный 16:9): герой около центра по вертикали, запас над головой, ничего важного у краёв. shotType: close | medium | medium_wide | wide | full_body. Стейты: stateBefore/stateAfter (английский, коротко) — чтобы соседние сцены не противоречили (взял свиток — дальше он со свитком).
 continuityGroup: одинаковая метка у ДВУХ соседних AI-битов только если это одна непрерывная сцена без монтажной склейки (вошёл → продолжает идти и находит предмет). Иначе null. Не строй длинные цепочки.
 priority: "high" — hook, ключевой reveal, climax; "medium" — примеры, история; "low" — украшение, которое можно убрать без потери смысла. Бюджет ограничен: low-сцены уберут первыми.
@@ -88,7 +99,7 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "universeAdaptation": "english: how the author's idea is translated into this world", "visualAction": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english"}]}
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "universeAdaptation": "english: how the author's idea is translated into this world", "visualAction": "english", "motion": "english: 0-3s: ... 3-6s: ... 6-8s: ...", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english"}]}
 Для author-битов universeAdaptation/visualAction/location/state можно оставить пустыми строками, gudiniVisible=false.`;
 }
 
@@ -103,6 +114,7 @@ type RawBeat = {
   gudiniVisible?: boolean;
   universeAdaptation?: string;
   visualAction?: string;
+  motion?: string;
   location?: string;
   stateBefore?: string;
   stateAfter?: string;
@@ -220,6 +232,7 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       universeAdaptation: mode !== "author" ? str(e.universeAdaptation) : "",
       visualAction: str(e.visualAction),
       location: str(e.location),
+      motion: mode !== "author" ? str(e.motion) : "",
       stateBefore: str(e.stateBefore),
       stateAfter: str(e.stateAfter),
       continuityGroup: mode !== "author" && typeof e.continuityGroup === "string" && e.continuityGroup.trim() ? e.continuityGroup.trim() : null,

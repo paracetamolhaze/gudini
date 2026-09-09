@@ -19,7 +19,7 @@ import type {
  * защищённых (hook / reveal / climax с high).
  */
 
-export const PLAN_VERSION = 3;
+export const PLAN_VERSION = 4;
 export const VEO_MODEL = process.env.AI_FILM_MODEL || "veo-3.1-fast-generate-001";
 /** сцены без героя можно направлять в другую модель (например, Lite) — пока та же */
 export const ENVIRONMENT_MODEL = process.env.AI_FILM_ENVIRONMENT_MODEL || VEO_MODEL;
@@ -81,27 +81,16 @@ export function shotPrompt(args: {
 }): string {
   const { character, universe, bible, beat, prev, mode, aspectRatio } = args;
   const lines: string[] = [];
-  lines.push(`Style: ${bible.visualStyle}. Mood: ${bible.mood}. Lighting: ${bible.lighting}.`);
-  lines.push(universePromptBlock(universe));
-  if (beat.gudiniVisible) lines.push(characterBlock(character));
-  // в промпт идут только персонажи, которые упомянуты в действии этой сцены: список всех
-  // шести в каждой сцене заставлял генератор рисовать лишних людей
-  const text = `${beat.visualAction} ${beat.stateBefore} ${beat.stateAfter}`.toLowerCase();
-  const inScene = bible.supportingCharacters.filter((c) =>
-    c.name
-      .split(/[\s/()]+/)
-      .filter((w) => w.length >= 3)
-      .some((w) => text.includes(w.toLowerCase())),
-  );
-  if (inScene.length) {
-    lines.push(`Characters in this shot: ${inScene.map((c) => `${c.name}: ${c.appearance}`).join("; ")}.`);
-  }
+  // Порядок важен: Veo сильнее слушает начало промпта, поэтому сперва действие и движение,
+  // а стиль, мир и запреты уходят вниз. Раньше первые полторы тысячи знаков были служебными,
+  // и на само действие оставалась одна фраза — отсюда выдуманные предметы в кадре.
   if (mode === "extend") {
     lines.push(`Continue the same shot without a cut. Previous moment: ${prev?.stateAfter || prev?.visualAction || "the scene continues"}.`);
   } else if (beat.stateBefore) {
     lines.push(`Before: ${beat.stateBefore}.`);
   }
   lines.push(`Action: ${beat.visualAction}`);
+  if (beat.motion) lines.push(`Motion beat by beat: ${beat.motion}`);
   if (beat.location) lines.push(`Location: ${beat.location}.`);
   if (beat.stateAfter) lines.push(`After: ${beat.stateAfter}.`);
   const shot = beat.shotType.replace("_", "-");
@@ -110,7 +99,35 @@ export function shotPrompt(args: {
       ? `Framing: vertical 9:16 portrait composition, ${shot} shot, subject near the vertical center with headroom, nothing important at the edges.`
       : `Framing: horizontal 16:9 composition, ${shot} shot, subject centered, nothing important at the edges.`,
   );
-  lines.push(`Camera: ${beat.camera || bible.cameraLanguage}.`);
+  lines.push(`Camera: ${beat.camera || bible.cameraLanguage}. Single continuous take, no cuts inside the shot.`);
+  lines.push(
+    "Physics: real weight and speed — falling bodies accelerate, cloth and hair are hammered by the airflow, " +
+      "torn pieces are swept away past the camera and out of frame; nothing hovers, floats or drifts in place; no slow motion unless the action asks for it.",
+  );
+
+  // Люди в кадре: только те, кого назвала речь. Наблюдателей и прохожих быть не должно —
+  // в прошлом ролике рядом с героем истории каждый раз вырастал лишний зритель.
+  const text = `${beat.visualAction} ${beat.motion} ${beat.stateBefore} ${beat.stateAfter}`.toLowerCase();
+  const inScene = bible.supportingCharacters.filter((c) =>
+    c.name
+      .split(/[\s/()]+/)
+      .filter((w) => w.length >= 3)
+      .some((w) => text.includes(w.toLowerCase())),
+  );
+  const cast: string[] = [];
+  if (beat.gudiniVisible) cast.push(character.name);
+  for (const c of inScene) cast.push(c.name);
+  lines.push(
+    `People in frame: exactly ${cast.length || "as described above"}${cast.length ? ` — ${cast.join(", ")}` : ""}. ` +
+      "No other people at all: no bystanders, no onlookers, no crowd, no figures in the background.",
+  );
+  if (beat.gudiniVisible) lines.push(characterBlock(character));
+  if (inScene.length) {
+    lines.push(`Characters in this shot: ${inScene.map((c) => `${c.name}: ${c.appearance}`).join("; ")}.`);
+  }
+
+  lines.push(`Style: ${bible.visualStyle}. Mood: ${bible.mood}. Lighting: ${bible.lighting}.`);
+  lines.push(universePromptBlock(universe));
   if (bible.continuityRules.length) lines.push(`Continuity: ${bible.continuityRules.slice(0, 8).join("; ")}.`);
   lines.push(`${character.negative ? `${character.negative}. ` : ""}No text, no captions, no subtitles, no logos, no watermarks, no split screen, no talking to camera.`);
   return lines.join("\n");

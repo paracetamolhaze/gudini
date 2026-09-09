@@ -50,6 +50,7 @@ export const beat = (
   gudiniVisible: mode !== "author" && (o.gudiniVisible ?? true),
   visualAction: mode === "author" ? "" : o.visualAction ?? `Gudini does action ${id}`,
   location: mode === "author" ? "" : "village rooftop",
+  motion: mode === "author" ? "" : "0-3s: he steps forward. 3-6s: camera pushes in. 6-8s: he stops.",
   stateBefore: "he stands", stateAfter: `state after ${id}`,
   continuityGroup: o.continuityGroup ?? null,
   continuityRequired: Boolean(o.continuityGroup),
@@ -268,6 +269,20 @@ test("старый план не интерпретируется: просьб�
   assert.match(planVersionError({ version: 2 })!, /устарел/);
   assert.equal(planVersionError({ version: PLAN_VERSION }), null);
   assert.equal(planVersionError(null), null);
+});
+
+test("Промпт шота: действие впереди, состав кадра назван, лишних людей нет", () => {
+  const b = beat("B1", 0, 8, "full_ai", { visualAction: "Gudini opens a cardboard parcel with a shipping label" });
+  const p = shotPrompt({ character: withRefs, universe, bible, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+  const action = p.indexOf("Action:");
+  assert.ok(action >= 0 && action < 200, `действие должно быть в начале промпта, а оно на ${action}`);
+  assert.ok(action < p.indexOf("Style:"), "стиль должен идти после действия");
+  assert.match(p, /Motion beat by beat: 0-3s/);
+  assert.match(p, /People in frame: exactly 1 — Gudini/);
+  assert.match(p, /No other people at all/);
+  assert.match(p, /nothing hovers, floats or drifts in place/);
+  const alone = beat("B2", 0, 8, "full_ai", { gudiniVisible: false });
+  assert.match(shotPrompt({ character: withRefs, universe, bible, beat: alone, prev: null, mode: "text", aspectRatio: "9:16" }), /People in frame: exactly as described above/);
 });
 
 test("Устаревший план называет, что именно разошлось", () => {

@@ -92,6 +92,8 @@ export type StoryBeat = {
   /** WHO / WHAT HE DOES / WHERE / WHAT CHANGES — английский, одно ясное действие */
   visualAction: string;
   location: string;
+  /** движение по секундам внутри клипа: что делает тело, куда идёт камера, как ведут себя предметы */
+  motion: string;
   stateBefore: string;
   stateAfter: string;
   /** одинаковая метка у соседних AI-битов = одна непрерывная сцена (extension) */

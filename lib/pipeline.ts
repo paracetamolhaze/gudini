@@ -156,7 +156,7 @@ export async function processProject(id: string): Promise<void> {
       console.warn("Уровень записи не измерен (ffmpeg astats): проверка пропущена");
     }
     const silences = await detectSilences("audio_full.wav", dir, duration);
-    const edges = edgesFromSilences(silences, duration);
+    const edges = { ...edgesFromSilences(silences, duration) };
 
     // --- Распознавание речи ДО вырезки (на полном таймлайне) ---
     setStep(id, "Распознавание речи", 10);
@@ -215,6 +215,23 @@ export async function processProject(id: string): Promise<void> {
         console.warn("Whisper недоступен:", e);
       }
     }
+    // Тишина до первого слова: ролик обязан начинаться с речи. Детектор тишины ловит
+    // её только если она начинается в первые 0.3 с и запись не тихая, поэтому в готовом
+    // ролике оставалось 2.7 с пустоты перед первым словом — для короткого видео это провал.
+    if (rawWords?.length) {
+      const firstWord = rawWords[0].start;
+      const lastWord = rawWords[rawWords.length - 1].end;
+      const head = Math.max(edges.start, Math.max(0, firstWord - 0.15));
+      const tail = Math.min(edges.end, Math.min(duration, lastWord + 0.35));
+      if (head > edges.start + 0.05 || tail < edges.end - 0.05) {
+        console.log(
+          `Края по речи: начало ${edges.start.toFixed(2)} → ${head.toFixed(2)} с, конец ${edges.end.toFixed(2)} → ${tail.toFixed(2)} с`,
+        );
+        edges.start = head;
+        if (tail - head > 3) edges.end = tail;
+      }
+    }
+
     // Без распознавания субтитры раньше молча раскладывались по сценарию «на глаз»,
     // и оплаченный монтаж выходил с плывущими подписями. Теперь это ошибка стадии;
     // старое поведение включается явно: SUBTITLES_FROM_SCRIPT=1.

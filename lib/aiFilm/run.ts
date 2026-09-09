@@ -34,6 +34,18 @@ export function planKey(words: Word[], script: string, character: { id: string; 
   return `${textHash(speech)}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:${character.id}@${character.refHash}:${universe.id}@${universe.hash}`;
 }
 
+/** Что именно разошлось между сохранённым планом и текущими данными — по частям ключа. */
+export function planKeyDiff(saved: string, current: string): string[] {
+  const names = ["речь", "сценарий", "версия плана", "модели", "эталоны персонажа", "профиль мира"];
+  const a = saved.split(":");
+  const b = current.split(":");
+  const out: string[] = [];
+  for (let i = 0; i < names.length; i++) {
+    if ((a[i] ?? "") !== (b[i] ?? "")) out.push(names[i]);
+  }
+  return out.length ? out : ["ключ целиком"];
+}
+
 export function loadPlanFile(dir: string): AiFilmPlan | null {
   try {
     const p = JSON.parse(fs.readFileSync(path.join(dir, PLAN_FILE), "utf8"));
@@ -88,7 +100,13 @@ export async function runAiFilmStage(args: {
   const stale = planVersionError(plan);
   if (stale) throw new Error(stale);
   if (plan.key !== key) {
-    throw new Error("AI-фильм: план устарел — речь, сценарий, эталоны персонажа или профиль мира изменились с момента его сборки. Соберите план заново");
+    // Без разбора по частям было непонятно, что именно изменилось: речь пересчиталась,
+    // сценарий правили или подменили пак героя. Теперь причина видна и в логе, и на сайте.
+    const changed = planKeyDiff(plan.key, key);
+    console.warn(`AI-фильм: ключ плана разошёлся (${changed.join(", ")})
+  план:   ${plan.key}
+  сейчас: ${key}`);
+    throw new Error(`AI-фильм: план устарел, изменилось: ${changed.join(", ")}. Соберите план заново`);
   }
   if (!veoConfigured()) {
     throw new Error("AI-фильм: Google Cloud не подключён к воркеру (нет файла учётных данных ADC). Veo не вызывался");

@@ -9,6 +9,7 @@ import { normalizeVeoDuration, isThirdPartyContentError } from "../lib/aiFilm/ve
 import { debrandPrompt } from "../lib/aiFilm/plan";
 import { openrouterRequestBody } from "../lib/mediaLlm";
 import { loadUniverseProfile, universePromptBlock, universePlannerBlock } from "../lib/aiFilm/universe";
+import { planKeyDiff } from "../lib/aiFilm/run";
 import type { CharacterProfile, StoryBeat, StoryBible, DisplayMode, BeatPurpose, Priority } from "../lib/aiFilm/types";
 
 const words = (text: string, secPerWord = 0.4) =>
@@ -267,6 +268,13 @@ test("старый план не интерпретируется: просьб�
   assert.match(planVersionError({ version: 2 })!, /устарел/);
   assert.equal(planVersionError({ version: PLAN_VERSION }), null);
   assert.equal(planVersionError(null), null);
+});
+
+test("Устаревший план называет, что именно разошлось", () => {
+  const a = "spee:scri:3.3:veo/env:gudini@refs1:world@hash1";
+  assert.deepEqual(planKeyDiff(a, a), ["ключ целиком"]);
+  assert.deepEqual(planKeyDiff(a, "OTHER:scri:3.3:veo/env:gudini@refs1:world@hash1"), ["речь"]);
+  assert.deepEqual(planKeyDiff(a, "spee:scri:3.3:veo/env:gudini@refs2:world@hash2"), ["эталоны персонажа", "профиль мира"]);
 });
 
 test("Universe Lock: мир из профиля попадает в сценариста, в план и в каждый промпт; без названия франшизы в промпте", () => {

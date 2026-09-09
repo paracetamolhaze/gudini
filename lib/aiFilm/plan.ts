@@ -102,6 +102,10 @@ export function shotPrompt(args: {
   );
   lines.push(`Camera: ${beat.camera || bible.cameraLanguage}. Single continuous take, no cuts inside the shot.`);
   lines.push(
+    "Screen direction: keep the movement exactly as described relative to the camera. Do not turn the subject toward the lens " +
+      "and do not have him run or jump into the camera unless the action says so.",
+  );
+  lines.push(
     "Physics: real weight and speed — falling bodies accelerate, cloth and hair are hammered by the airflow, " +
       "torn pieces are swept away past the camera and out of frame; nothing hovers, floats or drifts in place; no slow motion unless the action asks for it.",
   );

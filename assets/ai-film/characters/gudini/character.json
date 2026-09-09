@@ -6,9 +6,9 @@
   "appearance": "the exact face of the owner from the reference pack: wide square jaw, straight thick dark eyebrows set low over the eyes, narrow hooded brown eyes, straight nose, full lips, light stubble along the jaw and upper lip, warm tan skin; hair is a very short bleached-platinum buzz cut with short natural texture on top and darker roots at the temples, not long anime spikes; mid-twenties, lean athletic build, about 180 cm, calm and confident",
   "clothes": "orange and black high-collar zip jacket with orange chest panels and black shoulders and sleeves, orange cargo trousers, a black thigh strap with a small pouch, black open-toe ninja sandals with dark leg wraps, and a forehead protector on a black band whose metal plate is completely blank polished steel",
   "signature": "very short bleached buzz cut, blank steel forehead plate on a black band, orange and black high-collar jacket, orange cargo trousers, black open-toe sandals",
-  "styleLock": "modern 2D anime, hand-drawn cel animation look, crisp black ink outlines of even weight, flat cel shading with hard-edged shadows, muted natural palette, semi-realistic anime proportions, no photorealism, no 3D render",
+  "styleLock": "flat 2D cel animation, hand-drawn anime TV series look, thick uniform black ink outlines, two or three flat tones per surface with hard-edged shadows, no gradients, no 3D shading, no photorealism",
   "world": "no fixed world: places come from the story itself and are drawn in this anime style; the character keeps his own outfit everywhere",
-  "negative": "no whisker marks on the cheeks, no blue eyes, no round shonen face, no long or spiky anime hair, no beard, no village emblem or symbol on the forehead plate, no hoodie, no sneakers, no modern streetwear, no hair colour change, no real actor likeness, no text, no captions, no logos, no watermarks",
+  "negative": "no 3D render, no rendered volumetric light, no glossy skin, no soft gradient shading, no whisker marks on the cheeks, no blue eyes, no round shonen face, no long or spiky anime hair, no beard, no village emblem or symbol on the forehead plate, no hoodie, no sneakers, no modern streetwear, no hair colour change, no real actor likeness, no text, no captions, no logos, no watermarks",
   "referenceImages": [
     "reference-01-front.png",
     "reference-02-face.png",

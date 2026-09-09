@@ -2,14 +2,14 @@
   "id": "gudini-anime-cel",
   "name": "Gudini Anime Cel",
   "targetFeel": "the look of the anime edits that redraw real film scenes: modern hand-drawn TV anime, semi-realistic, cinematic; the drawing style is what is locked, never the setting",
-  "visualLanguage": "modern 2D anime, hand-drawn cel animation look, crisp black ink outlines of even weight, flat cel shading with hard-edged shadow shapes, muted natural cinematic palette, painted backgrounds with real-world perspective and depth, subtle film grain, soft bloom on highlights, semi-realistic proportions: real human body and facial structure with an anime finish; every person in every shot is drawn this way",
+  "visualLanguage": "flat 2D cel animation, the look of a hand-drawn anime TV series: thick uniform black ink outlines on every shape, two or three flat tones per surface with hard-edged shadow shapes and no gradients, limited flat colour palette, hand-painted flat backgrounds, drawn highlights instead of rendered light, subtle film grain. Bodies and faces keep real human proportions, but everything is DRAWN, not rendered: no 3D shading, no ambient occlusion, no soft volumetric light, no glossy skin, no photographic texture, no depth-of-field blur",
   "architecture": "places come from the story and are drawn in this style: a city street, a hospital corridor, a stadium, a battlefield, a spaceship, a kitchen — whatever the speech is about, with honest architecture and real-world perspective",
   "clothingRules": "Gudini always wears his own outfit: orange and black high-collar zip jacket, orange cargo trousers, black thigh strap, black open-toe sandals, blank steel forehead plate on a black band. Everyone else wears what the story implies: ordinary modern clothes, uniforms, armour, costumes of the characters named in the speech",
   "technologyRules": "props come from the story and from the real world: phones, cars, hospital equipment, weapons, armour, spacecraft — drawn in the same anime style, never replaced by scrolls or fantasy substitutes",
   "socialRules": "the cast and the society come from the story itself; nothing is invented around them",
   "powerSystem": "characters keep the powers, weapons and effects the story gives them, drawn as anime effect animation: energy glows, impact lines, dust and sparks; no gore, no graphic violence",
   "recurringObjects": "for Gudini: only his outfit and blank forehead plate; for the story: its own iconic objects (a glowing chest reactor, a round shield, a golden gauntlet, a metal arm) drawn recognizably",
-  "environmentRules": "one consistent drawing style in every shot; lighting and palette follow the scene, the anime look never changes",
+  "environmentRules": "one consistent flat 2D drawing style in every shot; lighting and palette follow the scene, the hand-drawn look never changes",
   "contentRules": [
     "CONTENT IS LITERAL: the viewer sees exactly what the author is talking about — the people, events, objects and places named in the speech — drawn in this anime style",
     "Do NOT translate the subject into another world or into metaphors (no ninja village instead of a city, no scrolls instead of documents, no masked warlords instead of real people)",
@@ -17,7 +17,8 @@
     "Gudini is a silent character inside the story, not a narrator: he plays a role in the events (a fighter beside the heroes, a witness on the battlefield, the one who picks up the fallen hero's helmet), never speaks, never looks at or addresses the camera",
     "Locations follow the story and are drawn in this anime style; nothing is invented around them",
     "Supporting cast follows the speech: as many story characters as the beat needs, each named and drawn consistently across shots",
-    "Faces stay human: no whisker marks, no glowing eyes on ordinary people, no chibi deformation"
+    "Faces stay human: no whisker marks, no glowing eyes on ordinary people, no chibi deformation",
+    "Camera and screen direction are stated in every scene: where the camera stands and in which direction the person moves relative to it; a person jumping off a cliff moves AWAY from the camera or past it, never into the lens"
   ],
-  "forbiddenDrift": "photorealism; 3D render or CGI gloss; classic shonen face proportions on Gudini; a different anime style mid-video; ninja village, scrolls and chakra props; replacing the story's real people, places and events with metaphors; changing Gudini's face, hair or outfit"
+  "forbiddenDrift": "photorealism; 3D render, CGI or game-engine look; soft gradient shading and rendered volumetric light; glossy skin; classic shonen face proportions; a different style mid-video; ninja village, scrolls and chakra props; replacing the story's real people, places and events with metaphors; changing the hero's face, hair or outfit"
 }

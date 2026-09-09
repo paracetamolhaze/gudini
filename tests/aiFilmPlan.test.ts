@@ -270,26 +270,26 @@ test("старый план не интерпретируется: просьб�
 });
 
 test("Universe Lock: мир из профиля попадает в сценариста, в план и в каждый промпт; без названия франшизы в промпте", () => {
-  assert.equal(universe.id, "gudini-shinobi-world");
+  assert.equal(universe.id, "gudini-anime-cel");
   const planner = universePlannerBlock(universe);
   assert.match(planner, /STYLE LOCK/);
   assert.match(planner, /СОДЕРЖАНИЕ БУКВАЛЬНОЕ/);
   assert.match(planner, /CONTENT IS LITERAL/);
-  assert.match(planner, /Do NOT translate the subject into shinobi metaphors/);
+  assert.match(planner, /Do NOT translate the subject into another world/);
   assert.match(planner, /universeAdaptation/);
   assert.match(planner, /Name well-known characters directly/);
   assert.match(planner, /silent character inside the story/);
   const block = universePromptBlock(universe);
-  assert.match(block, /hidden shinobi village/);
+  assert.match(block, /places come from the story/);
   assert.match(block, /Content is literal/);
   assert.match(block, /Never drift into: photorealism/);
   assert.doesNotMatch(block, /Naruto/i, "в production-промпте нет названия франшизы");
   const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
-  assert.equal(plan.universeId, "gudini-shinobi-world");
+  assert.equal(plan.universeId, "gudini-anime-cel");
   assert.equal(plan.universe.hash, universe.hash);
-  assert.equal(plan.bible.universeId, "gudini-shinobi-world");
+  assert.equal(plan.bible.universeId, "gudini-anime-cel");
   for (const s of plan.shots) {
-    assert.match(s.prompt, /Universe \(the same in every shot\): Gudini Shinobi World/);
+    assert.match(s.prompt, /Universe \(the same in every shot\): Gudini Anime Cel/);
     assert.match(s.prompt, /Never drift into/);
     assert.doesNotMatch(s.prompt, /Naruto/i);
   }

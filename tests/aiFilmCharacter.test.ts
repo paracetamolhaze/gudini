@@ -79,11 +79,11 @@ test("пул: не больше n задач одновременно, посл�
 });
 
 test("профиль мира в репозитории валиден: правила адаптации, anti-drift, хэш; без профиля — ошибка", () => {
-  const u = loadUniverseProfile("gudini-shinobi-world", path.join(process.cwd(), "assets", "ai-film", "universes"));
-  assert.equal(u.id, "gudini-shinobi-world");
+  const u = loadUniverseProfile("gudini-anime-cel", path.join(process.cwd(), "assets", "ai-film", "universes"));
+  assert.equal(u.id, "gudini-anime-cel");
   assert.ok(u.contentRules.length >= 5);
   assert.ok(u.contentRules.some((r) => /CONTENT IS LITERAL/.test(r)));
-  assert.match(u.forbiddenDrift, /shinobi metaphors/);
+  assert.match(u.forbiddenDrift, /events with metaphors/);
   assert.match(u.hash, /^[0-9a-f]{12}$/);
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-univ-"));
   assert.throws(() => loadUniverseProfile("nope", base), /нет профиля мира «nope»/);

@@ -3,8 +3,8 @@ import path from "path";
 import crypto from "crypto";
 
 /**
- * Universe Lock — постоянный СТИЛЬ и мир всех AI-фильмов проекта: рисовка, дизайн
- * персонажей, архитектура по умолчанию. Содержание сцен при этом буквальное: зритель
+ * Universe Lock — постоянный СТИЛЬ всех AI-фильмов проекта: рисовка и дизайн персонажей.
+ * Мира как отдельной выдумки нет: места берутся из истории и рисуются в этом стиле. Содержание сцен при этом буквальное: зритель
  * видит то, о чём говорит автор (людей, события, предметы, места из речи), нарисованное
  * в этом стиле; метафоры «клан вместо компании» запрещены. Профиль лежит в
  * `assets/ai-film/universes/<id>/universe.json` и попадает в сценариста, в планировщик
@@ -12,7 +12,7 @@ import crypto from "crypto";
  * входит в ключ плана.
  */
 
-export const DEFAULT_UNIVERSE_ID = "gudini-shinobi-world";
+export const DEFAULT_UNIVERSE_ID = "gudini-anime-cel";
 
 export type UniverseProfile = {
   id: string;

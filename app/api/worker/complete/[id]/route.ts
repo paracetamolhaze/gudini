@@ -61,8 +61,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       processedVideo: "out.mp4",
       outputs: { ...(project.outputs ?? {}), [style]: { file: styledFile, at: new Date().toISOString(), brollCount: Number(body.brollCount) || 0, subtitlesSource } },
       cover: hasCover ? "cover.jpg" : null,
-      // статус и причина отказа проверки приходят от воркера: без них отклонённая
-      // обложка выглядела на сайте как «обложки нет», без объяснения
+      // статус и причина приходят от воркера: failed — картинки нет, и на сайте
+      // видно почему (сбой генератора или незакрытый смысловой шлюз заголовка)
       coverStatus: body.coverStatus === "ok" || body.coverStatus === "failed" || body.coverStatus === "headline_failed"
         ? body.coverStatus
         : hasCover ? "ok" : "failed",

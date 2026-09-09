@@ -74,7 +74,8 @@ export function historicalCoverCost(dataDir = path.join(process.cwd(), "data")):
       provider: String(j.provider ?? "unknown"),
       status: String(j.status ?? "unknown"),
       source: found[0].file,
-      note: j.status === "COVER_FAILED" ? "последний прогон обложки не прошёл QC" : undefined,
+      // COVER_FAILED остался в старых файлах: тогда обложки отклоняла автопроверка, теперь её нет
+      note: j.status === "COVER_FAILED" ? "тот прогон отклонила прежняя автопроверка обложки" : undefined,
     };
   } catch {
     return null;

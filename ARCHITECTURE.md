@@ -94,7 +94,7 @@ Project
 Anthropic   весь текст, рассуждение и зрение:
             Story Research, Script, Script Beats, Media Research reasoning,
             Source/Visual Verification, Beat Matching, Speech Cleanup,
-            Creative Director, Metadata, Cover Concept, Cover QC
+            Creative Director, Metadata, Cover Concept
 Brave       только поиск: news / videos / images / web
 OpenRouter  РОВНО одна стадия: генерация картинки обложки
             (google/gemini-3.1-flash-image)
@@ -436,7 +436,6 @@ SegmentWindowQC — зрение не вызывается второй раз. 
 | Сверка «не заметила» пропажу | `continue` при неудачном съёме кадра, 21 точка из 24 | исход у каждой точки, недобор = провал |
 | 24 секунды одного лица | темп был предупреждением | темп — ошибка; `montagePreflight` до оплаты режиссёра |
 | Цвет A-roll «прыгал» | punch-in делал вторую ветку масштабирования | punch-in удалён; A-roll ровно один путь `scale→crop→fps` |
-| Обложка не проходила QC из-за кикера | кикер попадал в проверку заголовка | кикер вырезается перед сверкой |
 | Дубли материалов при параллельном подборе | резервирование после `await` | синхронная пометка до любого `await` |
 
 ---

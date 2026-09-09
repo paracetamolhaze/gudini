@@ -1,8 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { runFfmpeg } from "./ffmpeg";
-import { mediaVision, parseJson } from "./mediaLlm";
-import { detectImageMediaType } from "./coverQc";
+import { mediaVision, parseJson, detectImageMediaType } from "./mediaLlm";
 import { EditPlan } from "./editPlan";
 
 /**

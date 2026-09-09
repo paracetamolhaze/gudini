@@ -2,43 +2,38 @@ import fs from "fs";
 import path from "path";
 import type { CoverConcept } from "./cover";
 import { buildFullCoverPrompt } from "./coverPrompt";
-import { runCoverQc, CoverQcResult, CoverQcStatus } from "./coverQc";
 import { generateCoverImage, finishCoverImage, encodeFinalCover, fullAiCoverModel } from "./coverProvider";
 import { recordCoverRun } from "./coverStats";
-import { FACE_FILE, hasFace } from "./store";
 
 /**
  * Production Cover Pipeline — РОВНО ОДНА платная генерация на одно действие пользователя.
  *
- *   CoverConcept → одна генерация Gemini Flash → QC → PASS или COVER_FAILED
+ *   CoverConcept → одна генерация Gemini Flash → готовая обложка
  *
  * Жёсткое правило: 1 user generation action = max 1 paid image generation.
- * QC НИКОГДА не инициирует новую генерацию: при провале обложки просто нет, и только
- * явное нажатие «Перегенерировать» создаёт новый запрос и новую оплату.
+ * Автоматической проверки обложки нет: что сгенерировалось, то и показывается —
+ * решает человек, он же нажимает «Создать заново», и это ещё одна оплата.
  * Автоматических повторов, циклов попыток, retry-feedback, смены модели, рендерера,
  * Runway и кадра из видео в системе не существует.
  */
 
 export type CoverPipelineResult = {
   ok: boolean;
-  file?: string; // имя финального файла в папке проекта (при PASS — прошедшая проверку; при COVER_FAILED — отклонённая, чтобы её можно было увидеть)
-  status: "PASS" | "COVER_FAILED" | "ERROR";
-  qc: CoverQcStatus | "NONE";
-  cost: { generation: number; qc: number; total: number };
+  file?: string; // имя финального файла в папке проекта
+  status: "PASS" | "ERROR";
+  cost: { generation: number; total: number };
   reason?: string;
 };
 
 /** Точки подмены для тестов и E2E (в проде — настоящие реализации). */
 export type CoverDeps = {
   generateImage: (prompt: string, outFile: string) => Promise<{ cost: number }>;
-  runQc: (imageFile: string, headline: string, kicker?: string | null) => Promise<CoverQcResult>;
   finish: (dir: string, source: string, out: string) => Promise<string>;
   encodeFinal: (dir: string, base: string, out: string) => Promise<string>;
 };
 
 const defaultDeps: CoverDeps = {
   generateImage: (prompt, outFile) => generateCoverImage(prompt, outFile),
-  runQc: (file, headline, kicker) => runCoverQc(file, headline, kicker, hasFace() ? FACE_FILE : undefined),
   finish: finishCoverImage,
   encodeFinal: encodeFinalCover,
 };
@@ -56,11 +51,10 @@ export async function buildCover(
   const kicker = concept.kicker ?? null;
   const prompt = buildFullCoverPrompt(concept);
 
-  const cost = { generation: 0, qc: 0, total: 0 };
-  let qcStatus: CoverQcStatus | "NONE" = "NONE";
+  const cost = { generation: 0, total: 0 };
 
   const finalize = (result: Partial<CoverPipelineResult> & { status: CoverPipelineResult["status"] }) => {
-    cost.total = Number((cost.generation + cost.qc).toFixed(6));
+    cost.total = Number(cost.generation.toFixed(6));
     fs.writeFileSync(
       path.join(dir, "cover-mode.json"),
       JSON.stringify(
@@ -73,9 +67,7 @@ export async function buildCover(
           automaticRetries: 0,
           manualRegeneration: options.manual === true,
           ...result,
-          qc: qcStatus,
           generationCost: Number(cost.generation.toFixed(6)),
-          qcCost: Number(cost.qc.toFixed(6)),
           totalCost: cost.total,
         },
         null,
@@ -85,14 +77,13 @@ export async function buildCover(
     );
     recordCoverRun({
       status: result.status,
-      qc: qcStatus,
       cost: cost.total,
       manual: options.manual === true,
       error: result.reason,
       headlineWords: headline.split(/\s+/).filter(Boolean).length,
       headlineChars: headline.replace(/\s/g, "").length,
     });
-    return { ok: result.status === "PASS", qc: qcStatus, cost, ...result } as CoverPipelineResult;
+    return { ok: result.status === "PASS", cost, ...result } as CoverPipelineResult;
   };
 
   fs.writeFileSync(path.join(dir, "cover-prompt.txt"), prompt, "utf8");
@@ -103,33 +94,9 @@ export async function buildCover(
     const gen = await d.generateImage(prompt, raw);
     cost.generation += gen.cost ?? 0;
 
-    const qc = await d.runQc(raw, headline, kicker);
-    cost.qc += qc.cost ?? 0;
-    qcStatus = qc.status;
-    fs.writeFileSync(path.join(dir, "cover-qc-1.json"), JSON.stringify(qc, null, 2), "utf8");
-    console.log(`Cover QC: ${qc.status}${qc.reasons.length ? ` — ${qc.reasons.join("; ")}` : ""}${qc.warnings?.length ? ` (замечания: ${qc.warnings.join("; ")})` : ""}`);
-
-    if (!qc.pass) {
-      console.warn("Cover: COVER_FAILED — автоматическая повторная генерация не выполняется");
-      // Отклонённая обложка всё равно собирается в cover.jpg: пользователь видит её,
-      // причину отказа и сам решает — оставить или перегенерировать (одна платная генерация
-      // на нажатие). Раньше при отказе не было ни картинки, ни причины на сайте.
-      let file: string | undefined;
-      try {
-        const finished = await d.finish(dir, raw, path.join(dir, "cover-final.png"));
-        await d.encodeFinal(dir, finished, path.join(dir, COVER_FILE));
-        file = COVER_FILE;
-      } catch (e: any) {
-        console.warn("Cover: отклонённую обложку не удалось собрать для показа:", String(e?.message ?? e).slice(0, 120));
-      }
-      return finalize({
-        status: "COVER_FAILED",
-        file,
-        reason: qc.reasons.join("; ") || "обложка не прошла контроль качества",
-      });
-    }
-
-    // финальная обложка появляется ТОЛЬКО здесь
+    // Сгенерированная картинка сразу становится обложкой: автоматической проверки нет,
+    // потому что она отклоняла годные обложки и оставляла ролик с пометкой «нужна правка».
+    // Оценивает человек: обложка видна на шаге «Публикация» рядом с «Создать заново».
     const finished = await d.finish(dir, raw, path.join(dir, "cover-final.png"));
     await d.encodeFinal(dir, finished, path.join(dir, COVER_FILE));
     return finalize({ status: "PASS", file: COVER_FILE });

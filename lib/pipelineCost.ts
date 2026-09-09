@@ -21,8 +21,6 @@ export type PipelineCost = {
   speechCleanupCalls: number;
   editPlannerCalls: number;
   scriptLlmCalls: number;
-  coverGenerationCost: number;
-  coverQcCost: number;
 };
 
 const EMPTY: PipelineCost = {
@@ -39,8 +37,6 @@ const EMPTY: PipelineCost = {
   speechCleanupCalls: 0,
   editPlannerCalls: 0,
   scriptLlmCalls: 0,
-  coverGenerationCost: 0,
-  coverQcCost: 0,
 };
 
 let current: PipelineCost = { ...EMPTY };

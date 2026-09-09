@@ -9,8 +9,9 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * Ручная перегенерация обложки — РОВНО ОДНА платная генерация на нажатие.
- * Никаких подменных обложек и авто-повторов: при провале QC возвращается coverStatus=failed.
- * Необязательный body {headline}: пользователь может сам сократить заголовок.
+ * Никаких подменных обложек и авто-повторов. Нарисованная картинка всегда становится
+ * обложкой: автоматической проверки нет, решает человек.
+ * Необязательный body {headline}: пользователь может сам задать заголовок.
  */
 export async function POST(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
 
   const dir = projectDir(id);
   // Неудачная перегенерация раньше стирала прежнюю обложку из проекта. Прежний файл
-  // откладывается и возвращается на место, если новая не прошла проверку.
+  // откладывается и возвращается на место, если новая так и не нарисовалась.
   const coverFile = path.join(dir, "cover.jpg");
   const backup = path.join(dir, "cover-prev.jpg");
   const hadCover = !!project.cover && fs.existsSync(coverFile);
@@ -41,14 +42,14 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       true, // действие пользователя: одна оплаченная генерация
     ),
   );
-  // Новая не прошла проверку, а прежняя была принята — прежняя остаётся, новая не
-  // подменяет её. Если прежней принятой не было, отклонённая новая показывается с причиной.
-  if (coverStatus !== "ok" && hadCover && project.coverStatus === "ok") {
+  // Новая не нарисовалась (сбой генератора или заголовок не прошёл смысловой шлюз),
+  // а прежняя была — прежняя остаётся на месте, деньги за неё уже потрачены.
+  if (coverStatus !== "ok" && hadCover) {
     fs.copyFileSync(backup, coverFile);
     fs.rmSync(backup, { force: true });
     updateProject(id, { cover: project.cover, coverStatus: "ok", coverReason: undefined });
     return NextResponse.json(
-      { error: `Новая обложка не прошла проверку${coverReason ? `: ${coverReason}` : ` (${coverStatus})`} — оставлена прежняя` },
+      { error: `Новую обложку создать не удалось${coverReason ? `: ${coverReason}` : ` (${coverStatus})`} — оставлена прежняя` },
       { status: 409 },
     );
   }

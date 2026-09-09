@@ -1,9 +1,8 @@
 import fs from "fs";
 import path from "path";
-import { mediaVision, mediaLlmAvailable } from "./mediaLlm";
+import { mediaVision, mediaLlmAvailable, detectImageMediaType } from "./mediaLlm";
 import { getSettings } from "./store";
 import { VisualIntent } from "./editPlan";
-import { detectImageMediaType } from "./coverQc";
 
 /**
  * Semantic-отбор б-ролла: что реально видно на кандидате vs что нужно по смыслу.

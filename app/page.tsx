@@ -36,7 +36,7 @@ function projectStatus(p: Project): { text: string; tone: StatusTone; busy?: boo
   if (pubs.some((x) => x.status === "error")) return { text: "Ошибка публикации", tone: "error", ready: hasVideo };
   if (pubs.some((x) => x.status === "demo")) return { text: "Демо-публикация", tone: "neutral", ready: hasVideo };
   if (pubs.length && pubs.every((x) => x.status === "skipped")) return { text: "Публикация пропущена", tone: "neutral", ready: hasVideo };
-  if (hasVideo && (p.coverStatus === "failed" || p.coverStatus === "headline_failed")) return { text: "Нужна правка", tone: "warn", ready: true };
+  if (hasVideo && !p.cover) return { text: "Нет обложки", tone: "warn", ready: true };
   if (hasVideo) return { text: "Видео готово", tone: "success", ready: true };
   if (p.rawVideo) return { text: "Запись загружена", tone: "neutral", ready: false };
   if (p.script) return { text: "Сценарий готов", tone: "neutral", ready: false };

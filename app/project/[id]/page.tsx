@@ -829,8 +829,8 @@ function ProcessStep({
           {!running && project.rawVideo && style === "cards" && (
             <>
               <p className="hint">Кадр 9:16, выровненная громкость, крупные субтитры по словам и картинки-иллюстрации над автором. Заголовок, описание и хэштеги подбираются автоматически.</p>
-              {current && project.coverStatus && project.coverStatus !== "ok" && (
-                <div className="warn-box">Видео готово, но обложка не прошла проверку. Исправить её можно на шаге «Публикация».</div>
+              {current && !project.cover && (
+                <div className="warn-box">Видео готово, но обложки нет. Создать её можно на шаге «Публикация».</div>
               )}
               <div className="actions">
                 {current ? (
@@ -1073,24 +1073,23 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
     }
   };
 
-  const rejected = project.coverStatus === "failed";
+  // Автоматической проверки обложки нет: она либо нарисовалась, либо нет.
+  const failed = !project.cover && project.coverStatus === "failed";
   const headlineFailed = project.coverStatus === "headline_failed";
   const status: ReactNode = busy ? (
     <StatusBadge tone="accent" busy>Создаём обложку</StatusBadge>
-  ) : project.cover && !rejected ? (
-    <StatusBadge tone="success">Прошла проверку</StatusBadge>
-  ) : project.cover && rejected ? (
-    <StatusBadge tone="warn">Не прошла проверку</StatusBadge>
+  ) : project.cover ? (
+    <StatusBadge tone="success">Готова</StatusBadge>
   ) : headlineFailed ? (
     <StatusBadge tone="warn">Нет заголовка</StatusBadge>
-  ) : rejected ? (
-    <StatusBadge tone="warn">Не прошла проверку</StatusBadge>
+  ) : failed ? (
+    <StatusBadge tone="warn">Не создалась</StatusBadge>
   ) : (
     <StatusBadge>Нет обложки</StatusBadge>
   );
 
-  const reason = rejected
-    ? `Проверка отклонила обложку${project.coverReason ? `: ${project.coverReason}` : ""}.${project.cover ? " Можно оставить как есть или создать заново." : " Создание заново — одна платная генерация."}`
+  const reason = failed
+    ? `Обложка не нарисовалась${project.coverReason ? `: ${project.coverReason}` : ""}. Создание заново — одна платная генерация.`
     : headlineFailed
       ? "Не удалось подобрать заголовок, сохраняющий тему ролика. Картинка не создавалась, деньги не потрачены."
       : null;
@@ -1107,7 +1106,7 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
     </div>
   ) : (
     <div className="actions" style={{ marginTop: 10 }}>
-      <Button size="sm" variant={project.cover && !rejected ? "secondary" : "primary"} busy={busy} onClick={() => regenerate()}>
+      <Button size="sm" variant={project.cover ? "secondary" : "primary"} busy={busy} onClick={() => regenerate()}>
         {headlineFailed ? "Подобрать заголовок заново" : "Создать заново"}
       </Button>
       <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(true)}>Изменить заголовок</Button>
@@ -1127,7 +1126,7 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
           {status}
         </div>
         {reason && <div className="hint" style={{ marginTop: 6 }}>{reason}</div>}
-        {!reason && project.cover && <div className="hint" style={{ marginTop: 6 }}>Первый кадр ролика и превью на площадках.</div>}
+        {!reason && project.cover && <div className="hint" style={{ marginTop: 6 }}>Первый кадр ролика и превью на площадках. Не нравится — создайте заново.</div>}
         {!reason && !project.cover && <div className="hint" style={{ marginTop: 6 }}>Обложка создаётся при монтаже. Можно создать её отдельно.</div>}
         {editor}
         {error && <div className="error-box">{error}</div>}

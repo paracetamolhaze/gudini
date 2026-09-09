@@ -64,6 +64,19 @@ export function transportModelId(model: string): string {
   return OPENROUTER_MODELS[model] ?? `anthropic/${model}`;
 }
 
+/**
+ * Тип изображения по сигнатуре байтов, а не по расширению файла: генератор может
+ * вернуть JPEG в файле .png, и тогда заявленный media_type ломает запрос к модели.
+ */
+export function detectImageMediaType(buffer: Buffer): "image/png" | "image/jpeg" | "image/gif" | "image/webp" {
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer.toString("latin1", 1, 4) === "PNG") return "image/png";
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.length >= 6 && buffer.toString("latin1", 0, 3) === "GIF") return "image/gif";
+  if (buffer.length >= 12 && buffer.toString("latin1", 0, 4) === "RIFF" && buffer.toString("latin1", 8, 12) === "WEBP")
+    return "image/webp";
+  return "image/jpeg";
+}
+
 export function mediaLlmAvailable(): boolean {
   return mediaTransport() === "openrouter" ? Boolean(openrouterClaudeKey()) : Boolean(getSettings().anthropicKey);
 }

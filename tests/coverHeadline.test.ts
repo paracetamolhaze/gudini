@@ -6,7 +6,6 @@ import path from "path";
 import { scoreHeadline, selectHeadline, applyHeadlinePreflight, matchAnchors, resolveHeadline } from "../lib/coverHeadline";
 import { buildCover } from "../lib/coverPipeline";
 import type { CoverConcept } from "../lib/cover";
-import type { CoverQcResult } from "../lib/coverQc";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "gudini-headline-"));
@@ -143,7 +142,6 @@ test("Preflight 4: после отбора image-генератор вызыва
 
   let generated = 0;
   const prompts: string[] = [];
-  const PASS: CoverQcResult = { status: "PASS", pass: true, reasons: [], confidence: 0.95, cost: 0.002 };
   await buildCover(dir, c, {
     generateImage: async (prompt, out) => {
       generated++;
@@ -151,7 +149,6 @@ test("Preflight 4: после отбора image-генератор вызыва
       fs.writeFileSync(out, "png");
       return { cost: 0.068 };
     },
-    runQc: async () => PASS,
     finish: async (_d, src, out) => (fs.copyFileSync(src, out), out),
     encodeFinal: async (_d, _b, out) => (fs.writeFileSync(out, "jpg"), out),
   });
@@ -162,26 +159,4 @@ test("Preflight 4: после отбора image-генератор вызыва
   assert.equal(log.headlineCandidates.length, 3);
   assert.equal(log.scores.length, 3);
   assert.equal(log.selectedHeadline, "ТИГР У ДОМА");
-});
-
-test("Preflight 5: провал QC после отбора не запускает новую генерацию", async () => {
-  const dir = tmpDir();
-  const c = concept(["ТИГР У ДОМА", "ХИЩНИК РЯДОМ", "ТИГР ВО ДВОРЕ НЕ БЕГИ"]);
-  applyHeadlinePreflight(c, dir);
-  let generated = 0;
-  const FAIL: CoverQcResult = { status: "EXTRA_TEXT", pass: false, reasons: ["мусор"], confidence: 0.9, cost: 0.002 };
-  const PASS: CoverQcResult = { status: "PASS", pass: true, reasons: [], confidence: 0.95, cost: 0.002 };
-  const results = [FAIL, PASS]; // если бы был авто-повтор, вторая проверка «спасла» бы обложку
-  let qcCall = 0;
-  const r = await buildCover(dir, c, {
-    generateImage: async (_p, out) => {
-      generated++;
-      fs.writeFileSync(out, "png");
-      return { cost: 0.068 };
-    },
-    runQc: async () => results[qcCall++],
-  });
-  assert.equal(generated, 1, "QC не имеет права инициировать генерацию");
-  assert.equal(r.status, "COVER_FAILED");
-  assert.equal(fs.existsSync(path.join(dir, "cover.jpg")), false);
 });

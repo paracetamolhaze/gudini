@@ -527,8 +527,8 @@ export async function processProject(id: string): Promise<void> {
 
     // Обложка — после проверок ролика: она платная, а неисправный результат раньше
     // сначала получал обложку ($0.10) и только потом отклонялся сверкой с планом.
-    // --- Обложка: ТОЛЬКО Full-AI (Gemini Flash рисует всё) + QC. Фолбэков нет:
-    // не прошла QC за 3 попытки → COVER_FAILED и кнопка «Перегенерировать» в интерфейсе.
+    // --- Обложка: ТОЛЬКО Full-AI (Gemini Flash рисует всё). Фолбэков и автоматической
+    // проверки нет: что нарисовалось, то и показывается, рядом кнопка «Создать заново».
     setStep(id, "Обложка", 96);
     const { cover, coverStatus } = await makeCover(dir, project.topic, project.script, meta.title);
 
@@ -571,9 +571,9 @@ export async function processProject(id: string): Promise<void> {
 }
 
 /**
- * Единственный способ получить обложку: одна генерация Gemini Flash + QC.
- * Автоматических повторов нет — при провале обложки просто нет (COVER_FAILED),
- * новую оплаченную генерацию создаёт только нажатие «Перегенерировать».
+ * Единственный способ получить обложку: одна генерация Gemini Flash.
+ * Автоматических повторов нет, автоматической проверки картинки тоже: новую
+ * оплаченную генерацию создаёт только нажатие «Создать заново».
  */
 export async function makeCover(
   dir: string,
@@ -597,13 +597,6 @@ export async function makeCover(
   // а генерация стоит денег. Пересоздать её можно кнопкой «Перегенерировать».
   if (!manual && fs.existsSync(path.join(dir, "cover.jpg"))) {
     console.log("Cover: обложка уже есть — повторная генерация не нужна");
-    // отклонённая проверкой обложка остаётся отклонённой: без автоматической оплаты новой
-    try {
-      const mode = JSON.parse(fs.readFileSync(path.join(dir, "cover-mode.json"), "utf8"));
-      if (mode?.status && mode.status !== "PASS") {
-        return { cover: "cover.jpg", coverStatus: "failed", coverReason: String(mode.reason ?? "обложка не прошла проверку") };
-      }
-    } catch {}
     return { cover: "cover.jpg", coverStatus: "ok" };
   }
   try {
@@ -641,12 +634,11 @@ export async function makeCover(
     );
     fs.writeFileSync(path.join(dir, "cover-concept.json"), JSON.stringify(concept, null, 2), "utf8");
     const r = await buildCover(dir, concept, {}, { manual });
-    console.log(
-      `Cover: status=${r.status} qc=${r.qc} generations=1 cost=$${r.cost.total}${manual ? " (ручная перегенерация)" : ""}`,
-    );
+    console.log(`Cover: status=${r.status} generations=1 cost=$${r.cost.total}${manual ? " (ручная перегенерация)" : ""}`);
+    // ERROR — картинки нет вообще (сбой генератора): только в этом случае обложки нет
     return r.ok
       ? { cover: r.file ?? null, coverStatus: "ok" }
-      : { cover: r.file ?? null, coverStatus: "failed", coverReason: r.reason };
+      : { cover: null, coverStatus: "failed", coverReason: r.reason };
   } catch (e: any) {
     console.warn("Cover:", String(e?.message ?? e).slice(0, 200));
     return { cover: null, coverStatus: "failed" };

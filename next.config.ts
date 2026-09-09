@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: __dirname,
   experimental: {
     serverActions: { bodySizeLimit: "2gb" },
+    // Прокси на /clipy буферизует тело запроса в памяти и по умолчанию режет его на 10 МБ:
+    // загрузка видео крупнее падала с «socket hang up». Гигабайта хватает любому короткому ролику.
+    middlewareClientMaxBodySize: "1gb",
   },
   async rewrites() {
     return [

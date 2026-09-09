@@ -19,7 +19,8 @@ import type {
  * защищённых (hook / reveal / climax с high).
  */
 
-export const PLAN_VERSION = 4;
+export { PLAN_VERSION } from "./version";
+import { PLAN_VERSION } from "./version";
 export const VEO_MODEL = process.env.AI_FILM_MODEL || "veo-3.1-fast-generate-001";
 /** сцены без героя можно направлять в другую модель (например, Lite) — пока та же */
 export const ENVIRONMENT_MODEL = process.env.AI_FILM_ENVIRONMENT_MODEL || VEO_MODEL;

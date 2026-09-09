@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { PLAN_VERSION as AI_FILM_PLAN_VERSION_SHARED } from "@/lib/aiFilm/version";
 import Link from "next/link";
 import Teleprompter from "./Teleprompter";
 import { saveRecording, loadRecording, deleteRecording, shareOrDownload, type StoredRecording } from "@/lib/recordingStore";
@@ -65,7 +66,7 @@ type AiFilmPlanView = {
   warnings?: string[];
 };
 
-const AI_FILM_PLAN_VERSION = 3;
+// версия берётся из общего модуля: своё число на странице однажды отстало от воркера
 /** Режимы кадра словами автора; технические имена — только в «Технических сведениях». */
 const MODE_RU: Record<string, string> = { author: "Автор", full_ai: "Сцена на весь экран", hybrid: "Автор + сцена" };
 const MODE_TECH: Record<string, string> = { author: "AUTHOR", full_ai: "FULL_AI", hybrid: "HYBRID" };
@@ -721,7 +722,7 @@ function ProcessStep({
   const current = styleOutput(project, style);
   const other = styleOutput(project, otherStyle);
   const filmPlan = project.aiFilm?.plan;
-  const planStale = Boolean(filmPlan && filmPlan.version !== AI_FILM_PLAN_VERSION);
+  const planStale = Boolean(filmPlan && filmPlan.version !== AI_FILM_PLAN_VERSION_SHARED);
   const running = processing.state === "running";
 
   async function start(request?: "plan" | "generate") {

@@ -67,13 +67,28 @@ export function upload<T>(path: string, file: File, onProgress?: (fraction: numb
 }
 
 export type Hardware = { gpu_name: string; gpu_vram_mb: number; backend: string; execution_providers: string[]; notes: string[]; onnxruntime_version: string };
+export type Preset = {
+  id: string;
+  label: string;
+  note: string;
+  swapper: string;
+  pixel_boost: string;
+  enhancer: string | null;
+  /** замерено на этой видеокарте: столько секунд уходит на один кадр */
+  sec_per_frame: number;
+  /** сколько видеопамяти нужно прогону */
+  vram_mb: number;
+};
+
 export type SystemInfo = {
   engine: { name: string; version: string; installed: boolean };
   hardware: Hardware;
   ffmpeg: string;
   ytdlp: string;
   cookies: { present: boolean; path: string };
-  preset?: { swapper: string; pixel_boost: string; enhancer: string | null };
+  presets?: Preset[];
+  default_quality?: string;
+  gpu_free_vram_mb?: number;
   limits: { max_video_seconds: number; max_video_mb: number };
   busy_job: string | null;
 };

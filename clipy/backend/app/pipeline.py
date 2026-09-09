@@ -352,6 +352,9 @@ def run_render_job(store: JobStore, job: Job) -> None:
             total_passes = len(assignments)
             tracker.start(stage, f"замен {total_passes}")
             job.log.write(f"Face swap started: model={preset.swapper} enhancer={preset.enhancer or 'off'} mask={'+'.join(preset.mask_types)} passes={total_passes}")
+            quality = job.data.get("quality") or DEFAULT_QUALITY
+            preset_label = (PRESETS.get(quality) or PRESETS[DEFAULT_QUALITY]).label
+            job.log.write(f"режим: {preset_label} ({quality})")
             for i, a in enumerate(assignments):
                 person = a["_person"]
                 out_swap = job.temp_dir / f"swapped_{i + 1}.mp4"
@@ -363,7 +366,7 @@ def run_render_job(store: JobStore, job: Job) -> None:
                         target_video=current,
                         output_video=out_swap,
                         temp_dir=job.temp_dir / f"ff{i + 1}",
-                        quality=DEFAULT_QUALITY,
+                        quality=quality,
                         reference_frame=int(person["reference_frame"]),
                         reference_position=int(person["reference_position"]),
                         reference_distance=float(a["_distance"]),

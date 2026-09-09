@@ -204,7 +204,16 @@ async def system():
         "ffmpeg": ffmpeg.version() if shutil.which("ffmpeg") else "",
         "ytdlp": downloader.ytdlp_version(),
         "cookies": downloader.cookies_status(),
-        "preset": {"swapper": PRESETS[DEFAULT_QUALITY].swapper, "pixel_boost": PRESETS[DEFAULT_QUALITY].pixel_boost, "enhancer": PRESETS[DEFAULT_QUALITY].enhancer},
+        "presets": [
+            {
+                "id": key, "label": p.label, "note": p.note,
+                "swapper": p.swapper, "pixel_boost": p.pixel_boost, "enhancer": p.enhancer,
+                "sec_per_frame": p.sec_per_frame, "vram_mb": p.vram_mb,
+            }
+            for key, p in PRESETS.items()
+        ],
+        "default_quality": DEFAULT_QUALITY,
+        "gpu_free_vram_mb": await run_in_threadpool(hardware.gpu_free_vram_mb) if hw.backend == "cuda" else 0,
         "limits": {"max_video_seconds": config.MAX_VIDEO_SECONDS, "max_video_mb": config.MAX_VIDEO_BYTES // (1024 * 1024)},
         "busy_job": queue.current,
     }
@@ -428,6 +437,7 @@ class JobIn(BaseModel):
     source_id: str
     assignments: list[AssignmentIn] = Field(default_factory=list)
     background: Optional[BackgroundIn] = None
+    quality: str = DEFAULT_QUALITY
 
 
 @app.post(f"{P}/api/jobs")
@@ -437,6 +447,8 @@ async def create_job(body: JobIn):
         raise UserError("NOT_FOUND", "Видео не найдено.", "Добавьте его ещё раз.", status=404)
     if src.get("status") != "ready":
         raise UserError("SOURCE_NOT_READY", "Видео ещё разбирается." if src.get("status") in ("queued", "processing") else "Видео не удалось подготовить.", "Дождитесь окончания разбора или добавьте видео ещё раз.")
+
+    quality = body.quality if body.quality in PRESETS else DEFAULT_QUALITY
 
     persons = src.get("persons") or []
     assignments: list[dict] = []
@@ -489,7 +501,7 @@ async def create_job(body: JobIn):
         "source": {"kind": src.get("kind"), "url": src.get("url"), "duration": src.get("info", {}).get("duration"), "width": src.get("info", {}).get("width"),
                    "height": src.get("info", {}).get("height"), "fps": src.get("info", {}).get("fps")},
         "assignments": assignments,
-        "quality": DEFAULT_QUALITY,
+        "quality": quality,
         "background": background,
     }
     job = store.create(data)

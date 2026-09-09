@@ -69,7 +69,7 @@ clipy/
 | POST | `/clipy/api/faces` | multipart фото → проверенное лицо (ровно одно лицо) |
 | POST | `/clipy/api/identities` | `{name, face_ids[]}` → профиль «MY FACE» (до 10 фото) |
 | POST | `/clipy/api/uploads/background` | JPEG/PNG/MP4 фон |
-| POST | `/clipy/api/jobs` | `{source_id, assignments: [{person, face_ids | identity_id}], background}` → `{job_id}` |
+| POST | `/clipy/api/jobs` | `{source_id, assignments: [{person, face_ids | identity_id}], quality: "fast" \| "best", background}` → `{job_id}` |
 | GET | `/clipy/api/jobs/{id}` | `status`, `stage`, `progress`, `stages[]`, `error`, `result` |
 | GET | `/clipy/api/jobs/{id}/result` | result.mp4 |
 | GET | `/clipy/api/jobs/{id}/logs` | строки лога задачи |

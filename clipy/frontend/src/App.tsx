@@ -151,6 +151,7 @@ export default function App() {
 
   // человек в видео -> кем заменить (id человека из шага 2)
   const [choice, setChoice] = useState<Record<string, string>>({});
+  const [quality, setQuality] = useState<string>("fast");
   const [bgEnabled, setBgEnabled] = useState(false);
   const [bg, setBg] = useState<{ background_id: string; kind: string; preview_url: string; filename: string } | null>(null);
   const [bgBusy, setBgBusy] = useState(false);
@@ -218,6 +219,13 @@ export default function App() {
       await loadPeople();
     })();
   }, [loadSystem, loadFaces, loadPeople, loadHistory]);
+
+  // сколько видеопамяти свободно, меняется постоянно: открыли OBS или игру — оценка времени должна это знать
+  useEffect(() => {
+    if (job && (job.status === "queued" || job.status === "processing")) return;
+    const t = setInterval(() => void loadSystem(), 15000);
+    return () => clearInterval(t);
+  }, [job, loadSystem]);
 
   useEffect(() => {
     if (!source || (source.status !== "queued" && source.status !== "processing")) return;
@@ -402,6 +410,21 @@ export default function App() {
         .filter((a) => a.identity_id),
     [persons, choice],
   );
+  // Оценка времени. Секунды на кадр замерены на этой машине и приходят с сервера,
+  // плюс ~25 с на проход: разбор, поиск лиц и сборка видео.
+  const presets = system?.presets ?? [];
+  const preset = presets.find((p) => p.id === quality) ?? presets[0];
+  const frames = source?.info ? Math.round(source.info.duration * source.info.fps) : 0;
+  const passes = Math.max(1, assignments.length);
+  function estimate(p: { sec_per_frame: number }): string {
+    if (!frames) return "";
+    const sec = frames * p.sec_per_frame * passes + 25 * passes;
+    if (sec < 90) return `≈ ${Math.round(sec / 10) * 10} с`;
+    return `≈ ${Math.round(sec / 60)} мин`;
+  }
+  const freeVram = system?.gpu_free_vram_mb ?? 0;
+  const gpuTight = !!preset && freeVram > 0 && freeVram < preset.vram_mb;
+
   const canGenerate = sourceReady && (assignments.length > 0 || (bgEnabled && !!bg)) && !running;
   const whyDisabled = !sourceReady
     ? "Сначала добавьте видео."
@@ -422,6 +445,7 @@ export default function App() {
       const r = await postJSON<{ job_id: string; job: Job }>("/jobs", {
         source_id: source.id,
         assignments,
+        quality,
         background: bgEnabled && bg ? { background_id: bg.background_id } : null,
       });
       setJob(r.job);
@@ -656,6 +680,17 @@ export default function App() {
 
       {/* 4. Запуск */}
       <section className="card">
+        {presets.length > 1 && !running && (
+          <div className="quality">
+            {presets.map((p) => (
+              <button key={p.id} className={`qual ${quality === p.id ? "on" : ""}`} onClick={() => setQuality(p.id)} type="button">
+                <b>{p.label}</b>
+                <span className="qual-time">{estimate(p) || "—"}</span>
+                <span className="qual-note">{p.note}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {!running ? (
           <button className="btn btn-big" onClick={generate} disabled={!canGenerate}>Создать видео</button>
         ) : (
@@ -663,6 +698,12 @@ export default function App() {
         )}
         {!running && !canGenerate && whyDisabled && <p className="hint" style={{ marginTop: 8 }}>{whyDisabled}</p>}
         {!running && canGenerate && assignments.length > 1 && <p className="hint" style={{ marginTop: 8 }}>Замен {assignments.length}: каждая считается отдельным проходом, поэтому времени уйдёт больше.</p>}
+        {!running && gpuTight && (
+          <div className="box warn" style={{ marginTop: 10 }}>
+            <b>Видеокарта занята другим приложением.</b> Свободно {freeVram} МБ, режиму нужно около {preset!.vram_mb} МБ.
+            Закройте OBS, игру или лишние окна браузера, иначе замена пойдёт в разы дольше.
+          </div>
+        )}
         <Msg error={jobErr} />
         {job && st && (
           <div style={{ marginTop: 16 }}>

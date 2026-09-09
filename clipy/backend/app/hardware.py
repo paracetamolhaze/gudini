@@ -75,6 +75,26 @@ def _nvidia_smi() -> tuple[str, int, str]:
         return "", 0, ""
 
 
+def gpu_free_vram_mb() -> int:
+    """Сколько видеопамяти свободно ПРЯМО СЕЙЧАС. 0 — узнать не удалось.
+
+    Карту делят с рабочим столом: браузер, OBS, оверлеи. На 8 ГБ у замены лица
+    остаётся не вся память, и когда её не хватает, драйвер начинает возить веса
+    моделей через шину — карта показывает 100%, а кадры почти не идут.
+    """
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return 0
+    try:
+        out = subprocess.run(
+            [exe, "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip().splitlines()
+        return int(float(out[0].strip())) if out else 0
+    except Exception:
+        return 0
+
+
 def _cuda_session_works() -> tuple[bool, str]:
     """Create a tiny CUDA session in a subprocess so a broken CUDA install cannot crash the server."""
     code = r"""

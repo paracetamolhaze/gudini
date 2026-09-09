@@ -808,3 +808,28 @@ select {
     flex: 1 1 auto;
   }
 }
+
+/* выбор режима: две плитки с честной оценкой времени */
+.quality {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.qual {
+  display: block;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-input);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.qual:hover { border-color: var(--accent); }
+.qual.on { border-color: var(--accent); background: var(--accent-soft); }
+.qual b { display: block; font-size: 15px; }
+.qual .qual-time { display: block; margin-top: 2px; color: var(--accent); font-size: 14px; }
+.qual .qual-note { display: block; margin-top: 4px; color: var(--text-dim); font-size: 12px; line-height: 1.35; }
+@media (max-width: 520px) { .quality { grid-template-columns: 1fr; } }

@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 from .. import config, ffmpeg
 from ..errors import Cancelled, UserError
+from .. import hardware
 from ..hardware import Hardware, engine_env
 from ..procs import run_streaming
 
@@ -35,14 +36,42 @@ class Preset:
     video_quality: int
     threads: int
     memory_strategy: str = "moderate"
+    # Замеры на RTX 3060 Ti, вертикальный ролик 576x1024, одно лицо в кадре, карта свободна.
+    # По ним страница показывает «примерно N минут» до запуска — раньше время было сюрпризом.
+    sec_per_frame: float = 0.25
+    # Сколько видеопамяти занимает прогон: если свободно меньше, движок начинает возить
+    # веса через шину, и кадры почти встают. Тогда режем потоки и просим strict.
+    vram_mb: int = 6500
+    label: str = ""
+    note: str = ""
 
 
-# Режим один: максимальное качество. Раньше их было три, но «Быстро» давал мыльное лицо
-# и прямоугольную маску поверх рук и волос, а выбор только путал.
+# Два режима. Замеры на RTX 3060 Ti, 302 кадра 576x1024, карта свободна:
+#   «Лучшее»  прорисовка 512 + gfpgan на каждом кадре, кодировщик slow  — 66.2 с (0.219 с/кадр)
+#   «Быстро»  родные 256 без улучшайзера, кодировщик veryfast          — 19.0 с (0.063 с/кадр)
+# Что проверялось и отброшено: 2 потока вместо 4 (+8% времени, памяти почти столько же),
+# inswapper_128 вместо hyperswap (0.104 с/кадр — не быстрее, а лицо мыльное), лёгкая
+# разметка peppa_wutz (−9%, но точки хуже), forward 10 (медленнее), маска без перекрытий
+# (−13%, но прямоугольник лезет на руки и волосы). Кодировщик slow в «Лучшем» стоит 1.4%:
+# там всё решает видеокарта, поэтому файл оставлен пожатым получше.
+PRESET_BENCH = "302 кадра 576x1024 на RTX 3060 Ti со свободной картой"
 PRESETS: dict[str, Preset] = {
-    "best": Preset(["face_swapper", "face_enhancer"], "hyperswap_1a_256", "512x512", "gfpgan_1.4", 70, ["box", "occlusion", "region"], 0.15, 4, "slow", 90, 4),
+    "fast": Preset(
+        processors=["face_swapper"], swapper="hyperswap_1a_256", pixel_boost="256x256",
+        enhancer=None, enhancer_blend=0, mask_types=["box", "occlusion"],
+        tracker_score=0.15, frame_amount=4, preset="veryfast", video_quality=88, threads=6,
+        memory_strategy="moderate", sec_per_frame=0.063, vram_mb=4000,
+        label="Быстро", note="Родное разрешение движка, без отдельного улучшения лица.",
+    ),
+    "best": Preset(
+        processors=["face_swapper", "face_enhancer"], swapper="hyperswap_1a_256", pixel_boost="512x512",
+        enhancer="gfpgan_1.4", enhancer_blend=70, mask_types=["box", "occlusion", "region"],
+        tracker_score=0.15, frame_amount=4, preset="slow", video_quality=90, threads=4,
+        memory_strategy="moderate", sec_per_frame=0.219, vram_mb=6500,
+        label="Лучшее", note="Прорисовка вчетверо детальнее и улучшение лица на каждом кадре.",
+    ),
 }
-DEFAULT_QUALITY = "best"
+DEFAULT_QUALITY = "fast"
 
 
 @dataclass
@@ -76,7 +105,7 @@ def build_command(req: SwapRequest, preset: Preset, threads: int, pixel_boost: s
     providers = list(hw.execution_providers)
     encoder = "libx264"
     # NVENC only on a native Windows install: WSL2/Docker containers list the encoder but cannot use it
-    if req.quality == "fast" and hw.backend == "cuda" and sys.platform.startswith("win") and ffmpeg.encoder_available("h264_nvenc"):
+    if preset.preset == "veryfast" and hw.backend == "cuda" and sys.platform.startswith("win") and ffmpeg.encoder_available("h264_nvenc"):
         encoder = "h264_nvenc"
     cmd = [
         config.PYTHON, "facefusion.py", "headless-run",
@@ -135,8 +164,17 @@ def run_swap(req: SwapRequest, log: Log, progress: Progress, cancel: threading.E
         threads = max(1, min(4, (os.cpu_count() or 4) // 2))
         pixel_boost = "256x256"
         log("CPU backend: this will be slow, pixel boost reduced to 256x256")
-    elif hw.backend == "cuda" and hw.gpu_vram_mb and hw.gpu_vram_mb < 6000:
-        threads = min(threads, 3)
+    elif hw.backend == "cuda":
+        if hw.gpu_vram_mb and hw.gpu_vram_mb < 6000:
+            threads = min(threads, 3)
+        free = hardware.gpu_free_vram_mb()
+        if free and free < preset.vram_mb:
+            # карту занял кто-то ещё (браузер, OBS, игра): в тесноте прогон замедляется в разы,
+            # поэтому берём меньше потоков и строгую стратегию — медленнее, но без пробуксовки
+            threads = max(1, threads // 2)
+            memory_strategy = "strict"
+            log(f"свободно {free} МБ видеопамяти из {hw.gpu_vram_mb}, режиму нужно ~{preset.vram_mb}: потоков {threads}, стратегия strict")
+            log("закройте OBS, игру или лишние окна браузера — с занятой картой замена идёт в разы дольше")
 
     attempts = 0
     last_error = ""

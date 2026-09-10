@@ -238,6 +238,54 @@ const ANGLES: CameraAngle[] = ["eye_level", "low_angle", "high_angle", "overhead
 const COMPOSITIONS: Composition[] = ["center", "low_space_above", "high_space_below", "offset_left", "offset_right", "subject_small_in_wide"];
 
 /**
+ * Ракурс из текстового описания камеры. Планировщик пишет позицию камеры словами и
+ * отдельно выбирает ракурс из списка, и эти два ответа расходятся: в промпт уходило
+ * «камера строго сверху» и тут же «камера снизу, смотрит вверх». Veo пытался выполнить
+ * оба и выворачивал тело. Текст конкретнее, поэтому правдой считается он.
+ */
+export function angleFromCameraText(text: string): CameraAngle | null {
+  // Смотрим только на то, что сказано о КАМЕРЕ. «he falls straight down» — это движение
+  // человека, и по нему нельзя решать, что камера висит сверху: ровно на этом определитель
+  // ошибся и подтвердил противоречие вместо того, чтобы его снять.
+  // Позицию камеры ищем сразу после слова camera. Свободный поиск слов «below» и «above»
+  // по всей фразе ловит «the ground far below» и «the canopy above him» — это про мир,
+  // а не про точку съёмки.
+  const t = text.toLowerCase();
+  const at = /camera\s+(?:is\s+|sits\s+|stands\s+|hangs\s+|lies\s+|placed\s+)?(?:just\s+|slightly\s+|directly\s+|straight\s+|high\s+)*([a-z ]{0,18})/.exec(t);
+  const pos = at?.[1] ?? "";
+  if (/^(?:below|beneath|under)\b/.test(pos)) return "low_angle";
+  if (/^(?:on the ground|at ground level)/.test(pos)) return "ground_level";
+  if (/^above/.test(pos)) return /looking (?:straight )?down/.test(t) && /straight|directly/.test(t) ? "overhead" : "high_angle";
+  if (/bird'?s.?eye|top-?down|camera looking straight down/.test(t)) return "overhead";
+  if (/over (?:his|the) shoulder|behind (?:his|the) shoulder/.test(t)) return "over_shoulder";
+  if (/in profile|square to his side/.test(t)) return "profile";
+  return null;
+}
+
+/**
+ * Ракурс и композиция не должны противоречить друг другу. Камера строго сверху и место
+ * в кадре, оставленное НАД человеком, — это взаимоисключающие требования: то, что над ним,
+ * находится между ним и камерой и просто закроет кадр.
+ */
+export function reconcileFraming(beat: Pick<StoryBeat, "camera" | "cameraAngle" | "composition">): boolean {
+  let changed = false;
+  const inferred = angleFromCameraText(beat.camera);
+  if (inferred && inferred !== beat.cameraAngle) {
+    beat.cameraAngle = inferred;
+    changed = true;
+  }
+  if (beat.composition === "low_space_above" && (beat.cameraAngle === "overhead" || beat.cameraAngle === "high_angle")) {
+    beat.cameraAngle = "low_angle";
+    changed = true;
+  }
+  if (beat.composition === "high_space_below" && (beat.cameraAngle === "ground_level" || beat.cameraAngle === "low_angle")) {
+    beat.cameraAngle = "high_angle";
+    changed = true;
+  }
+  return changed;
+}
+
+/**
  * Имя героя истории в текстах сцен заменяется на имя постоянного персонажа.
  * Вызывается только когда bible.playedByGudini не пуст, а нормализатор очищает это поле
  * для новостей — так что реального участника события подмена больше не затрагивает.
@@ -410,6 +458,10 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
     if (beats[i].end < beats[i].start) beats[i].end = beats[i].start;
     beats[i].suggestedDuration = Math.round((beats[i].end - beats[i].start) * 10) / 10;
   }
+  // Камера и композиция сводятся к одному непротиворечивому описанию до того, как из них
+  // соберут промпт: иначе Veo получает «камера сверху» и «камера снизу» в одном тексте.
+  for (const b of beats) if (b.displayMode !== "author") reconcileFraming(b);
+
   // AI-бит короче минимума — автор (AI за 2–3 секунды не прочитать). Открывающий бит
   // пропускаем: им занимаемся ниже, когда соседи уже приведены в порядок.
   for (let i = 0; i < beats.length; i++) {

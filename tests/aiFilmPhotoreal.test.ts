@@ -456,3 +456,27 @@ test("существительное, похожее на глагол, за с�
   assert.ok(hasEvent("the canopy tears open above him"));
   assert.ok(hasEvent("he steps off the edge and falls"));
 });
+
+test("камера и композиция сводятся к одному непротиворечивому описанию", async () => {
+  const { reconcileFraming, angleFromCameraText } = await import("../lib/aiFilm/story");
+  // ровно тот случай, который вывернул тело в кадре
+  const broken = { camera: "Camera is below and slightly behind him looking up as he falls straight down past it", cameraAngle: "overhead" as const, composition: "low_space_above" as const };
+  assert.equal(angleFromCameraText(broken.camera), "low_angle");
+  assert.equal(reconcileFraming(broken), true);
+  assert.equal(broken.cameraAngle, "low_angle", "правдой считается текстовое описание камеры");
+
+  // камера сверху и место над головой — взаимоисключающие требования
+  const above = { camera: "Camera watches him from the far side of the field", cameraAngle: "overhead" as const, composition: "low_space_above" as const };
+  reconcileFraming(above);
+  assert.equal(above.cameraAngle, "low_angle");
+
+  // и обратная пара
+  const below = { camera: "Camera watches from the far side", cameraAngle: "ground_level" as const, composition: "high_space_below" as const };
+  reconcileFraming(below);
+  assert.equal(below.cameraAngle, "high_angle");
+
+  // согласованное описание не трогаем
+  const fine = { camera: "Camera is directly above him looking straight down at the ground far below", cameraAngle: "overhead" as const, composition: "high_space_below" as const };
+  assert.equal(reconcileFraming(fine), false);
+  assert.equal(fine.cameraAngle, "overhead");
+});

@@ -420,12 +420,14 @@ test("план замечает два соседних кадра с одног
 });
 
 test("сцена без события ловится планом", async () => {
-  const { buildFilmPlan, STATIC_ACTION } = await import("../lib/aiFilm/plan");
-  // сам образец: событийные действия не ловятся, статичные ловятся
-  assert.ok(STATIC_ACTION.test("Gudini stands at the cliff edge and tightens a strap"));
-  assert.ok(STATIC_ACTION.test("Gudini checks his harness"));
-  assert.ok(!STATIC_ACTION.test("the orange canopy tears apart above him"));
-  assert.ok(!STATIC_ACTION.test("Gudini pulls the reserve handle and the canopy opens"));
+  const { buildFilmPlan, EVENT_ACTION } = await import("../lib/aiFilm/plan");
+  // проверяем отсутствие события, а не присутствие покоя
+  assert.ok(!EVENT_ACTION.test("Gudini stands at the cliff edge and tightens a strap"));
+  assert.ok(!EVENT_ACTION.test("Gudini checks his harness"));
+  assert.ok(EVENT_ACTION.test("the orange canopy tears apart above him"));
+  assert.ok(EVENT_ACTION.test("Gudini pulls the reserve handle and the canopy opens"));
+  // сцена, начинающаяся со статичного глагола, но с настоящим действием, ложно не ловится
+  assert.ok(EVENT_ACTION.test("Gudini sits at a desk, tears open a cardboard box and pulls out a canopy"));
 
   const bible = bibleOf("explainer");
   const cfg = { key: "k", universe, budgetUsd: 12, maxCoverage: 0.65, concurrency: 3, callMinutes: 2 };

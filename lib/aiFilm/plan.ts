@@ -497,11 +497,12 @@ export const COMPOSITION_LINE: Record<Composition, string> = {
 };
 
 /**
- * Действие, в котором ничего не происходит. Ловится по главному глаголу: сцена, где герой
- * стоит, готовится или поправляет снаряжение, стоит тех же денег, что и сцена, где купол рвётся.
+ * Есть ли в действии событие. Проверка именно такая, а не поиск статичных глаголов:
+ * «садится за стол и вскрывает коробку» — это событие, хотя начинается со слова «садится».
+ * Ловим отсутствие глагола изменения, а не присутствие глагола покоя.
  */
-export const STATIC_ACTION =
-  /\b(?:stands?|standing|sits?|sitting|holds?|holding|looks? (?:at|around)|waits?|waiting|adjusts?|adjusting|tightens?|tightening|checks?|checking|prepares?|preparing|poses?|posing|thinks?|thinking|gazes?|gazing)\b/i;
+export const EVENT_ACTION =
+  /\b(?:tears?|rips?|opens?|unpacks?|unwraps?|pulls?|yanks?|drops?|falls?|jumps?|leaps?|steps? off|lands?|throws?|tosses?|breaks?|snaps?|deploys?|inflates?|collapses?|catches?|hits?|slams?|spills?|pours?|cuts?|lifts?|pushes?|shoves?|closes?|clicks?|presses?|taps?|types?|hands?|slides?|swings?|kicks?|rolls?|crashes?|bursts?|shreds?|flips?|tips?|pours?|dumps?|grabs?|releases?|launches?|takes? off|climbs?|runs?|walks? (?:away|out|in|into|past)|turns? (?:on|off|over))\b/i;
 
 /** Дольше этого зритель смотрит на говорящую голову без единой вставки — это провал удержания. */
 export const MAX_AUTHOR_STRETCH_SECONDS = 12;
@@ -631,7 +632,10 @@ export function buildFilmPlan(args: {
   // два человека: названный по имени герой и описание постоянного персонажа.
   // Сцена, в которой ничего не происходит. Человек, восемь секунд поправляющий лямку,
   // технически безупречен и совершенно не нужен: платим за клип, а событие рассказывает голос.
-  const idle = beats.filter((b) => isAi(b) && (STATIC_ACTION.test(b.visualAction) || (b.stateBefore && b.stateBefore === b.stateAfter))).map((b) => b.id);
+  const idle = beats
+    .filter((b) => isAi(b) && b.visualAction)
+    .filter((b) => !EVENT_ACTION.test(`${b.visualAction} ${b.keyMoment}`) || (b.stateBefore && b.stateBefore === b.stateAfter))
+    .map((b) => b.id);
   if (idle.length) warnings.push(`Сцены без события (${idle.join(", ")}): герой стоит или готовится, но ничего не меняется`);
   // Два соседних кадра с одного ракурса — это тот самый «всегда одинаковый вид»,
   // с которого начался разбор. Правило есть в промпте, но модель его иногда пропускает.

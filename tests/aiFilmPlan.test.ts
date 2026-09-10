@@ -426,7 +426,7 @@ test("длинный AI-бит из ответа модели: AI только �
 });
 
 test("крошечный author между двумя AI-сценами: следующая сцена сдвигается встык, хвост уходит автору", () => {
-  const beats = [beat("B1", 0, 8, "full_ai", { purpose: "hook", priority: "high" }), beat("B1a", 8, 9.7, "author"), beat("B2", 9.7, 17.7, "full_ai", { purpose: "climax", priority: "high" }), beat("B3", 17.7, 40, "author")];
+  const beats = [beat("B1", 0, 8, "full_ai", { purpose: "hook", priority: "high" }), beat("B1a", 8, 9.7, "author"), beat("B2", 9.7, 17.7, "full_ai", { purpose: "example" }), beat("B3", 17.7, 40, "author")];
   const fixed = closeTinyAuthorGaps(beats);
   assert.deepEqual(fixed.map((b) => [b.id, b.displayMode, Math.round(b.start * 10) / 10, Math.round(b.end * 10) / 10]), [
     ["B1", "full_ai", 0, 8],
@@ -441,6 +441,10 @@ test("крошечный author между двумя AI-сценами: сле�
   // между двумя AI без author-бита после — хвост становится новым author-битом
   const tail = closeTinyAuthorGaps([beat("B1", 0, 8, "full_ai"), beat("B1a", 8, 9, "author"), beat("B2", 9, 17, "full_ai")]);
   assert.deepEqual(tail.map((b) => [b.displayMode, Math.round(b.start * 10) / 10, Math.round(b.end * 10) / 10]), [["full_ai", 0, 8], ["full_ai", 8, 16], ["author", 16, 17]]);
+  // а развязку сдвигать нельзя: она показалась бы раньше, чем автор о ней сказал
+  const climax = closeTinyAuthorGaps([beat("B1", 0, 8, "full_ai"), beat("B1a", 8, 9.7, "author"), beat("B2", 9.7, 17.7, "full_ai", { purpose: "climax", priority: "high" }), beat("B3", 17.7, 40, "author")]);
+  assert.equal(climax.length, 4);
+  assert.equal(climax.find((b) => b.id === "B2")?.start, 9.7);
 });
 
 test("в промпт сцены попадают только персонажи, упомянутые в её действии", () => {

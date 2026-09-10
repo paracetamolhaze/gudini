@@ -380,3 +380,15 @@ test("план предупреждает, когда исполнителя н�
   });
   assert.ok(!right.warnings.some((w) => /назван иначе/.test(w)), right.warnings.join(" | "));
 });
+
+test("нужное число сцен считается из длины речи", async () => {
+  const { minScenes, MAX_AUTHOR_STRETCH_SEC } = await import("../lib/aiFilm/story");
+  assert.equal(minScenes(44.5), 4, "на 45 секундах — четыре сцены");
+  assert.equal(minScenes(10), 1, "короткая речь обходится одной");
+  assert.ok(minScenes(120) >= 8, `на двух минутах ${minScenes(120)}`);
+  // проверка смысла: сцены плюс разрывы покрывают всю длину
+  for (const d of [30, 44.5, 60, 90, 120]) {
+    const n = minScenes(d);
+    assert.ok(n * 4 + n * MAX_AUTHOR_STRETCH_SEC >= d, `${d} с не покрывается ${n} сценами`);
+  }
+});

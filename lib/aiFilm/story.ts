@@ -28,6 +28,15 @@ export const MIN_BEAT_SEC = 2;
  */
 export const MAX_AUTHOR_STRETCH_SEC = 12;
 
+/**
+ * Сколько сцен нужно на речь такой длины, чтобы нигде не было длинного куска без картинки.
+ * Считается по шагу «сцена плюс допустимый разрыв»; на 45 секундах это четыре сцены.
+ */
+export function minScenes(duration: number): number {
+  const step = MIN_AI_BEAT_SEC + MAX_AUTHOR_STRETCH_SEC;
+  return Math.max(1, Math.ceil((duration - MAX_AUTHOR_STRETCH_SEC) / step) + 1);
+}
+
 export type Phrase = { index: number; start: number; end: number; text: string };
 
 export const MAX_PHRASE_SEC = 5;
@@ -473,7 +482,12 @@ export async function planStory(args: {
     `${args.topic ? `Тема ролика: ${args.topic}\n` : ""}` +
     `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
     `Сценарий (что автор хотел сказать):\n${args.script.slice(0, 4000)}\n\n` +
-    `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}` +
+    `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}\n\n` +
+    // Число модель выполняет заметно охотнее, чем правило: «не больше 12 секунд подряд»
+    // она трактует как пожелание, а «нужно минимум 4 сцены» — как задачу.
+    `СЧИТАЙ САМ: речь длится ${args.duration.toFixed(0)} секунд. Чтобы нигде не было больше ${MAX_AUTHOR_STRETCH_SEC} секунд подряд без картинки, ` +
+    `на этой длине нужно НЕ МЕНЬШЕ ${minScenes(args.duration)} сцен, и первая из них — в самом начале. ` +
+    `Расставь их по всей длине речи и проверь себя по номерам фраз перед тем, как отвечать.` +
     (args.retryNote
       ? `\n\nПРЕДЫДУЩИЙ ТВОЙ ПЛАН НА ЭТУ ЖЕ РЕЧЬ НАРУШИЛ ЖЁСТКИЕ ТРЕБОВАНИЯ К СТРУКТУРЕ:\n${args.retryNote}\n` +
         `Составь план заново и исправь именно это. Остальное можно оставить прежним.`

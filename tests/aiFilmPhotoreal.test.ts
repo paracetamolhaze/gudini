@@ -531,3 +531,10 @@ test("правдой остаётся текст камеры, подстраи�
   assert.equal(d.cameraAngle, "low_angle");
   assert.equal(d.composition, "low_space_above");
 });
+
+test("«at eye level» без притяжательного тоже распознаётся", async () => {
+  const { angleFromCameraText } = await import("../lib/aiFilm/story");
+  // строка из настоящего плана: ракурс стоял «сверху», а камера на уровне глаз
+  assert.equal(angleFromCameraText("Camera is on the cliff behind him at eye level; Gudini walks away from camera"), "eye_level");
+  assert.equal(angleFromCameraText("Camera is at eye level a meter in front of him, static"), "eye_level");
+});

@@ -25,8 +25,6 @@ services:
       PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
       # вкладка /clipy: сайт проксирует её в контейнер clipy (снаружи это делает Caddy напрямую)
       CLIPY_URL: http://clipy:8500
-      # стенд озвучки /test: сайт проксирует его в контейнер tts, наружу порт 8600 не открыт
-      TTS_URL: http://tts:8600
     ports:
       # только с этого компьютера; из интернета — через caddy
       # 3000 открыт и в домашней сети: роутер не заворачивает свой внешний адрес обратно внутрь,
@@ -78,32 +76,6 @@ services:
               count: all
               capabilities: [gpu]
 
-  # --- Стенд озвучки, вкладка /test: Chatterbox Multilingual V3 на GPU ---
-  # Веса модели (~3 ГБ) качаются при первой загрузке в том tts-data, а не в образ.
-  # Карта та же, что у clipy: две модели в 8 ГБ не помещаются, поэтому на стенде есть
-  # кнопка «Освободить память», и держать модель загруженной постоянно не нужно.
-  tts:
-    build:
-      context: ./tts
-    container_name: gudini-tts
-    restart: unless-stopped
-    environment:
-      TTS_DEVICE: cuda
-      TTS_T3_MODEL: v3
-    ports:
-      # только для локальной разработки сайта (npm run dev ходит на 127.0.0.1:8600);
-      # снаружи стенд доступен лишь через сайт, за паролем
-      - "127.0.0.1:8600:8600"
-    volumes:
-      - tts-data:/app/data
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
   # --- публичный HTTPS: включается профилем `public`, когда домен и проброс порта готовы ---
   caddy:
     profiles: ["public"]
@@ -138,6 +110,5 @@ volumes:
   gudini-site-data:
   gudini-worker-data:
   clipy-data:
-  tts-data:
   caddy-data:
   caddy-config:

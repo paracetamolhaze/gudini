@@ -386,15 +386,33 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
   // Делается ПОСЛЕ общей проверки: сосед мог сам быть коротким AI-битом и только что стать
   // автором — тогда занимать время у него уже можно.
   const first = beats[0];
-  const second = beats[1];
   if (first && first.displayMode !== "author" && first.end - first.start < MIN_AI_BEAT_SEC - 1e-6) {
-    const need = MIN_AI_BEAT_SEC - (first.end - first.start);
-    const spare = second && second.displayMode === "author" ? second.end - second.start - 1.0 : -1;
-    if (spare >= need) {
+    let need = MIN_AI_BEAT_SEC - (first.end - first.start);
+    // Считаем всю авторскую цепочку сразу за хуком: между ним и длинным объяснением
+    // часто стоит ещё один коротышка, и проверка только ближайшего соседа промахивалась.
+    let available = 0;
+    let last = 0;
+    for (let i = 1; i < beats.length && beats[i].displayMode === "author"; i++) {
+      available += beats[i].end - beats[i].start;
+      last = i;
+    }
+    if (available - 1.0 >= need) {
       first.end = Math.round((first.end + need) * 1000) / 1000;
-      second.start = first.end;
       first.suggestedDuration = Math.round((first.end - first.start) * 10) / 10;
-      second.suggestedDuration = Math.round((second.end - second.start) * 10) / 10;
+      // сдвигаем цепочку: съеденные целиком биты убираем, последний укорачиваем
+      let cursor = first.end;
+      const drop: number[] = [];
+      for (let i = 1; i <= last; i++) {
+        const b = beats[i];
+        const len = b.end - b.start;
+        if (cursor >= b.end - 1e-6) { drop.push(i); continue; }
+        b.start = Math.max(cursor, b.start);
+        b.suggestedDuration = Math.round((b.end - b.start) * 10) / 10;
+        cursor = Math.max(cursor, b.start + Math.min(len, 0));
+      }
+      for (const i of drop.reverse()) beats.splice(i, 1);
+      // после удаления биты снова встык
+      for (let i = 1; i < beats.length; i++) beats[i].start = beats[i - 1].end;
     } else {
       first.displayMode = "author";
       first.requiresGeneration = false;

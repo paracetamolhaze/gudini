@@ -220,7 +220,13 @@ export default function TestPage() {
             tone={health?.loaded ? "success" : health?.loading ? "accent" : "neutral"}
             busy={health?.loading || health?.busy}
           >
-            {health?.loading ? "грузится" : health?.busy ? "занята генерацией" : health?.loaded ? "в памяти" : "выгружена"}
+            {health?.loading
+              ? "кладётся в память"
+              : health?.busy
+                ? "занята генерацией"
+                : health?.loaded
+                  ? "в памяти карты"
+                  : "не в памяти карты"}
           </StatusBadge>
         </div>
         <div className="hint">
@@ -229,12 +235,16 @@ export default function TestPage() {
             : "состояние неизвестно"}
         </div>
         <div className="hint" style={{ marginTop: 6 }}>
+          Веса скачаны один раз и лежат в томе контейнера — кнопка ничего не качает.
+          Она кладёт модель в память видеокарты, это около полутора минут. Память очищается
+          при перезапуске контейнера, тогда модель нужно положить туда снова.
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>
           Карта одна. Перед рендером в Clipy освободите память, иначе обеим не хватит.
-          Первая загрузка качает веса, это несколько минут.
         </div>
         <div className="actions">
           <Button onClick={() => model("load")} busy={modelBusy} disabled={health?.loaded}>
-            Загрузить модель
+            Положить в память карты
           </Button>
           <Button variant="secondary" onClick={() => model("unload")} busy={modelBusy} disabled={!health?.loaded}>
             Освободить память

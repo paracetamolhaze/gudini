@@ -504,6 +504,17 @@ export const COMPOSITION_LINE: Record<Composition, string> = {
 export const EVENT_ACTION =
   /\b(?:tears?|rips?|opens?|unpacks?|unwraps?|pulls?|yanks?|drops?|falls?|jumps?|leaps?|steps? off|lands?|throws?|tosses?|breaks?|snaps?|deploys?|inflates?|collapses?|catches?|hits?|slams?|spills?|pours?|cuts?|lifts?|pushes?|shoves?|closes?|clicks?|presses?|taps?|types?|hands?|slides?|swings?|kicks?|rolls?|crashes?|bursts?|shreds?|flips?|tips?|pours?|dumps?|grabs?|releases?|launches?|takes? off|climbs?|runs?|walks? (?:away|out|in|into|past)|turns? (?:on|off|over))\b/i;
 
+/**
+ * Существительные, которые пишутся как глаголы изменения: «looking down at the drop»
+ * засчитывалось за событие из-за слова drop. Перед проверкой такие обороты вырезаются.
+ */
+const NOUN_HOMOGRAPH = /\b(?:the|a|an|his|her|its|that|this)\s+(?:drop|fall|land|landing|break|catch|cut|push|turn|roll|jump|step|climb|run|walk|throw|kick|swing|release|launch)s?\b/gi;
+
+/** Есть ли в тексте настоящее действие, а не существительное, похожее на глагол. */
+export function hasEvent(text: string): boolean {
+  return EVENT_ACTION.test(text.replace(NOUN_HOMOGRAPH, " "));
+}
+
 /** Дольше этого зритель смотрит на говорящую голову без единой вставки — это провал удержания. */
 export const MAX_AUTHOR_STRETCH_SECONDS = 12;
 /** Позже этой секунды первая сцена уже не работает как hook. */
@@ -634,7 +645,7 @@ export function buildFilmPlan(args: {
   // технически безупречен и совершенно не нужен: платим за клип, а событие рассказывает голос.
   const idle = beats
     .filter((b) => isAi(b) && b.visualAction)
-    .filter((b) => !EVENT_ACTION.test(`${b.visualAction} ${b.keyMoment}`) || (b.stateBefore && b.stateBefore === b.stateAfter))
+    .filter((b) => !hasEvent(`${b.visualAction} ${b.keyMoment}`) || (b.stateBefore && b.stateBefore === b.stateAfter))
     .map((b) => b.id);
   if (idle.length) warnings.push(`Сцены без события (${idle.join(", ")}): герой стоит или готовится, но ничего не меняется`);
   // Два соседних кадра с одного ракурса — это тот самый «всегда одинаковый вид»,

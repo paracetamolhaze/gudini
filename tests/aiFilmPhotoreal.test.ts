@@ -444,3 +444,15 @@ test("сцена без события ловится планом", async () =>
   });
   assert.ok(!event.warnings.some((w) => /Сцены без события/.test(w)), event.warnings.join(" | "));
 });
+
+test("существительное, похожее на глагол, за событие не считается", async () => {
+  const { hasEvent } = await import("../lib/aiFilm/plan");
+  // ровно тот случай, что проскочил: «смотрит вниз на обрыв» — это не событие
+  assert.ok(!hasEvent("Gudini stands near the edge, looking down at the drop below"));
+  assert.ok(!hasEvent("he waits at the landing field after his fall"));
+  assert.ok(!hasEvent("he stands right at the edge with the rig on his back"));
+  // а настоящие действия по-прежнему считаются
+  assert.ok(hasEvent("he drops the rig on the grass"));
+  assert.ok(hasEvent("the canopy tears open above him"));
+  assert.ok(hasEvent("he steps off the edge and falls"));
+});

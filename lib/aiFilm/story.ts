@@ -3,7 +3,7 @@ import type { Word } from "../transcribe";
 import { characterBlock } from "./character";
 import { universePlannerBlock, type UniverseProfile } from "./universe";
 import { STAGING_FOR } from "./types";
-import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType } from "./types";
+import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType, CameraAngle, Composition } from "./types";
 
 /**
  * Story Planner v2. Модель получает сценарий, чистую речь по фразам с временем, тему,
@@ -13,8 +13,8 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
  */
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
-/** 5 — персонаж играет главного героя, сцены распределены по всему ролику. */
-export const STORY_VERSION = 5;
+/** 6 — ракурс и композиция выбираются под действие, ключевой предмет держится в кадре. */
+export const STORY_VERSION = 6;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -113,11 +113,34 @@ motion (английский) — что происходит внутри кл�
 stateBefore / stateAfter (английский, коротко) — состояние предмета и человека до и после сцены. Указывай то, что не должно скакать между кадрами: цвет и форма предмета, целый он или повреждённый, в какой руке, куда направлены движение и взгляд, с какой стороны кадра, какой свет, что надето.
 Повреждённое не появляется до повреждения и не становится целым после. Запасной предмет не меняет цвет между сценами.
 
-═══ 9. КАМЕРА ═══
-camera (английский) начинается с позиции камеры и направления движения относительно неё, иначе генератор разворачивает человека в объектив. Формат: «Camera stands <где, на каком расстоянии, на какой высоте>; <кто> moves <куда относительно камеры>». Направления: away from camera, toward camera, past camera on the left, across frame left to right, straight down below camera.
+═══ 9. РАКУРС И КОМПОЗИЦИЯ ВЫБИРАЮТСЯ ПОД ДЕЙСТВИЕ ═══
+Это не формальность. Одинаковый ракурс во всех сценах — главная причина, по которой ролик выглядит дёшево.
+
+cameraAngle — откуда смотрит камера:
+- "eye_level" — обычный разговор, бытовое действие;
+- "low_angle" — снизу вверх: прыжок, высота, превосходство, что-то нависает;
+- "high_angle" — сверху вниз под углом: человек мал, обстановка вокруг важнее;
+- "overhead" — строго сверху: падение, лежащий человек, раскладка предметов, вид на землю;
+- "ground_level" — камера на земле: приземление, ноги, ползёт, уронил;
+- "over_shoulder" — из-за плеча: он что-то рассматривает, экран, документ, вид его глазами;
+- "profile" — строго сбоку: движение поперёк кадра, силуэт, скорость.
+Подряд один и тот же ракурс не ставь: если в прошлой сцене был eye_level, в следующей выбери другой, если действие это позволяет.
+
+composition — где человек в кадре и, главное, ДЛЯ ЧЕГО ОСТАВЛЕНО МЕСТО:
+- "center" — человек по центру, вокруг ничего важного;
+- "low_space_above" — человек внизу кадра, СВЕРХУ ОСТАВЛЕНО МЕСТО: купол, крона, потолок, небо, то, что над ним;
+- "high_space_below" — человек вверху, место снизу: земля под ним, пропасть, то, куда он падает;
+- "offset_left" / "offset_right" — человек сбоку, место в другой половине: он смотрит туда, оттуда что-то приближается;
+- "subject_small_in_wide" — человек мелко в общем плане: важен масштаб места, а не он.
+ПРАВИЛО: всё, что названо в keyMoment, обязано ПОМЕЩАТЬСЯ В КАДР ЦЕЛИКОМ. Если ключевой предмет над человеком — composition "low_space_above" и крупность не ближе medium_wide. Купол парашюта, который не влез в кадр, — это несостоявшаяся сцена.
+
+camera (английский) начинается с позиции камеры и направления движения относительно неё, иначе генератор разворачивает человека в объектив. Формат: «Camera is <где, на каком расстоянии, на какой высоте, под каким углом>; <кто> moves <куда относительно камеры>». Направления: away from camera, toward camera, past camera on the left, across frame left to right, straight down below camera.
 Одно мотивированное движение камеры либо неподвижная камера. Требования про падение, ветер, разлетающуюся ткань и прочую физику ставь ТОЛЬКО той сцене, где это происходит.
-Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "${character.name} steps off the edge of the roof; the camera stays on the roof behind him and he drops out of the bottom of frame".
-Кадр вертикальный 9:16 (для hybrid — горизонтальный 16:9): человек около центра по вертикали, запас над головой, ничего важного у краёв. shotType: close | medium | medium_wide | wide | full_body.
+Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "Camera is above him looking straight down as he falls away from it; the canopy fills the top of the frame".
+shotType: close | medium | medium_wide | wide | full_body. Кадр вертикальный 9:16, для hybrid — горизонтальный 16:9.
+
+═══ 9a. ОДИН ПРЕДМЕТ — ОДНО НАЗВАНИЕ ═══
+Ключевой предмет во ВСЕХ сценах называй одной и той же фразой, с цветом и материалом: «the bright orange nylon canopy», «the grey canvas reserve canopy». Не «a parachute» в одной сцене и «the chute» в другой — генератор рисует каждый клип отдельно и по разному описанию сделает разные предметы. Цвет назови обязательно, иначе он поменяется между сценами.
 
 ═══ 10. ЛЮДИ В КАДРЕ ═══
 Значимые участники — только те, кого называет или подразумевает речь. Не добавляй второго участника события, свидетеля с репликой, «кого-то рядом».
@@ -156,7 +179,7 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english"}]}
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
 Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state оставляй пустыми строками, gudiniVisible=false.`;
 }
 
@@ -182,6 +205,8 @@ type RawBeat = {
   transition?: string;
   shotType?: string;
   camera?: string;
+  cameraAngle?: string;
+  composition?: string;
 };
 
 type RawStory = { storyArc?: Partial<StoryBible["storyArc"]>; bible?: any; beats?: RawBeat[] };
@@ -193,6 +218,8 @@ const PURPOSES: BeatPurpose[] = ["hook", "setup", "explain", "example", "reveal"
 const SHOTS: ShotType[] = ["close", "medium", "medium_wide", "wide", "full_body"];
 const FUNCS = ["opponent", "guide", "witness", "partner", "background"] as const;
 const STORY_TYPES: StoryType[] = ["news", "history", "philosophy", "explainer"];
+const ANGLES: CameraAngle[] = ["eye_level", "low_angle", "high_angle", "overhead", "ground_level", "over_shoulder", "profile"];
+const COMPOSITIONS: Composition[] = ["center", "low_space_above", "high_space_below", "offset_left", "offset_right", "subject_small_in_wide"];
 
 /**
  * Имя героя истории в текстах сцен заменяется на имя постоянного персонажа.
@@ -353,6 +380,8 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       transition: (e.transition === "dissolve" ? "dissolve" : "cut") as TransitionIntent,
       shotType: (SHOTS as string[]).includes(String(e.shotType)) ? (e.shotType as ShotType) : "medium",
       camera: str(e.camera),
+      cameraAngle: (ANGLES as string[]).includes(String(e.cameraAngle)) ? (e.cameraAngle as CameraAngle) : "eye_level",
+      composition: (COMPOSITIONS as string[]).includes(String(e.composition)) ? (e.composition as Composition) : "center",
       suggestedDuration: Math.round((end - start) * 10) / 10,
       ...(reduced ? { reduced } : {}),
     };

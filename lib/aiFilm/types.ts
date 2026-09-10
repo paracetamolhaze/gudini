@@ -21,6 +21,18 @@ export type GenerationProfile = "character" | "environment" | "continuation";
 export type StoryType = "news" | "history" | "philosophy" | "explainer";
 export type StagingMode = "observational" | "period_reconstruction" | "everyday_life";
 
+/**
+ * Откуда смотрит камера. Раньше ракурс не выбирался вообще: в промпт уходила одна и та же
+ * фраза про уровень глаз, и все сцены выглядели одинаково снятыми.
+ */
+export type CameraAngle = "eye_level" | "low_angle" | "high_angle" | "overhead" | "ground_level" | "over_shoulder" | "profile";
+
+/**
+ * Где в кадре стоит человек. «По центру» было зашито в сборщик для каждой сцены, поэтому
+ * купол над головой просто не помещался в кадр: важное оказывалось за краем.
+ */
+export type Composition = "center" | "low_space_above" | "high_space_below" | "offset_left" | "offset_right" | "subject_small_in_wide";
+
 /** Какая постановка соответствует типу истории. */
 export const STAGING_FOR: Record<StoryType, StagingMode> = {
   news: "observational",
@@ -138,6 +150,10 @@ export type StoryBeat = {
   transition: TransitionIntent;
   shotType: ShotType;
   camera: string;
+  /** откуда смотрит камера — выбирается под действие, а не по умолчанию */
+  cameraAngle: CameraAngle;
+  /** где человек в кадре и для чего оставлено место */
+  composition: Composition;
   /** сколько секунд AI просил планировщик (до нормализации под Veo) */
   suggestedDuration: number;
   /** почему бит переведён в author редьюсером (если переведён) */

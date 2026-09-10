@@ -21,7 +21,8 @@ import type { CharacterProfile, StoryBeat, StoryBible, StoryType } from "../lib/
  */
 
 const universe = loadUniverseProfile("gudini-photoreal", path.join(process.cwd(), "assets", "ai-film", "universes"));
-const character = loadCharacterProfile("gudini-real", path.join(process.cwd(), "assets", "ai-film", "characters"));
+const loaded = loadCharacterProfile("gudini-real", path.join(process.cwd(), "assets", "ai-film", "characters"));
+const character: CharacterProfile = { ...loaded, referenceFiles: [] };
 const withRefs: CharacterProfile = { ...character, referenceFiles: ["/tmp/r1.png"] };
 
 const bibleOf = (storyType: StoryType, extra: Record<string, unknown> = {}): StoryBible =>
@@ -34,6 +35,7 @@ const beat = (o: Partial<StoryBeat> & { visualAction: string }): StoryBeat => ({
   keyMoment: "", anchorPhrase: "", stateBefore: "", stateAfter: "",
   continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium",
   camera: "Camera stands across the street at eye height; he walks past camera on the left",
+  cameraAngle: "eye_level", composition: "center",
   suggestedDuration: 8, ...o,
 });
 
@@ -307,4 +309,56 @@ test("хук спасается, даже если следующий бит с�
   assert.ok(beats[0].end - beats[0].start >= 4 - 1e-6);
   assert.equal(beats[1].displayMode, "author", "короткий второй AI-бит по-прежнему уходит автору");
   assert.equal(beats[1].start, beats[0].end, "биты остаются встык");
+});
+
+test("ракурс и композиция приходят из плана, а не одинаковые на все сцены", () => {
+  const bible = bibleOf("explainer");
+  // купол над головой: человек внизу кадра, сверху оставлено место
+  const above = promptFor(bible, beat({
+    visualAction: "he hangs under the bright orange nylon canopy",
+    keyMoment: "the orange canopy is fully open above him",
+    composition: "low_space_above", cameraAngle: "low_angle", shotType: "medium_wide",
+  }));
+  assert.match(above, /The subject sits LOW in the frame/);
+  assert.match(above, /upper half of the frame is kept clear/);
+  assert.match(above, /never cropped by the top edge/);
+  assert.match(above, /Camera angle: camera below the subject, tilted up/);
+  assert.match(above, /fully inside the frame, not cropped at any edge/);
+  // прежняя жёсткая строка про центр из промпта ушла
+  assert.doesNotMatch(above, /subject near the vertical center/);
+
+  // вид строго сверху на падение
+  const down = promptFor(bible, beat({ visualAction: "he falls away from the camera", composition: "high_space_below", cameraAngle: "overhead" }));
+  assert.match(down, /camera directly above the subject looking straight down/);
+  assert.match(down, /The subject sits HIGH in the frame/);
+
+  // и обычный кадр остаётся обычным
+  const plain = promptFor(bible, beat({ visualAction: "he sits at a table" }));
+  assert.match(plain, /near the centre of the frame/);
+  assert.match(plain, /Camera angle: camera at the subject's own eye level/);
+});
+
+test("нормализатор принимает ракурс и композицию модели и чинит мусор", () => {
+  const phrases = phrasesFromWords(Array.from({ length: 24 }, (_, i) => ({ word: `с${i}${i % 4 === 3 ? "." : ""}`, start: i * 0.6, end: i * 0.6 + 0.6 })) as any);
+  const beats = beatsFromRaw(
+    [
+      { fromPhrase: 1, toPhrase: 3, displayMode: "full_ai", visualAction: "x", cameraAngle: "overhead", composition: "high_space_below" },
+      { fromPhrase: 4, toPhrase: 6, displayMode: "full_ai", visualAction: "y", cameraAngle: "с вертолёта", composition: "по центру" },
+    ] as any,
+    phrases, 14.4,
+  );
+  assert.equal(beats[0].cameraAngle, "overhead");
+  assert.equal(beats[0].composition, "high_space_below");
+  assert.equal(beats[1].cameraAngle, "eye_level", "неизвестный ракурс — безопасное значение");
+  assert.equal(beats[1].composition, "center");
+});
+
+test("фон эталонов не подменяет место действия", () => {
+  const bible = bibleOf("explainer");
+  const b = beat({ gudiniVisible: true, visualAction: "he crouches by a delivery box on a porch", location: "a wooden porch of a suburban house" });
+  const withPack = promptFor(bible, b, withRefs);
+  assert.match(withPack, /Ignore their plain studio background completely/);
+  assert.match(withPack, /Location: a wooden porch/);
+  // без эталонов лишней строки нет
+  assert.doesNotMatch(promptFor(bible, b, character), /Ignore their plain studio background/);
 });

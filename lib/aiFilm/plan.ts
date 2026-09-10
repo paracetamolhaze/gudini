@@ -4,7 +4,7 @@ import { universePromptBlock, type UniverseProfile } from "./universe";
 import { veoPricePerSecond, round2 } from "./pricing";
 import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
 import type {
-  AiFilmPlan, CharacterProfile, ContinuityGroup, FilmShot, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
+  AiFilmPlan, CameraAngle, CharacterProfile, Composition, ContinuityGroup, FilmShot, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
 } from "./types";
 
 /**
@@ -121,11 +121,15 @@ export function shotPrompt(args: {
   if (beat.location) lines.push(`Location: ${beat.location}.`);
   if (beat.stateAfter) lines.push(`After: ${beat.stateAfter}.`);
   const shot = beat.shotType.replace("_", "-");
-  lines.push(
-    aspectRatio === "9:16"
-      ? `Framing: vertical 9:16 portrait composition, ${shot} shot, subject near the vertical center with headroom, nothing important at the edges.`
-      : `Framing: horizontal 16:9 composition, ${shot} shot, subject centered, nothing important at the edges.`,
-  );
+  const ratio = aspectRatio === "9:16" ? "vertical 9:16 portrait composition" : "horizontal 16:9 composition";
+  lines.push(`Framing: ${ratio}, ${shot} shot. ${COMPOSITION_LINE[beat.composition]}`);
+  // Купол над головой не влезал в кадр, потому что здесь для каждой сцены стояло
+  // «subject near the vertical center». Теперь место в кадре выбирается под то,
+  // что должно быть видно, и это требование повторяется явно.
+  if (beat.keyMoment) {
+    lines.push(`Everything named above as the thing that must be visible is fully inside the frame, not cropped at any edge.`);
+  }
+  lines.push(`Camera angle: ${ANGLE_LINE[beat.cameraAngle]}.`);
   lines.push(`Camera: ${beat.camera || bible.cameraLanguage}. Single continuous take, no cuts inside the shot.`);
   lines.push(
     "Screen direction: keep the movement exactly as described relative to the camera. Do not turn the subject toward the lens " +
@@ -160,7 +164,17 @@ export function shotPrompt(args: {
     `People in frame: exactly ${cast.length || "as described above"}${cast.length ? ` — ${cast.join(", ")}` : ""}. ` +
       "No other people at all: no bystanders, no onlookers, no crowd, no figures in the background.",
   );
-  if (beat.gudiniVisible) lines.push(characterBlock(character));
+  if (beat.gudiniVisible) {
+    lines.push(characterBlock(character));
+    // Эталоны сняты на ровном сером фоне, и Veo притаскивал этот фон в сцену вместо
+    // описанного места: первая сцена «на крыльце» вышла в студии.
+    if (character.referenceFiles.length) {
+      lines.push(
+        "The reference images define his face, hair and clothing only. Ignore their plain studio background completely — " +
+          "the location of this shot is the one described above.",
+      );
+    }
+  }
   if (inScene.length) {
     lines.push(`Characters in this shot: ${inScene.map((c) => `${c.name}: ${c.appearance}`).join("; ")}.`);
   }
@@ -450,6 +464,36 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
   }
   return { groups, shots, timeline, warnings };
 }
+
+/**
+ * Куда смотрит камера. Раньше в промпт уходила одна фраза на все сцены, и ролик выглядел
+ * снятым с одной точки; ракурс теперь приходит из плана и меняется от действия.
+ */
+export const ANGLE_LINE: Record<CameraAngle, string> = {
+  eye_level: "camera at the subject's own eye level, level with the horizon",
+  low_angle: "camera below the subject, tilted up at him, so he rises against the sky or ceiling",
+  high_angle: "camera above the subject, tilted down at him, so the ground around him is visible",
+  overhead: "camera directly above the subject looking straight down, the ground far below him",
+  ground_level: "camera down on the ground close to the subject's feet, looking along the surface",
+  over_shoulder: "camera just behind the subject's shoulder, seeing roughly what he sees",
+  profile: "camera square to the subject's side, seeing him in clean profile",
+};
+
+/**
+ * Где в кадре человек и, главное, для чего оставлено место. Именно эта строка чинит
+ * купол, который не влезал в кадр: под ним место в кадре теперь резервируется явно.
+ */
+export const COMPOSITION_LINE: Record<Composition, string> = {
+  center: "The subject sits near the centre of the frame with normal headroom.",
+  low_space_above:
+    "The subject sits LOW in the frame, in the bottom third. The whole upper half of the frame is kept clear for what is above him, " +
+    "and that thing is shown whole, never cropped by the top edge.",
+  high_space_below:
+    "The subject sits HIGH in the frame, in the top third. The lower half of the frame is kept clear for the ground or drop below him.",
+  offset_left: "The subject sits in the left third of the frame; the right side stays open for what he faces or what approaches.",
+  offset_right: "The subject sits in the right third of the frame; the left side stays open for what he faces or what approaches.",
+  subject_small_in_wide: "The subject is small inside a wide view; the place around him is the point of the shot, not his face.",
+};
 
 /** Дольше этого зритель смотрит на говорящую голову без единой вставки — это провал удержания. */
 export const MAX_AUTHOR_STRETCH_SECONDS = 12;

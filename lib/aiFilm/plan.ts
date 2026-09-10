@@ -3,6 +3,7 @@ import { characterBlock } from "./character";
 import { universePromptBlock, type UniverseProfile } from "./universe";
 import { veoPricePerSecond, round2 } from "./pricing";
 import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
+import { auditPlan } from "./audit";
 import type {
   AiFilmPlan, CameraAngle, CharacterProfile, Composition, ContinuityGroup, FilmShot, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
 } from "./types";
@@ -637,7 +638,11 @@ export function buildFilmPlan(args: {
   const model = cfg.model || VEO_MODEL;
   const price = veoPricePerSecond(model, { audio: false, resolution: RESOLUTION });
   const { beats, built, stats } = reduceToBudget(args.beats, character, bible, duration, cfg);
-  const warnings = [...built.warnings, ...authorStretchWarnings(built.timeline, duration)];
+  const warnings = [
+    ...built.warnings,
+    ...authorStretchWarnings(built.timeline, duration),
+    ...auditPlan(beats, bible, character).map((a) => `${a.message} (${a.beatIds.join(", ")})`),
+  ];
   // Планировщик пишет русское имя героя в bible, а в английских полях зовёт его латиницей
   // («Каспер» → «Casper»), поэтому автозамена имени промахивается и в промпт уходят сразу
   // два человека: названный по имени герой и описание постоянного персонажа.

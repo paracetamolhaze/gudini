@@ -538,3 +538,40 @@ test("«at eye level» без притяжательного тоже распо
   assert.equal(angleFromCameraText("Camera is on the cliff behind him at eye level; Gudini walks away from camera"), "eye_level");
   assert.equal(angleFromCameraText("Camera is at eye level a meter in front of him, static"), "eye_level");
 });
+
+test("разбор плана находит противоречия и не шумит на здоровых сценах", async () => {
+  const { auditPlan } = await import("../lib/aiFilm/audit");
+  const bible = bibleOf("explainer");
+  const hero = { name: "Gudini", referenceFiles: ["/tmp/r.png"] };
+  const codes = (bs: StoryBeat[]) => auditPlan(bs, bible, hero).map((a) => a.code);
+
+  // камера неподвижна и движется одновременно
+  assert.ok(codes([beat({ visualAction: "Gudini opens the box", camera: "Camera is static and slowly pans across the room" })]).includes("camera-static-and-moving"));
+  // движение человека камеру неподвижной быть не мешает
+  assert.ok(!codes([beat({ visualAction: "Gudini opens the box", camera: "Camera is at eye level in front of him, static; his hands move toward the camera" })]).includes("camera-static-and-moving"));
+
+  // пять действий в одной сцене
+  assert.ok(codes([beat({ visualAction: "he runs, jumps, turns, pulls the handle and lands on the grass" })]).includes("too-many-actions"));
+  // крупный план с местом под предмет
+  assert.ok(codes([beat({ visualAction: "the canopy opens", shotType: "close", composition: "low_space_above" })]).includes("shot-vs-composition"));
+  // просьба показать читаемый текст
+  assert.ok(codes([beat({ visualAction: "he holds a receipt, the text on it says five dollars" })]).includes("readable-text"));
+  // флаг героя расходится с действием
+  assert.ok(codes([beat({ gudiniVisible: true, visualAction: "a man in a suit walks out" })]).includes("hero-flag-mismatch"));
+
+  // порванное стало целым
+  assert.ok(codes([
+    beat({ id: "B1", visualAction: "the canopy tears", stateAfter: "the canopy is torn and shredded" }),
+    beat({ id: "B2", visualAction: "he lands", stateBefore: "the canopy is whole and folded" }),
+  ]).includes("state-regression"));
+
+  // место возвращается через сцену
+  assert.ok(codes([
+    beat({ id: "B1", visualAction: "x", location: "the cliff edge" }),
+    beat({ id: "B2", visualAction: "y", location: "open sky" }),
+    beat({ id: "B3", visualAction: "z", location: "the cliff edge" }),
+  ]).includes("location-jump-back"));
+
+  // здоровая сцена не даёт ни одной претензии
+  assert.deepEqual(codes([beat({ gudiniVisible: true, visualAction: "Gudini tears open the box", camera: "Camera is at eye level in front of him", shotType: "medium", composition: "center" })]), []);
+});

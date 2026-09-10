@@ -268,7 +268,8 @@ export function angleFromCameraText(text: string): CameraAngle | null {
   const clause = t.split(";")[0];
   if (/over (?:his|the) shoulder|behind (?:his|the) shoulder|from behind him/.test(clause)) return "over_shoulder";
   if (/in profile|square to his side|beside him|alongside him/.test(clause)) return "profile";
-  if (/level with (?:him|his)|at (?:his )?eye level|at chest height/.test(clause)) return "eye_level";
+  if (/level with (?:him|his)|at (?:his )?eye level|at (?:chest|desk|table) height/.test(clause)) return "eye_level";
+  if (/to (?:one|the) side|off to the side|slightly to the side/.test(clause)) return "profile";
   if (/in front of (?:him|gudini)|facing him|opposite him/.test(clause)) return "eye_level";
   return null;
 }

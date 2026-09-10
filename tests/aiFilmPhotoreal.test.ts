@@ -588,3 +588,26 @@ test("названный словами ракурс читается напря
   assert.equal(angleFromCameraText("An overhead shot as he lies on the grass"), "overhead");
   assert.equal(angleFromCameraText("Camera at ground-level near his boots"), "ground_level");
 });
+
+test("камера сверху и предмет над головой — противоречие", async () => {
+  const { auditPlan } = await import("../lib/aiFilm/audit");
+  const bible = bibleOf("explainer");
+  const hero = { name: "Gudini", referenceFiles: ["/tmp/r.png"] };
+  const codes = (bs: StoryBeat[]) => auditPlan(bs, bible, hero).map((a) => a.code);
+  // ровно тот случай из плана: камера строго сверху, а купол над ним
+  assert.ok(codes([beat({
+    visualAction: "Gudini falls as the canopy balloons open above him",
+    cameraAngle: "overhead", composition: "high_space_below",
+  })]).includes("camera-above-object-above"));
+  // камера снизу с тем же действием противоречия не даёт
+  assert.ok(!codes([beat({
+    visualAction: "Gudini falls as the canopy balloons open above him",
+    cameraAngle: "low_angle", composition: "low_space_above",
+  })]).includes("camera-above-object-above"));
+});
+
+test("положение камеры «сбоку» и «на высоте стола» распознаётся", async () => {
+  const { angleFromCameraText } = await import("../lib/aiFilm/story");
+  assert.equal(angleFromCameraText("Camera is at desk height about one meter away, slightly to the side"), "eye_level");
+  assert.equal(angleFromCameraText("Camera sits off to the side of the table"), "profile");
+});

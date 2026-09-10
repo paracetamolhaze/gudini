@@ -24,21 +24,28 @@ const READABLE = /\b(?:screen (?:showing|displaying)|reads? "|text (?:on|saying)
 /** Движение камеры. Вместе со словом static — противоречие. */
 const CAMERA_MOVES = /\b(?:pans?|tilts?|tracks?|dollies|dolly|pushes in|pulls back|moves? (?:with|toward|away)|follows?|orbits?|circles?|cranes?|zooms?)\b/i;
 
+/** Что-то важное находится НАД человеком. */
+const OBJECT_ABOVE = /\babove (?:him|his head|gudini)\b|\boverhead\b/i;
+
 /** Глаголы действия — по их числу видно, что в сцену запихнули несколько событий сразу. */
 const ACTION_VERB =
   /\b(?:tears?|rips?|opens?|pulls?|drops?|falls?|jumps?|steps?|lands?|throws?|breaks?|snaps?|deploys?|catches?|hits?|cuts?|lifts?|pushes?|closes?|clicks?|presses?|taps?|grabs?|releases?|climbs?|runs?|walks?|turns?|reaches?|stumbles?|kneels?|sits?|stands?)\b/gi;
 
 export type PlanAudit = { code: string; beatIds: string[]; message: string };
 
-export function auditPlan(beats: StoryBeat[], bible: StoryBible, character: Pick<CharacterProfile, "name" | "referenceFiles">): PlanAudit[] {
+export function auditPlan(
+  beats: StoryBeat[],
+  bible: StoryBible,
+  character: Pick<CharacterProfile, "name" | "referenceFiles">,
+): PlanAudit[] {
   const out: PlanAudit[] = [];
   const shown = beats.filter(isAi);
   const add = (code: string, ids: string[], message: string) => {
     if (ids.length) out.push({ code, beatIds: ids, message });
   };
 
-  // Крупность против композиции: на крупном плане не бывает «человек мелко в общем плане»,
-  // и в него не влезает то, ради чего оставляли место сверху или снизу.
+  // Крупность против композиции: на крупном плане в кадр не влезет то, ради чего
+  // оставляли место сверху или снизу.
   add(
     "shot-vs-composition",
     shown.filter((b) => b.composition && b.shotType === "close" && b.composition !== "center").map((b) => b.id),
@@ -50,11 +57,11 @@ export function auditPlan(beats: StoryBeat[], bible: StoryBible, character: Pick
     "«Человек мелко в общем плане» стоит вместе с близкой крупностью",
   );
 
-  // Камера одновременно неподвижна и движется.
+  // Камера одновременно неподвижна и движется. Смотрим только клаузу про камеру:
+  // после точки с запятой описывается движение ЧЕЛОВЕКА, и «his hands move toward
+  // the camera» — это не движение камеры.
   add(
     "camera-static-and-moving",
-    // Смотрим только клаузу про камеру: после точки с запятой планировщик описывает
-    // движение ЧЕЛОВЕКА, и «his hands move toward the camera» — это не движение камеры.
     shown
       .filter((b) => {
         const c = b.camera.split(";")[0];
@@ -62,6 +69,17 @@ export function auditPlan(beats: StoryBeat[], bible: StoryBible, character: Pick
       })
       .map((b) => b.id),
     "Камера описана и как неподвижная, и как движущаяся",
+  );
+
+  // Камера сверху и предмет НАД человеком: предмет окажется между ним и камерой и закроет
+  // кадр. Ровно этот класс уже испортил одну оплаченную сцену, только выраженный иначе.
+  add(
+    "camera-above-object-above",
+    shown
+      .filter((b) => b.cameraAngle === "overhead" || b.cameraAngle === "high_angle")
+      .filter((b) => OBJECT_ABOVE.test(`${b.visualAction} ${b.keyMoment}`))
+      .map((b) => b.id),
+    "Камера сверху, а важное находится НАД человеком — оно закроет собой кадр",
   );
 
   // Слишком много действий в одной сцене: Veo выполняет первое и путает остальные.
@@ -74,10 +92,7 @@ export function auditPlan(beats: StoryBeat[], bible: StoryBible, character: Pick
   // Герой в кадре, но действие про него молчит, или наоборот.
   add(
     "hero-flag-mismatch",
-    shown
-      .filter((b) => b.gudiniVisible !== b.visualAction.includes(character.name))
-      .filter((b) => b.visualAction.length > 0)
-      .map((b) => b.id),
+    shown.filter((b) => b.visualAction.length > 0 && b.gudiniVisible !== b.visualAction.includes(character.name)).map((b) => b.id),
     `Флаг присутствия ${character.name} в кадре расходится с текстом действия`,
   );
 
@@ -91,13 +106,13 @@ export function auditPlan(beats: StoryBeat[], bible: StoryBible, character: Pick
   // Состояние предмета отыгрывается назад: было порвано, стало целым.
   const regress: string[] = [];
   for (let i = 1; i < shown.length; i++) {
-    const before = `${shown[i - 1].stateAfter}`;
-    const now = `${shown[i].stateBefore}`;
+    const before = shown[i - 1].stateAfter;
+    const now = shown[i].stateBefore;
     if (DAMAGED.test(before) && INTACT.test(now) && !DAMAGED.test(now)) regress.push(shown[i].id);
   }
   add("state-regression", regress, "Повреждённый предмет снова целый в следующей сцене");
 
-  // Место действия возвращается назад через сцену — это флешбэк, а в ролике он читается как ошибка.
+  // Место действия возвращается через сцену — флешбэк, а в ролике он читается как ошибка.
   const flash: string[] = [];
   for (let i = 2; i < shown.length; i++) {
     const a = shown[i - 2].location.trim().toLowerCase();
@@ -114,4 +129,3 @@ export function auditPlan(beats: StoryBeat[], bible: StoryBible, character: Pick
 
   return out;
 }
-

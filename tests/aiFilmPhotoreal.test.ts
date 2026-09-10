@@ -418,3 +418,27 @@ test("план замечает два соседних кадра с одног
   });
   assert.ok(!varied.warnings.some((w) => /одного ракурса/.test(w)), varied.warnings.join(" | "));
 });
+
+test("сцена без события ловится планом", async () => {
+  const { buildFilmPlan, STATIC_ACTION } = await import("../lib/aiFilm/plan");
+  // сам образец: событийные действия не ловятся, статичные ловятся
+  assert.ok(STATIC_ACTION.test("Gudini stands at the cliff edge and tightens a strap"));
+  assert.ok(STATIC_ACTION.test("Gudini checks his harness"));
+  assert.ok(!STATIC_ACTION.test("the orange canopy tears apart above him"));
+  assert.ok(!STATIC_ACTION.test("Gudini pulls the reserve handle and the canopy opens"));
+
+  const bible = bibleOf("explainer");
+  const cfg = { key: "k", universe, budgetUsd: 12, maxCoverage: 0.65, concurrency: 3, callMinutes: 2 };
+  const author = { ...beat({ visualAction: "" }), id: "B2", start: 8, end: 40, displayMode: "author" as const, requiresGeneration: false, gudiniVisible: false };
+  const idle = buildFilmPlan({
+    character: withRefs, bible, duration: 40, cfg,
+    beats: [beat({ id: "B1", start: 0, end: 8, visualAction: "Gudini stands at the cliff edge and tightens a strap", stateBefore: "geared up", stateAfter: "geared up" }), author],
+  });
+  assert.ok(idle.warnings.some((w) => /Сцены без события \(B1\)/.test(w)), idle.warnings.join(" | "));
+
+  const event = buildFilmPlan({
+    character: withRefs, bible, duration: 40, cfg,
+    beats: [beat({ id: "B1", start: 0, end: 8, visualAction: "the orange canopy tears apart above Gudini", stateBefore: "canopy whole", stateAfter: "canopy shredded" }), author],
+  });
+  assert.ok(!event.warnings.some((w) => /Сцены без события/.test(w)), event.warnings.join(" | "));
+});

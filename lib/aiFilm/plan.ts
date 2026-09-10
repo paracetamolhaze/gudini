@@ -35,12 +35,13 @@ export const MIN_AUTHOR_GAP_SECONDS = 3;
 export const RESOLUTION = "720p" as const;
 
 export function coverageConfig(): { target: number; max: number } {
-  // 0.45, а не прежние 0.35: при 35% планировщик обходился тремя сценами на 45 секунд речи
-  // и собирал их во второй половине ролика.
-  const t = Number(process.env.AI_FILM_TARGET_COVERAGE ?? 0.45);
-  const m = Number(process.env.AI_FILM_MAX_COVERAGE ?? 0.55);
-  const target = Number.isFinite(t) && t > 0 && t <= 1 ? t : 0.45;
-  const max = Number.isFinite(m) && m >= target && m <= 1 ? m : Math.max(target, 0.55);
+  // 0.5 / 0.65 вместо прежних 0.35 / 0.55: при низком потолке планировщик показывал
+  // не события истории, а одну обобщающую сцену вместо трёх конкретных. Это дороже:
+  // каждая дополнительная сцена — ещё один клип Veo.
+  const t = Number(process.env.AI_FILM_TARGET_COVERAGE ?? 0.5);
+  const m = Number(process.env.AI_FILM_MAX_COVERAGE ?? 0.65);
+  const target = Number.isFinite(t) && t > 0 && t <= 1 ? t : 0.5;
+  const max = Number.isFinite(m) && m >= target && m <= 1 ? m : Math.max(target, 0.65);
   return { target, max };
 }
 
@@ -495,6 +496,13 @@ export const COMPOSITION_LINE: Record<Composition, string> = {
   subject_small_in_wide: "The subject is small inside a wide view; the place around him is the point of the shot, not his face.",
 };
 
+/**
+ * Действие, в котором ничего не происходит. Ловится по главному глаголу: сцена, где герой
+ * стоит, готовится или поправляет снаряжение, стоит тех же денег, что и сцена, где купол рвётся.
+ */
+export const STATIC_ACTION =
+  /\b(?:stands?|standing|sits?|sitting|holds?|holding|looks? (?:at|around)|waits?|waiting|adjusts?|adjusting|tightens?|tightening|checks?|checking|prepares?|preparing|poses?|posing|thinks?|thinking|gazes?|gazing)\b/i;
+
 /** Дольше этого зритель смотрит на говорящую голову без единой вставки — это провал удержания. */
 export const MAX_AUTHOR_STRETCH_SECONDS = 12;
 /** Позже этой секунды первая сцена уже не работает как hook. */
@@ -621,6 +629,10 @@ export function buildFilmPlan(args: {
   // Планировщик пишет русское имя героя в bible, а в английских полях зовёт его латиницей
   // («Каспер» → «Casper»), поэтому автозамена имени промахивается и в промпт уходят сразу
   // два человека: названный по имени герой и описание постоянного персонажа.
+  // Сцена, в которой ничего не происходит. Человек, восемь секунд поправляющий лямку,
+  // технически безупречен и совершенно не нужен: платим за клип, а событие рассказывает голос.
+  const idle = beats.filter((b) => isAi(b) && (STATIC_ACTION.test(b.visualAction) || (b.stateBefore && b.stateBefore === b.stateAfter))).map((b) => b.id);
+  if (idle.length) warnings.push(`Сцены без события (${idle.join(", ")}): герой стоит или готовится, но ничего не меняется`);
   // Два соседних кадра с одного ракурса — это тот самый «всегда одинаковый вид»,
   // с которого начался разбор. Правило есть в промпте, но модель его иногда пропускает.
   const shown = beats.filter(isAi);

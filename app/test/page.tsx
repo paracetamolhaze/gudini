@@ -215,39 +215,30 @@ export default function TestPage() {
 
       <div className="card">
         <div className="card-head">
-          <h2>Модель</h2>
+          <h2>Видеокарта</h2>
           <StatusBadge
-            tone={health?.loaded ? "success" : health?.loading ? "accent" : "neutral"}
+            tone={health?.loaded ? "success" : "neutral"}
             busy={health?.loading || health?.busy}
           >
-            {health?.loading
-              ? "кладётся в память"
-              : health?.busy
-                ? "занята генерацией"
-                : health?.loaded
-                  ? "в памяти карты"
-                  : "не в памяти карты"}
+            {health?.loading ? "готовится" : health?.busy ? "считает" : health?.loaded ? "готова" : "свободна"}
           </StatusBadge>
         </div>
+        {/* Кнопки «загрузить» тут нет намеренно: модель встаёт в память сама при первой
+            озвучке. Единственное решение, которое принимает человек, — отдать карту Clipy. */}
         <div className="hint">
-          {health
-            ? `${health.gpu ?? health.device} · ${health.model} · видеопамять ${vram.usedMb ?? "?"} из ${vram.totalMb ?? "?"} МБ`
-            : "состояние неизвестно"}
+          {health?.loaded
+            ? "Озвучка пойдёт сразу. Перед рендером в Clipy освободите карту."
+            : "Первая озвучка займёт на полторы минуты больше: модель встанет в память."}
+          {vram.usedMb ? ` Занято ${vram.usedMb} из ${vram.totalMb} МБ.` : ""}
         </div>
-        <div className="hint" style={{ marginTop: 6 }}>
-          Веса скачаны один раз и лежат в томе контейнера — кнопка ничего не качает.
-          Она кладёт модель в память видеокарты, это около полутора минут. Память очищается
-          при перезапуске контейнера, тогда модель нужно положить туда снова.
-        </div>
-        <div className="hint" style={{ marginTop: 6 }}>
-          Карта одна. Перед рендером в Clipy освободите память, иначе обеим не хватит.
-        </div>
+        {health && !health.cuda && (
+          <div className="hint" style={{ color: "var(--error)", marginTop: 6 }}>
+            Карта не видна контейнеру, синтез пойдёт на процессоре и будет очень медленным.
+          </div>
+        )}
         <div className="actions">
-          <Button onClick={() => model("load")} busy={modelBusy} disabled={health?.loaded}>
-            Положить в память карты
-          </Button>
           <Button variant="secondary" onClick={() => model("unload")} busy={modelBusy} disabled={!health?.loaded}>
-            Освободить память
+            Освободить карту
           </Button>
           <Button variant="ghost" onClick={refresh}>
             Обновить

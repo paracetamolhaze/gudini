@@ -611,3 +611,31 @@ test("положение камеры «сбоку» и «на высоте ст
   assert.equal(angleFromCameraText("Camera is at desk height about one meter away, slightly to the side"), "eye_level");
   assert.equal(angleFromCameraText("Camera sits off to the side of the table"), "profile");
 });
+
+test("камера переставляется вниз, если важное над головой", async () => {
+  const { reconcileFraming } = await import("../lib/aiFilm/story");
+  const b = {
+    camera: "Camera is directly above him looking straight down; he falls away from it",
+    cameraAngle: "overhead" as const,
+    composition: "high_space_below" as const,
+    visualAction: "Gudini falls as the orange canopy balloons open above him",
+    keyMoment: "the canopy opens above him",
+  };
+  assert.equal(reconcileFraming(b), true);
+  assert.equal(b.cameraAngle, "low_angle");
+  assert.equal(b.composition, "low_space_above");
+  assert.match(b.camera, /below him looking up/);
+  assert.match(b.camera, /he falls away from it/, "описание движения человека сохраняется");
+  assert.doesNotMatch(b.camera, /directly above/);
+
+  // если над головой ничего нет, съёмка сверху остаётся как была
+  const ok = {
+    camera: "Camera is directly above him looking straight down at the ground",
+    cameraAngle: "overhead" as const,
+    composition: "high_space_below" as const,
+    visualAction: "Gudini lies on the grass after landing",
+    keyMoment: "he stops moving",
+  };
+  reconcileFraming(ok);
+  assert.equal(ok.cameraAngle, "overhead");
+});

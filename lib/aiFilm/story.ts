@@ -279,8 +279,25 @@ export function angleFromCameraText(text: string): CameraAngle | null {
  * в кадре, оставленное НАД человеком, — это взаимоисключающие требования: то, что над ним,
  * находится между ним и камерой и просто закроет кадр.
  */
-export function reconcileFraming(beat: Pick<StoryBeat, "camera" | "cameraAngle" | "composition">): boolean {
+export function reconcileFraming(
+  beat: Pick<StoryBeat, "camera" | "cameraAngle" | "composition"> & Partial<Pick<StoryBeat, "visualAction" | "keyMoment">>,
+): boolean {
   let changed = false;
+
+  // Сначала самое грубое: важное происходит НАД человеком, а камера стоит сверху. Тогда
+  // это важное окажется между ним и камерой и закроет кадр целиком. Просить планировщика
+  // исправить это бесполезно, он повторяет ту же ошибку, поэтому камера переставляется здесь.
+  // Действие важнее точки съёмки: ради него сцена и снимается.
+  const objectAbove = /\babove (?:him|his head|gudini)\b|\boverhead\b/i.test(`${beat.visualAction ?? ""} ${beat.keyMoment ?? ""}`);
+  const camAbove = angleFromCameraText(beat.camera) ?? beat.cameraAngle;
+  if (objectAbove && (camAbove === "overhead" || camAbove === "high_angle")) {
+    const tail = beat.camera.includes(";") ? beat.camera.slice(beat.camera.indexOf(";")) : "";
+    beat.camera = `Camera is below him looking up, so that both he and what is above him are in frame${tail}`;
+    beat.cameraAngle = "low_angle";
+    beat.composition = "low_space_above";
+    return true;
+  }
+
   const inferred = angleFromCameraText(beat.camera);
   if (inferred && inferred !== beat.cameraAngle) {
     beat.cameraAngle = inferred;

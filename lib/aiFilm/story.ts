@@ -251,6 +251,11 @@ export function angleFromCameraText(text: string): CameraAngle | null {
   // по всей фразе ловит «the ground far below» и «the canopy above him» — это про мир,
   // а не про точку съёмки.
   const t = text.toLowerCase();
+  // Планировщик часто называет ракурс прямо словами — это самое надёжное, что есть в тексте.
+  if (/\blow[- ]angle\b/.test(t)) return "low_angle";
+  if (/\bhigh[- ]angle\b/.test(t)) return "high_angle";
+  if (/\boverhead\b|\btop[- ]down\b/.test(t)) return "overhead";
+  if (/\bground[- ]level\b/.test(t)) return "ground_level";
   const at = /camera\s+(?:is\s+|sits\s+|stands\s+|hangs\s+|lies\s+|placed\s+)?(?:just\s+|slightly\s+|directly\s+|straight\s+|high\s+)*([a-z ]{0,18})/.exec(t);
   const pos = at?.[1] ?? "";
   if (/^(?:below|beneath|under)\b/.test(pos)) return "low_angle";

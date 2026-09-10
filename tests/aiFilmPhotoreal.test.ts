@@ -575,3 +575,16 @@ test("разбор плана находит противоречия и не ш
   // здоровая сцена не даёт ни одной претензии
   assert.deepEqual(codes([beat({ gudiniVisible: true, visualAction: "Gudini tears open the box", camera: "Camera is at eye level in front of him", shotType: "medium", composition: "center" })]), []);
 });
+
+test("названный словами ракурс читается напрямую", async () => {
+  const { angleFromCameraText, reconcileFraming } = await import("../lib/aiFilm/story");
+  // строка из настоящего плана: поле говорило high_angle, текст — low angle
+  const real = "Camera is behind him at the cliff edge, low angle looking down the drop";
+  assert.equal(angleFromCameraText(real), "low_angle");
+  const b = { camera: real, cameraAngle: "high_angle" as const, composition: "high_space_below" as const };
+  reconcileFraming(b);
+  assert.equal(b.cameraAngle, "low_angle");
+  assert.equal(b.composition, "low_space_above", "под камеру снизу место оставляется сверху");
+  assert.equal(angleFromCameraText("An overhead shot as he lies on the grass"), "overhead");
+  assert.equal(angleFromCameraText("Camera at ground-level near his boots"), "ground_level");
+});

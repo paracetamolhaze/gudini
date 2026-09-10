@@ -1,0 +1,8 @@
+# Chatterbox ставится с GitHub, а не с PyPI: колесо chatterbox-tts 0.1.7 на PyPI собрано
+# до релиза V3 и умеет только старый мультиязычный чекпойнт — from_pretrained там
+# не принимает t3_model. Коммит закреплён, чтобы сборка была повторяемой.
+# Пакет тянет за собой torch 2.6.0, transformers и diffusers, версии пинует сам.
+chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git@5de7a54aa4e5e2baadb0182dde554908b48b85c2
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20

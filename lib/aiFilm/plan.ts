@@ -618,6 +618,18 @@ export function buildFilmPlan(args: {
   const price = veoPricePerSecond(model, { audio: false, resolution: RESOLUTION });
   const { beats, built, stats } = reduceToBudget(args.beats, character, bible, duration, cfg);
   const warnings = [...built.warnings, ...authorStretchWarnings(built.timeline, duration)];
+  // Планировщик пишет русское имя героя в bible, а в английских полях зовёт его латиницей
+  // («Каспер» → «Casper»), поэтому автозамена имени промахивается и в промпт уходят сразу
+  // два человека: названный по имени герой и описание постоянного персонажа.
+  if (bible.playedByGudini) {
+    const stray = beats.filter((b) => b.gudiniVisible && b.visualAction && !b.visualAction.includes(character.name));
+    if (stray.length) {
+      warnings.push(
+        `Сцены, где роль исполняет ${character.name}, но в действии он назван иначе (${stray.map((b) => b.id).join(", ")}) — ` +
+          `генератор может нарисовать другого человека`,
+      );
+    }
+  }
   if (stats.reducedBeats) warnings.push(`Сцен переведено в автора редьюсером: ${stats.reducedBeats}`);
   if (stats.calls > 0 && stats.generationEfficiency < MIN_GENERATION_EFFICIENCY) {
     warnings.push(

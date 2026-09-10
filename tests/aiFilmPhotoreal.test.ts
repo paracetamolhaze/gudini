@@ -362,3 +362,21 @@ test("фон эталонов не подменяет место действи�
   // без эталонов лишней строки нет
   assert.doesNotMatch(promptFor(bible, b, character), /Ignore their plain studio background/);
 });
+
+test("план предупреждает, когда исполнителя назвали не его именем", async () => {
+  const { buildFilmPlan } = await import("../lib/aiFilm/plan");
+  const bible = bibleOf("news", { playedByGudini: "Каспер" });
+  const cfg = { key: "k", universe, budgetUsd: 12, maxCoverage: 0.55, concurrency: 3, callMinutes: 2 };
+  const wrong = buildFilmPlan({
+    character: withRefs, bible, duration: 30, cfg,
+    beats: [beat({ id: "B1", start: 0, end: 8, gudiniVisible: true, visualAction: "Casper pulls the reserve handle" }),
+            { ...beat({ visualAction: "" }), id: "B2", start: 8, end: 30, displayMode: "author", requiresGeneration: false, gudiniVisible: false }],
+  });
+  assert.ok(wrong.warnings.some((w) => /назван иначе \(B1\)/.test(w)), wrong.warnings.join(" | "));
+  const right = buildFilmPlan({
+    character: withRefs, bible, duration: 30, cfg,
+    beats: [beat({ id: "B1", start: 0, end: 8, gudiniVisible: true, visualAction: "Gudini pulls the reserve handle" }),
+            { ...beat({ visualAction: "" }), id: "B2", start: 8, end: 30, displayMode: "author", requiresGeneration: false, gudiniVisible: false }],
+  });
+  assert.ok(!right.warnings.some((w) => /назван иначе/.test(w)), right.warnings.join(" | "));
+});

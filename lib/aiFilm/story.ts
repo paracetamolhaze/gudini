@@ -263,6 +263,7 @@ export function angleFromCameraText(text: string): CameraAngle | null {
   const clause = t.split(";")[0];
   if (/over (?:his|the) shoulder|behind (?:his|the) shoulder|from behind him/.test(clause)) return "over_shoulder";
   if (/in profile|square to his side|beside him|alongside him/.test(clause)) return "profile";
+  if (/level with (?:him|his)|at his eye level|at chest height/.test(clause)) return "eye_level";
   if (/in front of (?:him|gudini)|facing him|opposite him/.test(clause)) return "eye_level";
   return null;
 }
@@ -279,14 +280,19 @@ export function reconcileFraming(beat: Pick<StoryBeat, "camera" | "cameraAngle" 
     beat.cameraAngle = inferred;
     changed = true;
   }
-  if (beat.composition === "low_space_above" && (beat.cameraAngle === "overhead" || beat.cameraAngle === "high_angle")) {
-    beat.cameraAngle = "low_angle";
-    changed = true;
+  const above = beat.cameraAngle === "overhead" || beat.cameraAngle === "high_angle";
+  const below = beat.cameraAngle === "ground_level" || beat.cameraAngle === "low_angle";
+  if (inferred) {
+    // Текст описания камеры — единственная правда, подстраивается композиция. Первая
+    // версия правила делала наоборот и перебивала ракурс: в промпте оказывались
+    // «камера сверху смотрит вниз» и тут же «ракурс снизу вверх».
+    if (above && beat.composition === "low_space_above") { beat.composition = "high_space_below"; changed = true; }
+    if (below && beat.composition === "high_space_below") { beat.composition = "low_space_above"; changed = true; }
+    return changed;
   }
-  if (beat.composition === "high_space_below" && (beat.cameraAngle === "ground_level" || beat.cameraAngle === "low_angle")) {
-    beat.cameraAngle = "high_angle";
-    changed = true;
-  }
+  // Позицию камеры из текста понять не удалось — тогда правит композиция.
+  if (beat.composition === "low_space_above" && above) { beat.cameraAngle = "low_angle"; changed = true; }
+  if (beat.composition === "high_space_below" && below) { beat.cameraAngle = "high_angle"; changed = true; }
   return changed;
 }
 

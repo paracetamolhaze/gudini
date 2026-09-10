@@ -509,3 +509,25 @@ test("склейка внутри одной сцены попадает в пр
   });
   assert.ok(!clean.warnings.some((w) => /Склейка внутри/.test(w)), clean.warnings.join(" | "));
 });
+
+test("правдой остаётся текст камеры, подстраивается композиция", async () => {
+  const { reconcileFraming } = await import("../lib/aiFilm/story");
+  // ровно тот случай, который создала первая версия правила: текст «сверху вниз»,
+  // а ракурс был перебит на «снизу вверх»
+  const b = { camera: "Camera is above him looking straight down as he falls away from it", cameraAngle: "low_angle" as const, composition: "low_space_above" as const };
+  reconcileFraming(b);
+  assert.equal(b.cameraAngle, "overhead", "ракурс берётся из текста");
+  assert.equal(b.composition, "high_space_below", "подстраивается композиция, а не ракурс");
+
+  // и наоборот: камера снизу — место оставляем сверху
+  const c = { camera: "Camera is below him looking up as the canopy opens", cameraAngle: "high_angle" as const, composition: "high_space_below" as const };
+  reconcileFraming(c);
+  assert.equal(c.cameraAngle, "low_angle");
+  assert.equal(c.composition, "low_space_above");
+
+  // текст ничего не говорит о позиции — тогда правит композиция
+  const d = { camera: "Camera holds steady on the doorway", cameraAngle: "overhead" as const, composition: "low_space_above" as const };
+  reconcileFraming(d);
+  assert.equal(d.cameraAngle, "low_angle");
+  assert.equal(d.composition, "low_space_above");
+});

@@ -100,10 +100,11 @@ test("биты из ответа модели: встык от 0 до конца
   assert.equal(beats[0].start, 0);
   assert.equal(beats[beats.length - 1].end, 42);
   for (let i = 1; i < beats.length; i++) assert.equal(beats[i].start, beats[i - 1].end);
-  assert.equal(beats[0].displayMode, "author");
-  assert.match(beats[0].reduced ?? "", new RegExp(`короче ${MIN_AI_BEAT_SEC}`));
+  // открывающая сцена короче минимума теперь дотягивается за счёт соседа, а не выбрасывается
+  assert.equal(beats[0].displayMode, "full_ai");
+  assert.ok(beats[0].end - beats[0].start >= MIN_AI_BEAT_SEC - 1e-6);
   const ai = beats.filter((b) => b.displayMode !== "author");
-  assert.equal(ai.length, 1, "длинный AI-бит разрезан: AI остаётся первая часть, хвост — автор");
+  assert.equal(ai.length, 2, "открывающая сцена и одна разрезанная");
   assert.ok(beats.some((b) => b.displayMode === "author" && /продолжение AI-бита/.test(b.reduced ?? "")), "хвост длинного AI-бита стал автором");
   for (const b of ai) {
     assert.ok(b.end - b.start <= MAX_AI_BEAT_SEC + 0.5, `${b.id}: ${(b.end - b.start).toFixed(1)} с`);

@@ -540,11 +540,17 @@ export function reduceToBudget(beats: StoryBeat[], character: CharacterProfile, 
     const overCoverage = stats.coverage > cfg.maxCoverage + 1e-9;
     const overBudget = stats.estimatedCost > cfg.budgetUsd + 1e-9;
     if (!overCoverage && !overBudget) return { beats: work, built, stats };
+    // Самую раннюю сцену редьюсер не трогает, пока есть что снять позже. Иначе он
+    // аккуратно оставлял кульминацию и развязку и вырезал ровно то, что держит начало
+    // ролика: план с первой картинкой на двадцатой секунде — это план без зрителя.
+    const earliest = work.find(isAi);
     let victim: StoryBeat | undefined;
     for (const p of order) {
-      const candidates = work.filter((b) => isAi(b) && b.priority === p && !protectedBeat(b));
+      const candidates = work.filter((b) => isAi(b) && b.priority === p && !protectedBeat(b) && b !== earliest);
       if (candidates.length) { victim = candidates[candidates.length - 1]; break; }
     }
+    // остались только защищённые и открывающая — снимаем и её, но последней
+    if (!victim && earliest && !protectedBeat(earliest)) victim = earliest;
     if (!victim) {
       throw new Error(
         `AI-фильм: план не помещается в ${overBudget ? `бюджет $${cfg.budgetUsd} (оценка $${stats.estimatedCost})` : `покрытие ${Math.round(cfg.maxCoverage * 100)}% (сейчас ${Math.round(stats.coverage * 100)}%)`} ` +

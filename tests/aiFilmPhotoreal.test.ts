@@ -247,3 +247,45 @@ test("развязку не сдвигают встык: сцена с якор�
     assert.equal(kept.find((b) => b.id === "B3")?.start, 10, `сцену ${JSON.stringify(o)} сдвигать нельзя`);
   }
 });
+
+test("открывающая сцена: короткий хук дотягивается, а не выбрасывается", () => {
+  const words = [
+    { word: "Парень", start: 0, end: 0.5 }, { word: "заказал", start: 0.5, end: 1.1 },
+    { word: "парашют", start: 1.1, end: 1.8 }, { word: "за", start: 1.8, end: 1.9 },
+    { word: "пять", start: 1.9, end: 2.4 }, { word: "долларов.", start: 2.4, end: 3.0 },
+    { word: "И", start: 3.2, end: 3.4 }, { word: "всё", start: 3.4, end: 3.8 },
+    { word: "закончилось", start: 3.8, end: 4.6 }, { word: "ровно", start: 4.6, end: 5.2 },
+    { word: "так,", start: 5.2, end: 5.6 }, { word: "как", start: 5.6, end: 5.9 },
+    { word: "вы", start: 5.9, end: 6.2 }, { word: "думаете.", start: 6.2, end: 7.9 },
+  ];
+  const phrases = phrasesFromWords(words as any);
+  const beats = beatsFromRaw(
+    [
+      { fromPhrase: 1, toPhrase: 1, displayMode: "full_ai", visualAction: "he taps order on a phone", purpose: "hook", priority: "high" },
+      { fromPhrase: 2, toPhrase: 2, displayMode: "author" },
+    ] as any,
+    phrases, 7.9,
+  );
+  assert.equal(beats[0].displayMode, "full_ai", "трёхсекундный хук остаётся сценой");
+  assert.ok(beats[0].end - beats[0].start >= 4 - 1e-6, `хук дотянут до ${beats[0].end - beats[0].start} с`);
+  assert.equal(beats[1].start, beats[0].end, "биты остаются встык");
+  assert.ok(beats[1].end - beats[1].start >= 1.5, "соседу осталось не меньше полутора секунд");
+});
+
+test("редьюсер снимает открывающую сцену последней", async () => {
+  const { reduceToBudget } = await import("../lib/aiFilm/plan");
+  const bible = bibleOf("explainer");
+  const mk = (id: string, start: number, end: number, mode: "full_ai" | "author", prio: "low" | "medium" | "high", purpose: any): StoryBeat =>
+    ({ ...beat({ visualAction: mode === "author" ? "" : "x" }), id, start, end, displayMode: mode, requiresGeneration: mode !== "author", priority: prio, purpose, suggestedDuration: end - start });
+  const beats = [
+    mk("B1", 0, 6, "full_ai", "medium", "hook"),
+    mk("B2", 6, 20, "author", "medium", "explain"),
+    mk("B3", 20, 28, "full_ai", "medium", "example"),
+    mk("B4", 28, 44, "author", "medium", "explain"),
+  ];
+  // бюджета хватает ровно на одну сцену — снять обязаны позднюю, а не первую
+  const cfg = { key: "k", universe, budgetUsd: 0.7, maxCoverage: 0.55, concurrency: 1, callMinutes: 2 };
+  const r = reduceToBudget(beats, withRefs, bible, 44, cfg);
+  assert.equal(r.beats.find((b) => b.id === "B1")?.displayMode, "full_ai", "открывающая сцена остаётся");
+  assert.equal(r.beats.find((b) => b.id === "B3")?.displayMode, "author", "снимается поздняя");
+});

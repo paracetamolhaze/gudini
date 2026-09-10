@@ -1,0 +1,25 @@
+{
+  "id": "gudini-photoreal",
+  "name": "Gudini Photoreal",
+  "targetFeel": "снято на настоящую камеру: живые люди, настоящие места, честный свет. Зафиксирована достоверность съёмки, а не место действия и не жанр; постановка меняется вместе с типом истории",
+  "visualLanguage": "photographic live-action footage from a real camera: true human proportions and anatomy, skin with pores, texture and blemishes rather than a beauty filter, hair with individual strands and flyaways, fabric with weave, seams and creases, metal with scratches and fingerprints, contact shadows where objects touch, believable exposure with a single dominant light source, natural motion blur and inertia, lens imperfections kept subtle",
+  "architecture": "the real place the story is about: a street, a flat, an office, a workshop, a field, a hospital corridor, a period interior — built and lit the way it actually looks, with the wear, clutter and imperfection of a used space",
+  "clothingRules": "everyone wears what their situation implies, in real fabric that hangs and creases with weight; period stories use clothing of that period and region; nothing looks like a costume-shop copy unless the story is about a costume",
+  "technologyRules": "objects come from the story and from the real world, and they are the correct objects for the time and place: a period story has no modern phone, plastic or LED lighting unless the story says so",
+  "socialRules": "the people on screen are the people the story is about; nothing is invented around them and no crowd is added for atmosphere",
+  "powerSystem": "no powers and no effects beyond what physically happens: what falls, tears, spills, burns or breaks does so with real weight and speed; no gore and no graphic violence",
+  "recurringObjects": "only the objects the speech actually names, shown with their own identifying details",
+  "environmentRules": "one photographic look in every shot: light has a source and a direction, exposure and colour stay plausible for that source, no stylisation layer over the image",
+  "contentRules": [
+    "CONTENT IS LITERAL: the viewer sees the people, events, objects and places the author is talking about, filmed as they would actually look",
+    "Staging follows the kind of story: news is observed as it happens, a historical story is a period reconstruction, a reflective story is an ordinary recognisable episode from life",
+    "A generated shot of a real event is a staged reconstruction, never presented or described as authentic found footage, archive or documentary material",
+    "One scene shows one main observable action, readable in the first second or two",
+    "Light has a source that is either visible or obviously implied; exposure, shadow direction and reflections agree with it",
+    "The camera stands somewhere a camera could physically stand, and one motivated move at most",
+    "Prop state carries across shots: what is torn stays torn, what is opened stays open, colour and shape do not change between shots",
+    "Faces and bodies stay real: no beauty smoothing, no plastic skin, no doll proportions, no extra fingers or limbs",
+    "No readable interface text, price tags, documents or long signage is requested from the generator; anything that must be read is said in the voice-over"
+  ],
+  "forbiddenDrift": "anime, cartoon, cel shading, comic ink outlines and any hand-drawn look; 3D render, CGI or game-engine plastic; beauty-filter skin; the whole stack of 8K, HDR, epic, cinematic, heavy bokeh, lens flare and shake piled onto one shot; magic smoke, holograms, glowing symbols and floating thoughts with no basis in the script; replacing the story's real people, places and events with metaphors; moving a real event into a fictional world because of the character's outfit"
+}

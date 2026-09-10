@@ -1,0 +1,205 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { normalizeBible, beatsFromRaw, phrasesFromWords } from "../lib/aiFilm/story";
+import { shotPrompt, buildShots, coverageConfig, veoCallMinutes, veoConcurrency } from "../lib/aiFilm/plan";
+import { loadUniverseProfile } from "../lib/aiFilm/universe";
+import { loadCharacterProfile } from "../lib/aiFilm/character";
+import { planKey } from "../lib/aiFilm/run";
+import { veoBody } from "../lib/aiFilm/veo";
+import type { CharacterProfile, StoryBeat, StoryBible, StoryType } from "../lib/aiFilm/types";
+
+/**
+ * Проверки поведения фотореалистичного режима: постановка зависит от типа истории,
+ * реквизит не путешествует между сценами, владелец не подставляется вместо реального
+ * участника новости, и всё это стоит по-прежнему одну генерацию на сцену.
+ *
+ * Тесты смотрят на собранные промпты и планы, а не на снимок большого системного текста:
+ * снимок ломается от любой запятой и ничего не доказывает.
+ */
+
+const universe = loadUniverseProfile("gudini-photoreal", path.join(process.cwd(), "assets", "ai-film", "universes"));
+const character = loadCharacterProfile("gudini-real", path.join(process.cwd(), "assets", "ai-film", "characters"));
+const withRefs: CharacterProfile = { ...character, referenceFiles: ["/tmp/r1.png"] };
+
+const bibleOf = (storyType: StoryType, extra: Record<string, unknown> = {}): StoryBible =>
+  normalizeBible({ bible: { storyType, mood: "tense", lighting: "overcast daylight", ...extra } } as any, character, universe);
+
+const beat = (o: Partial<StoryBeat> & { visualAction: string }): StoryBeat => ({
+  id: "B1", start: 0, end: 8, meaning: "", storyBeat: "", displayMode: "full_ai",
+  purpose: "explain", priority: "medium", requiresGeneration: true, gudiniVisible: false,
+  universeAdaptation: "", location: "a city street", motion: "he steps forward",
+  keyMoment: "", anchorPhrase: "", stateBefore: "", stateAfter: "",
+  continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium",
+  camera: "Camera stands across the street at eye height; he walks past camera on the left",
+  suggestedDuration: 8, ...o,
+});
+
+const promptFor = (bible: StoryBible, b: StoryBeat, c: CharacterProfile = character) =>
+  shotPrompt({ character: c, universe, bible, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+
+// ─────────────────────────────── 1. новость
+
+test("новость: наблюдательная постановка, реконструкция не выдаётся за запись, героя в костюме нет", () => {
+  // планировщик попытался отдать роль реального участника постоянному персонажу
+  const bible = bibleOf("news", { playedByGudini: "Илон Маск" });
+  assert.equal(bible.storyType, "news");
+  assert.equal(bible.staging, "observational");
+  assert.equal(bible.reconstruction, true);
+  assert.equal(bible.playedByGudini, "", "в новости личность реального участника не подменяется");
+
+  const p = promptFor(bible, beat({ visualAction: "A man in a suit walks out of a courthouse and stops on the steps", keyMoment: "he stops and turns his head" }));
+  assert.match(p, /staged reconstruction of a real event/);
+  assert.match(p, /must not look like archive footage/);
+  assert.match(p, /no timecode/);
+  // костюм и лицо владельца в кадр не попадают
+  assert.doesNotMatch(p, /Main character GUDINI/);
+  assert.doesNotMatch(p, /high-collar zip jacket/);
+  assert.doesNotMatch(p, /forehead protector/);
+  // и никакого случайного реквизита из чужих сцен
+  assert.doesNotMatch(p, /torn pieces|hammered by the airflow|falling bodies accelerate/);
+});
+
+// ─────────────────────────────── 2. история
+
+test("исторический сюжет: реконструкция эпохи и прямой запрет современных предметов", () => {
+  const bible = bibleOf("history");
+  assert.equal(bible.staging, "period_reconstruction");
+  assert.equal(bible.reconstruction, true);
+  const p = promptFor(bible, beat({ visualAction: "A telegraph operator taps out a message in a wooden station office", location: "a railway station office in 1890" }));
+  assert.match(p, /period reconstruction/);
+  assert.match(p, /Nothing modern anywhere in frame/);
+  assert.match(p, /no plastic, no printed graphics/);
+  assert.doesNotMatch(p, /staged reconstruction of a real event/, "постановка новости в исторический кадр не попадает");
+});
+
+// ─────────────────────────────── 3. философия
+
+test("философский сюжет: владелец узнаваем и в костюме, действие бытовое, без автоматических эффектов", () => {
+  const bible = bibleOf("philosophy", { playedByGudini: "парень" });
+  assert.equal(bible.staging, "everyday_life");
+  assert.equal(bible.reconstruction, false);
+  assert.equal(bible.playedByGudini, "парень", "в размышлении роль обобщённого героя исполнять можно");
+  const p = promptFor(bible, beat({ gudiniVisible: true, visualAction: "Gudini sets a full mug down on a cluttered kitchen table and sits", keyMoment: "the mug touches the table" }), withRefs);
+  assert.match(p, /Main character GUDINI/);
+  assert.match(p, /photorealistic live-action/);
+  assert.match(p, /high-collar zip jacket/);
+  assert.match(p, /ordinary, recognisable moment from real life/);
+  // ни дыма, ни свечения по умолчанию
+  assert.match(p, /No symbolic effects, no glowing objects/);
+  // рисовка встречается только как нежелательный признак, а не как указание стиля
+  assert.doesNotMatch(p, /flat 2D cel animation|hand-drawn anime|drawn in this style/);
+  assert.match(p, /no cel shading/, "аниме остаётся в списке запретов — это правильное употребление");
+});
+
+// ─────────────────────────────── 4. парашют: состояние реквизита
+
+test("парашют: состояние купола согласовано по сценам, обрывки только там, где рвётся", () => {
+  const bible = bibleOf("explainer", { continuityRules: ["the reserve canopy is bright red in every shot"] });
+  const intact = beat({ id: "B1", visualAction: "Gudini clips a folded grey parachute pack onto his harness on the ground", stateBefore: "the grey canopy is packed and intact", stateAfter: "the pack is closed on his back, still intact", keyMoment: "the buckle clicks shut" });
+  const tears = beat({ id: "B2", visualAction: "The grey canopy splits open along one seam above him", stateBefore: "the grey canopy is open and whole", stateAfter: "the grey canopy is torn along one seam, fabric streaming", keyMoment: "the seam tears open", motion: "the seam splits and torn fabric streams upward past the camera" });
+  const reserve = beat({ id: "B3", visualAction: "A bright red reserve canopy opens above him", stateBefore: "the torn grey canopy trails behind him", stateAfter: "the bright red reserve canopy is fully open", keyMoment: "the red canopy snaps open" });
+
+  const pIntact = promptFor(bible, intact);
+  const pTears = promptFor(bible, tears);
+  const pReserve = promptFor(bible, reserve);
+
+  // разрыв описан только в сцене разрыва
+  assert.doesNotMatch(pIntact, /torn|tears|streaming/i);
+  assert.match(pTears, /torn fabric streams upward past the camera/);
+  // до и после состояния попали в свои промпты
+  assert.match(pIntact, /Before: the grey canopy is packed and intact/);
+  assert.match(pTears, /After: the grey canopy is torn along one seam/);
+  assert.match(pReserve, /Before: the torn grey canopy trails behind him/);
+  // цвет запасного купола держится правилом непрерывности во всех сценах
+  for (const p of [pIntact, pTears, pReserve]) assert.match(p, /reserve canopy is bright red in every shot/);
+  // главное изменение названо и должно случиться рано, а не в хвосте клипа
+  assert.match(pTears, /The one thing that must be visible: the seam tears open\. It happens early in the shot/);
+});
+
+test("якорь тайминга берётся из речи этого бита, выдуманный отбрасывается", () => {
+  const words = [
+    { word: "купол", start: 0, end: 0.5 }, { word: "порвался", start: 0.5, end: 1.2 },
+    { word: "прямо", start: 1.2, end: 1.6 }, { word: "в", start: 1.6, end: 1.7 },
+    { word: "воздухе.", start: 1.7, end: 2.4 }, { word: "Запасной", start: 2.6, end: 3.2 },
+    { word: "раскрылся", start: 3.2, end: 4.0 }, { word: "сразу.", start: 4.0, end: 4.6 },
+  ];
+  const phrases = phrasesFromWords(words as any);
+  const beats = beatsFromRaw(
+    [
+      { fromPhrase: 1, toPhrase: 1, displayMode: "full_ai", visualAction: "the canopy tears", anchorPhrase: "порвался" },
+      { fromPhrase: 2, toPhrase: 2, displayMode: "full_ai", visualAction: "the reserve opens", anchorPhrase: "выдуманное слово" },
+    ] as any,
+    phrases,
+    5,
+  );
+  assert.equal(beats[0].anchorPhrase, "порвался");
+  assert.equal(beats[1].anchorPhrase, "", "слова нет в речи этого бита — якорь не сохраняется");
+});
+
+// ─────────────────────────────── 5. инвалидизация плана
+
+test("текст профиля меняет ключ плана; те же входы переиспользуются", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-photoreal-"));
+  const dir = path.join(base, "hero");
+  fs.mkdirSync(dir);
+  const profile = {
+    id: "hero", name: "Gudini", description: "the owner himself", appearance: "bleached buzz cut, brown eyes",
+    clothes: "orange and black jacket", signature: "steel forehead plate", styleLock: "photorealistic live-action footage",
+    world: "places come from the story", negative: "no anime",
+  };
+  const write = (p: object) => fs.writeFileSync(path.join(dir, "character.json"), JSON.stringify(p));
+  write(profile);
+  fs.writeFileSync(path.join(dir, "ref-1.png"), Buffer.from("png-1"));
+
+  const words = [{ word: "раз", start: 0, end: 1 }, { word: "два", start: 1, end: 2 }] as any;
+  const keyOf = () => planKey(words, "сценарий", loadCharacterProfile("hero", base), universe, 2);
+  const before = keyOf();
+  assert.equal(keyOf(), before, "одинаковые входы дают одинаковый ключ");
+
+  write({ ...profile, appearance: "bleached buzz cut, grey eyes" });
+  const afterText = keyOf();
+  assert.notEqual(afterText, before, "правка описания лица обязана делать план устаревшим");
+
+  fs.writeFileSync(path.join(dir, "ref-1.png"), Buffer.from("png-2"));
+  assert.notEqual(keyOf(), afterText, "другая картинка — тоже другой план");
+
+  const otherWorld = { ...universe, id: "other", hash: "0123456789ab" };
+  assert.notEqual(planKey(words, "сценарий", loadCharacterProfile("hero", base), otherWorld, 2), keyOf(), "смена мира тоже инвалидирует");
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+// ─────────────────────────────── 6. один дубль, без посценных картинок
+
+test("на сцену остаётся один вызов Veo и один вариант; посценной генерации картинок нет", () => {
+  const bible = bibleOf("explainer");
+  const beats: StoryBeat[] = [
+    beat({ id: "B1", start: 0, end: 8, visualAction: "a man opens a cardboard parcel" }),
+    { ...beat({ id: "B2", visualAction: "" }), start: 8, end: 14, displayMode: "author", requiresGeneration: false },
+    beat({ id: "B3", start: 14, end: 22, visualAction: "he lifts the packing foam out of the box" }),
+  ];
+  const cfg = { key: "k", universe, budgetUsd: 12, maxCoverage: coverageConfig().max, concurrency: veoConcurrency(), callMinutes: veoCallMinutes() };
+  const built = buildShots(beats, withRefs, bible, cfg);
+  assert.equal(built.groups.length, 2, "две независимые сцены");
+  for (const g of built.groups) assert.equal(g.shotIds.length, 1, "одна сцена — один вызов Veo");
+  assert.equal(built.shots.length, 2);
+
+  // в теле запроса к Veo ровно один вариант и никакого звука
+  const body: any = veoBody({
+    model: built.shots[0].model, prompt: built.shots[0].prompt, durationSeconds: 8,
+    storageUri: "gs://bucket/x/", aspectRatio: "9:16", resolution: "720p",
+  });
+  assert.equal(body.parameters.sampleCount, 1);
+  assert.equal(body.parameters.generateAudio, false);
+
+  // модуль AI-фильма не умеет генерировать изображения: их там просто нет
+  const sources = fs.readdirSync(path.join(process.cwd(), "lib", "aiFilm"))
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) => fs.readFileSync(path.join(process.cwd(), "lib", "aiFilm", f), "utf8"))
+    .join("\n");
+  for (const banned of ["coverProvider", "generateCoverImage", "modalities"]) {
+    assert.ok(!sources.includes(banned), `в lib/aiFilm появился путь генерации картинок: ${banned}`);
+  }
+});

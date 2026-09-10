@@ -38,7 +38,7 @@ const bible: StoryBible = normalizeBible({ bible: { mood: "tense", visualStyle: 
 
 export const beat = (
   id: string, start: number, end: number, mode: DisplayMode,
-  o: Partial<Pick<StoryBeat, "purpose" | "priority" | "continuityGroup" | "gudiniVisible" | "visualAction">> = {},
+  o: Partial<Pick<StoryBeat, "purpose" | "priority" | "continuityGroup" | "gudiniVisible" | "visualAction" | "keyMoment" | "anchorPhrase">> = {},
 ): StoryBeat => ({
   id, start, end,
   meaning: `смысл ${id}`, storyBeat: `бит ${id}`,
@@ -49,6 +49,8 @@ export const beat = (
   requiresGeneration: mode !== "author",
   gudiniVisible: mode !== "author" && (o.gudiniVisible ?? true),
   visualAction: mode === "author" ? "" : o.visualAction ?? `Gudini does action ${id}`,
+  keyMoment: mode === "author" ? "" : o.keyMoment ?? `something changes in ${id}`,
+  anchorPhrase: mode === "author" ? "" : o.anchorPhrase ?? "",
   location: mode === "author" ? "" : "village rooftop",
   motion: mode === "author" ? "" : "0-3s: he steps forward. 3-6s: camera pushes in. 6-8s: he stops.",
   stateBefore: "he stands", stateAfter: `state after ${id}`,
@@ -259,7 +261,10 @@ test("промпт shot: WHO/WHAT/WHERE/WHAT CHANGES, вертикальный �
   assert.match(p, /Location: village rooftop/);
   assert.match(p, /After: state after B1/);
   assert.match(p, /vertical 9:16 portrait composition/);
-  assert.match(p, /No text, no captions/);
+  // текст запрещён один раз отдельной строкой, старый дублирующий хвост убран
+  assert.match(p, /No readable text anywhere in frame/);
+  assert.doesNotMatch(p, /No text, no captions, no subtitles/);
+  assert.match(p, /No split screen, no talking to camera\.$/);
   assert.match(p, /no hair color change/);
   const h = shotPrompt({ character: gudini, universe, bible, beat: { ...b, displayMode: "hybrid" }, prev: null, mode: "text", aspectRatio: "16:9" });
   assert.match(h, /horizontal 16:9/);
@@ -288,10 +293,19 @@ test("Промпт шота: действие впереди, состав ка�
   const action = p.indexOf("Action:");
   assert.ok(action >= 0 && action < 200, `действие должно быть в начале промпта, а оно на ${action}`);
   assert.ok(action < p.indexOf("Style:"), "стиль должен идти после действия");
-  assert.match(p, /Motion beat by beat: 0-3s/);
+  assert.match(p, /Motion in order: 0-3s/);
   assert.match(p, /People in frame: exactly 1 — Gudini/);
   assert.match(p, /No other people at all/);
   assert.match(p, /nothing hovers, floats or drifts in place/);
+  // Единственная цель кадра идёт сразу за действием, до стиля и запретов
+  const key = p.indexOf("The one thing that must be visible");
+  assert.ok(key > action && key < p.indexOf("Style:"), "keyMoment должен стоять между действием и стилем");
+  // Физика в общем блоке — только общая. Падение, поток воздуха и летящие обрывки были
+  // инструкциями одной сцены и приписывались ко всем подряд
+  assert.doesNotMatch(p, /falling bodies accelerate/);
+  assert.doesNotMatch(p, /hammered by the airflow/);
+  assert.doesNotMatch(p, /torn pieces/);
+  assert.match(p, /No readable text anywhere in frame/);
   const alone = beat("B2", 0, 8, "full_ai", { gudiniVisible: false });
   assert.match(shotPrompt({ character: withRefs, universe, bible, beat: alone, prev: null, mode: "text", aspectRatio: "9:16" }), /People in frame: exactly as described above/);
 });
@@ -300,30 +314,28 @@ test("Устаревший план называет, что именно раз
   const a = "spee:scri:3.3:veo/env:gudini@refs1:world@hash1";
   assert.deepEqual(planKeyDiff(a, a), ["ключ целиком"]);
   assert.deepEqual(planKeyDiff(a, "OTHER:scri:3.3:veo/env:gudini@refs1:world@hash1"), ["речь"]);
-  assert.deepEqual(planKeyDiff(a, "spee:scri:3.3:veo/env:gudini@refs2:world@hash2"), ["эталоны персонажа", "профиль мира"]);
+  assert.deepEqual(planKeyDiff(a, "spee:scri:3.3:veo/env:gudini@refs2:world@hash2"), ["профиль персонажа (описание или эталоны)", "профиль мира"]);
 });
 
 test("Universe Lock: мир из профиля попадает в сценариста, в план и в каждый промпт; без названия франшизы в промпте", () => {
-  assert.equal(universe.id, "gudini-anime-cel");
+  assert.equal(universe.id, "gudini-photoreal");
   const planner = universePlannerBlock(universe);
-  assert.match(planner, /STYLE LOCK/);
+  assert.match(planner, /СТИЛЬ ЗАФИКСИРОВАН/);
   assert.match(planner, /СОДЕРЖАНИЕ БУКВАЛЬНОЕ/);
   assert.match(planner, /CONTENT IS LITERAL/);
-  assert.match(planner, /Do NOT translate the subject into another world/);
   assert.match(planner, /universeAdaptation/);
-  assert.match(planner, /Name well-known characters directly/);
-  assert.match(planner, /silent character inside the story/);
+  // Формулировки стиля приходят из профиля: в коде блока не должно остаться рисовки
+  assert.doesNotMatch(planner, /нарисован/i, "слово «нарисованы» было вшито в код блока");
   const block = universePromptBlock(universe);
-  assert.match(block, /places come from the story/);
-  assert.match(block, /Content is literal/);
-  assert.match(block, /Never drift into: photorealism/);
+  assert.doesNotMatch(block, /drawn in this style/, "«drawn» было вшито в код production-блока");
+  assert.match(block, /Never drift into: anime/);
   assert.doesNotMatch(block, /Naruto/i, "в production-промпте нет названия франшизы");
   const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
-  assert.equal(plan.universeId, "gudini-anime-cel");
+  assert.equal(plan.universeId, "gudini-photoreal");
   assert.equal(plan.universe.hash, universe.hash);
-  assert.equal(plan.bible.universeId, "gudini-anime-cel");
+  assert.equal(plan.bible.universeId, "gudini-photoreal");
   for (const s of plan.shots) {
-    assert.match(s.prompt, /Universe \(the same in every shot\): Gudini Anime Cel/);
+    assert.match(s.prompt, /World \(the same in every shot\)/);
     assert.match(s.prompt, /Never drift into/);
     assert.doesNotMatch(s.prompt, /Naruto/i);
   }
@@ -470,6 +482,18 @@ test("отказ Veo по правам третьих лиц распознаё�
   assert.match(out, /green cloak and iron mask/);
   assert.match(out, /the hero team/);
   assert.equal(debrandPrompt("Gudini stands on a cliff at dusk.", { supportingCharacters: [] }), "Gudini stands on a cliff at dusk.");
-  const rules = debrandPrompt("his true face is only implied, never unmasked as Stark; wearing the golden Infinity Gauntlet", { supportingCharacters: [] });
-  assert.ok(!/Stark|Infinity/.test(rules), rules);
+  const rules = debrandPrompt("his true face is only implied; wearing the golden Infinity Gauntlet", { supportingCharacters: [] });
+  assert.ok(!/Infinity/.test(rules), rules);
+  // Обычные английские слова замене не подлежат: раньше «stark contrast» превращался
+  // в «the armored hero contrast», а «ghost» и «doom» — в чужих персонажей
+  const plain = debrandPrompt("a stark concrete yard at dawn; a ghost of steam over the doom-grey roof", { supportingCharacters: [] });
+  assert.equal(plain, "a stark concrete yard at dawn; a ghost of steam over the doom-grey roof");
+  // Имя постоянного персонажа не обезличивается: оно связано с эталонами
+  const owner = debrandPrompt("Gudini kneels beside Tony Stark", {
+    supportingCharacters: [{ name: "Gudini", function: "partner", appearance: "lean man in an orange jacket" }],
+  }, "Gudini");
+  assert.match(owner, /Gudini kneels/);
+  // Реконструкция реального события имена участников не теряет
+  const news = debrandPrompt("Tony Stark speaks at the hearing", { supportingCharacters: [], reconstruction: true });
+  assert.equal(news, "Tony Stark speaks at the hearing");
 });

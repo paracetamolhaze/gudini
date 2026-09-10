@@ -4,7 +4,7 @@ import { universePromptBlock, type UniverseProfile } from "./universe";
 import { veoPricePerSecond, round2 } from "./pricing";
 import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
 import type {
-  AiFilmPlan, CharacterProfile, ContinuityGroup, FilmShot, PlanStats, StoryBeat, StoryBible, TimelineSegment,
+  AiFilmPlan, CharacterProfile, ContinuityGroup, FilmShot, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
 } from "./types";
 
 /**
@@ -70,6 +70,25 @@ export type PlanConfig = {
 const isAi = (b: StoryBeat) => b.displayMode !== "author";
 export const protectedBeat = (b: StoryBeat) => b.priority === "high" && (b.purpose === "hook" || b.purpose === "reveal" || b.purpose === "climax");
 
+/**
+ * Постановка зависит от типа истории, стиль — нет. Строка идёт в каждый промпт своей сцены:
+ * новость снимается как наблюдение, история — как реконструкция эпохи, размышление — как
+ * бытовой эпизод. Отдельно сказано, чем кадр новости НЕ является, иначе генератор охотно
+ * добавляет таймкод, зерно и рамку камеры наблюдения и выдаёт постановку за документ.
+ */
+export const STAGING_LINE: Record<StagingMode, string> = {
+  observational:
+    "Staging: a staged reconstruction of a real event, filmed as if a camera happened to be there — plain observational framing, " +
+    "ordinary uncomposed detail, available light. It must not look like archive footage, security-camera or phone-recording material: " +
+    "no timecode, no date stamp, no camera-UI overlay, no VHS or CCTV grain.",
+  period_reconstruction:
+    "Staging: a period reconstruction — clothing, tools, vehicles, architecture, materials, surfaces and light all belong to the stated " +
+    "time and place. Nothing modern anywhere in frame: no plastic, no printed graphics, no modern eyewear, no LED or fluorescent light unless the action states it.",
+  everyday_life:
+    "Staging: an ordinary, recognisable moment from real life; the idea reads through the action itself. " +
+    "No symbolic effects, no glowing objects, no smoke or haze that the action does not call for.",
+};
+
 /** Промпт shot: WHO / WHAT / WHERE / WHAT CHANGES, кадр, камера, непрерывность, запреты. */
 export function shotPrompt(args: {
   character: CharacterProfile;
@@ -91,7 +110,12 @@ export function shotPrompt(args: {
     lines.push(`Before: ${beat.stateBefore}.`);
   }
   lines.push(`Action: ${beat.visualAction}`);
-  if (beat.motion) lines.push(`Motion beat by beat: ${beat.motion}`);
+  // Одно изменение ради которого снимается сцена — сразу после действия и до всего
+  // остального: у генератора должна быть одна цель, а не список равноправных задач.
+  if (beat.keyMoment) {
+    lines.push(`The one thing that must be visible: ${beat.keyMoment}. It happens early in the shot, not at the very end.`);
+  }
+  if (beat.motion) lines.push(`Motion in order: ${beat.motion}`);
   if (beat.location) lines.push(`Location: ${beat.location}.`);
   if (beat.stateAfter) lines.push(`After: ${beat.stateAfter}.`);
   const shot = beat.shotType.replace("_", "-");
@@ -105,9 +129,17 @@ export function shotPrompt(args: {
     "Screen direction: keep the movement exactly as described relative to the camera. Do not turn the subject toward the lens " +
       "and do not have him run or jump into the camera unless the action says so.",
   );
+  lines.push(STAGING_LINE[bible.staging]);
+  // Физика общая и безопасная. Раньше здесь висели падающие тела, поток воздуха и летящие
+  // обрывки — инструкции одной конкретной сцены с парашютом, приписанные ко всем подряд:
+  // ткань рвалась в кадрах, где ничего не рвалось. Частности приходят из motion этого бита.
   lines.push(
-    "Physics: real weight and speed — falling bodies accelerate, cloth and hair are hammered by the airflow, " +
-      "torn pieces are swept away past the camera and out of frame; nothing hovers, floats or drifts in place; no slow motion unless the action asks for it.",
+    "Physics: real weight, speed and inertia — things respond to gravity and to contact, they settle and come to rest; " +
+      "nothing hovers, floats or drifts in place; no slow motion unless the action asks for it.",
+  );
+  lines.push(
+    "Realism: true human proportions, skin with real texture and no beauty smoothing, materials that behave like themselves, " +
+      "contact shadows where objects touch, one dominant light source with matching exposure and shadow direction.",
   );
 
   // Люди в кадре: только те, кого назвала речь. Наблюдателей и прохожих быть не должно —
@@ -133,8 +165,13 @@ export function shotPrompt(args: {
 
   lines.push(`Style: ${bible.visualStyle}. Mood: ${bible.mood}. Lighting: ${bible.lighting}.`);
   lines.push(universePromptBlock(universe));
+  lines.push(
+    "No readable text anywhere in frame: no interface, no price tag, no document, no signage, no numbers on screens.",
+  );
   if (bible.continuityRules.length) lines.push(`Continuity: ${bible.continuityRules.slice(0, 8).join("; ")}.`);
-  lines.push(`${character.negative ? `${character.negative}. ` : ""}No text, no captions, no subtitles, no logos, no watermarks, no split screen, no talking to camera.`);
+  // Хвост запретов один раз: текст и логотипы уже названы отдельной строкой выше,
+  // и повторять их третий раз в конце промпта смысла нет
+  lines.push(`${character.negative ? `${character.negative}. ` : ""}No split screen, no talking to camera.`);
   return lines.join("\n");
 }
 
@@ -144,7 +181,6 @@ const DEBRAND: [RegExp, string][] = [
   [/\bIron Man armor\b/gi, "red-and-gold powered armor"],
   [/\bIron Man\b/gi, "the hero in red-and-gold powered armor"],
   [/\bTony Stark'?s?\b/gi, "the armored hero with the glowing chest reactor"],
-  [/\bStark'?s?\b/g, "the armored hero"],
   [/\bInfinity Gauntlet\b/gi, "golden gauntlet"],
   [/\bInfinity Stones?\b/gi, "glowing stones"],
   [/\bThanos\b/gi, "the giant purple titan with a golden gauntlet"],
@@ -156,12 +192,9 @@ const DEBRAND: [RegExp, string][] = [
   [/\bYelena\b/gi, "the blonde fighter in a white tactical suit"],
   [/\bRed Guardian\b/gi, "the burly bearded man in a red suit"],
   [/\bJohn Walker\b/gi, "the soldier in a dark tactical suit"],
-  [/\bGhost\b/g, "the phasing figure in a hooded grey suit"],
-  [/\bSentry\b/g, "the glowing golden-caped hero"],
-  [/\bSentinels?\b/gi, "giant purple mutant-hunting robots"],
+  [/\bSentinel robots?\b/gi, "giant purple mutant-hunting robots"],
   [/\b(?:Doctor|Dr\.?) Doom\b/gi, "the armored sorcerer in a green cloak and iron mask"],
   [/\bVictor von Doom\b/gi, "the armored sorcerer in a green cloak and iron mask"],
-  [/\bDoom'?s?\b/g, "the armored sorcerer's"],
   [/\bProfessor X\b/gi, "the bald telepath in a hover-chair"],
   [/\bMagneto\b/gi, "the man in a red helmet and cape"],
   [/\bCyclops\b/gi, "the hero with a red visor"],
@@ -179,12 +212,25 @@ const DEBRAND: [RegExp, string][] = [
  * Промпт без имён чужих персонажей: замены из таблицы плюс имена персонажей истории
  * из Story Bible → их описание внешности. Используется только если Veo отклонил
  * промпт по правам третьих лиц; остальные сцены имена сохраняют.
+ *
+ * Две вещи эта замена трогать не имеет права. Первая — имя постоянного персонажа: оно
+ * связано с эталонными картинками, и «a lean man in an orange jacket» вместо него означает
+ * другого человека в кадре. Вторая — реконструкция реального события: там участники и есть
+ * факт, поэтому имена в такой сцене не обезличиваются, и сцена честно остаётся несгенерированной,
+ * если Veo её не принял.
  */
-export function debrandPrompt(prompt: string, bible: Pick<StoryBible, "supportingCharacters">): string {
+export function debrandPrompt(
+  prompt: string,
+  bible: Pick<StoryBible, "supportingCharacters"> & Partial<Pick<StoryBible, "reconstruction">>,
+  protectName?: string,
+): string {
+  if (bible.reconstruction) return prompt;
+  const guard = (protectName ?? "").trim().toLowerCase();
   let out = prompt;
   for (const c of bible.supportingCharacters) {
     const look = c.appearance.split(/[.;]/)[0].trim().toLowerCase();
     for (const alias of c.name.split("/").map((a) => a.trim()).filter((a) => a.length >= 3)) {
+      if (guard && alias.toLowerCase() === guard) continue;
       const re = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g");
       out = out.replace(re, look ? `a ${look}` : "the character");
     }

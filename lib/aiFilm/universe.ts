@@ -3,16 +3,20 @@ import path from "path";
 import crypto from "crypto";
 
 /**
- * Universe Lock — постоянный СТИЛЬ всех AI-фильмов проекта: рисовка и дизайн персонажей.
- * Мира как отдельной выдумки нет: места берутся из истории и рисуются в этом стиле. Содержание сцен при этом буквальное: зритель
- * видит то, о чём говорит автор (людей, события, предметы, места из речи), нарисованное
- * в этом стиле; метафоры «клан вместо компании» запрещены. Профиль лежит в
+ * Universe Lock — постоянный СТИЛЬ всех AI-фильмов проекта. Мира как отдельной выдумки
+ * нет: места берутся из истории и показываются в этом стиле. Содержание сцен буквальное:
+ * зритель видит то, о чём говорит автор (людей, события, предметы, места из речи);
+ * метафоры «клан вместо компании» запрещены. Профиль лежит в
  * `assets/ai-film/universes/<id>/universe.json` и попадает в сценариста, в планировщик
  * shots и в каждый production-промпт Veo (описательно, без названий франшиз). Хэш профиля
  * входит в ключ плана.
+ *
+ * Формулировки стиля живут ТОЛЬКО в профиле. Раньше слова «нарисованы» и `drawn` были
+ * вшиты в код обоих блоков, и замена JSON на фотореалистичный не меняла ничего: планировщик
+ * всё равно получал указание рисовать.
  */
 
-export const DEFAULT_UNIVERSE_ID = "gudini-anime-cel";
+export const DEFAULT_UNIVERSE_ID = "gudini-photoreal";
 
 export type UniverseProfile = {
   id: string;
@@ -78,13 +82,17 @@ export function loadUniverseProfile(id = universeId(), baseDir = universesDir())
   };
 }
 
-/** Блок для production-промпта Veo: стиль и мир описательно, содержание буквальное, без названия франшизы. */
+/**
+ * Блок для production-промпта Veo: мир описательно, содержание буквальное, без названия франшизы.
+ *
+ * Сам визуальный язык сюда НЕ идёт: он уже стоит выше строкой Style (styleLock персонажа),
+ * и второе такое же описание на пятьсот знаков только отодвигало действие вниз промпта.
+ */
 export function universePromptBlock(u: UniverseProfile): string {
   return (
-    `Universe (the same in every shot): ${u.name}. ${u.visualLanguage}. ` +
-    `Setting: ${u.architecture}. Clothing: ${u.clothingRules}. Technology: ${u.technologyRules}. ` +
-    `Objects: ${u.recurringObjects}. Powers: ${u.powerSystem}. ${u.environmentRules}. ` +
-    `Content is literal: show exactly the people, events and places of the story, drawn in this style. ` +
+    `World (the same in every shot): ${u.architecture} ` +
+    `Clothing: ${u.clothingRules}. Objects and technology: ${u.technologyRules}. ` +
+    `Show exactly the people, events and places of the story. ` +
     `Never drift into: ${u.forbiddenDrift}.`
   );
 }
@@ -92,15 +100,14 @@ export function universePromptBlock(u: UniverseProfile): string {
 /** Блок для сценариста: стиль зафиксирован, содержание буквально по речи. */
 export function universePlannerBlock(u: UniverseProfile): string {
   return (
-    `STYLE LOCK. Все AI-сцены без исключений нарисованы в одном стиле «${u.name}» (id ${u.id}). Целевое ощущение: ${u.targetFeel}.\n` +
-    `Визуальный язык: ${u.visualLanguage}. Архитектура по умолчанию: ${u.architecture}. Одежда: ${u.clothingRules}. Технологии: ${u.technologyRules}. ` +
-    `Общество: ${u.socialRules}. Силы и оружие: ${u.powerSystem}. Предметы: ${u.recurringObjects}. Среда: ${u.environmentRules}.\n` +
-    `СОДЕРЖАНИЕ БУКВАЛЬНОЕ. Зритель должен ВИДЕТЬ то, о чём говорит автор: тех самых людей, события, предметы и места, нарисованные в этом стиле. ` +
-    `Если автор говорит про гибель героя в броне, в кадре гибель героя в броне; про титана с перчаткой — титан с перчаткой; про новую команду — эта команда. ` +
+    `СТИЛЬ ЗАФИКСИРОВАН для всех AI-сцен: «${u.name}» (id ${u.id}). Целевое ощущение: ${u.targetFeel}.\n` +
+    `Визуальный язык: ${u.visualLanguage}.\n` +
+    `Места: ${u.architecture}. Одежда: ${u.clothingRules}. Предметы и техника: ${u.technologyRules}. ` +
+    `Люди вокруг: ${u.socialRules}. Физика и эффекты: ${u.powerSystem}. Среда и свет: ${u.environmentRules}.\n` +
+    `СОДЕРЖАНИЕ БУКВАЛЬНОЕ. Зритель должен ВИДЕТЬ то, о чём говорит автор: тех самых людей, события, предметы и места.\n` +
     `Правила: ${u.contentRules.join("; ")}.\n` +
     `Запрещено: ${u.forbiddenDrift}.\n` +
-    `Для каждого AI-бита заполни universeAdaptation (английский, 1–2 предложения): ЧТО ИМЕННО из сказанного показано в кадре ` +
-    `(например «Tony Stark's sacrifice → Tony Stark in his red-and-gold armor on one knee, chest reactor flickering out, Gudini kneeling beside him»). ` +
-    `В visualAction (он идёт в генератор видео) известных персонажей называй прямо по имени и добавляй короткий узнаваемый облик (armor colors, gauntlet, shield, metal arm, cape) — генератор знает, кто это.`
+    `Для каждого AI-бита заполни universeAdaptation (английский, 1–2 предложения): ЧТО ИМЕННО из сказанного показано в кадре и как это выглядит на камере. ` +
+    `Широко известных персонажей и реальных людей называй прямо по имени и добавляй короткий узнаваемый облик — генератор знает, кто это.`
   );
 }

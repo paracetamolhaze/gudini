@@ -14,6 +14,21 @@ export type ShotType = "close" | "medium" | "medium_wide" | "wide" | "full_body"
 export type TransitionIntent = "cut" | "dissolve";
 export type GenerationProfile = "character" | "environment" | "continuation";
 
+/**
+ * Тип истории решает постановку, а не стиль. Стиль один — фотореализм; меняется то,
+ * что камера снимает: наблюдение за происходящим, реконструкция эпохи или бытовой эпизод.
+ */
+export type StoryType = "news" | "history" | "philosophy" | "explainer";
+export type StagingMode = "observational" | "period_reconstruction" | "everyday_life";
+
+/** Какая постановка соответствует типу истории. */
+export const STAGING_FOR: Record<StoryType, StagingMode> = {
+  news: "observational",
+  history: "period_reconstruction",
+  philosophy: "everyday_life",
+  explainer: "everyday_life",
+};
+
 /** Постоянный персонаж: identity не зависит от проекта и не генерируется Claude. */
 export type CharacterProfile = {
   id: string;
@@ -60,6 +75,14 @@ export type StoryBible = {
   characterId: string;
   /** Universe Lock: мир, в котором происходят все AI-сцены */
   universeId: string;
+  /** о чём ролик: от этого зависит постановка кадра, но не стиль */
+  storyType: StoryType;
+  staging: StagingMode;
+  /**
+   * Кадры новости — постановочная реконструкция, а не найденная съёмка события.
+   * Флаг хранится в плане, чтобы происхождение материала нельзя было перепутать позже.
+   */
+  reconstruction: boolean;
   /** стиль зафиксирован профилем персонажа */
   visualStyle: string;
   world: string;
@@ -96,6 +119,16 @@ export type StoryBeat = {
   location: string;
   /** движение по секундам внутри клипа: что делает тело, куда идёт камера, как ведут себя предметы */
   motion: string;
+  /**
+   * Одно видимое изменение, ради которого снимается сцена («the canopy tears open»).
+   * Уходит в промпт отдельной строкой: у Veo одна цель, а не список действий.
+   */
+  keyMoment: string;
+  /**
+   * Слово или короткая фраза из речи, на которой это изменение должно быть уже видно.
+   * Пишется в план для проверки тайминга; исполнение Veo этим не гарантируется.
+   */
+  anchorPhrase: string;
   stateBefore: string;
   stateAfter: string;
   /** одинаковая метка у соседних AI-битов = одна непрерывная сцена (extension) */

@@ -26,7 +26,7 @@ test("профиль персонажа: identity из файла, эталон�
   const dir = path.join(base, "gudini");
   const none = loadCharacterProfile("gudini", base);
   assert.equal(none.referenceFiles.length, 0);
-  assert.equal(none.refHash, "no-refs");
+  assert.match(none.refHash, /^[0-9a-f]{16}$/, "хэш идентичности считается и без картинок");
   fs.writeFileSync(path.join(dir, "ref-2-face.png"), Buffer.from("png-face"));
   fs.writeFileSync(path.join(dir, "ref-1-full.png"), Buffer.from("png-full"));
   const two = loadCharacterProfile("gudini", base);
@@ -40,6 +40,22 @@ test("профиль персонажа: identity из файла, эталон�
   assert.match(characterBlock(two), /Main character GUDINI/);
   assert.match(characterBlock(two), /platinum spiky hair/);
   assert.equal(referenceHash([]), "no-refs");
+});
+
+test("хэш идентичности меняется от текста профиля, а не только от картинок", () => {
+  const base = tmpCharacters();
+  const dir = path.join(base, "gudini");
+  const before = loadCharacterProfile("gudini", base).refHash;
+  // те же картинки, изменено одно описание лица
+  fs.writeFileSync(path.join(dir, "character.json"), JSON.stringify({ ...profile, appearance: "short bleached buzz cut, brown eyes" }));
+  const afterText = loadCharacterProfile("gudini", base).refHash;
+  assert.notEqual(afterText, before, "правка описания обязана делать план устаревшим");
+  // и стиль тоже: аниме-план не должен переиспользоваться фотореалистичным
+  fs.writeFileSync(path.join(dir, "character.json"), JSON.stringify({ ...profile, appearance: "short bleached buzz cut, brown eyes", styleLock: "photorealistic live-action footage" }));
+  assert.notEqual(loadCharacterProfile("gudini", base).refHash, afterText);
+  // тот же профиль — тот же хэш: стабильные входы переиспользуются
+  fs.writeFileSync(path.join(dir, "character.json"), JSON.stringify(profile));
+  assert.equal(loadCharacterProfile("gudini", base).refHash, before);
 });
 
 test("без профиля персонажа — понятная ошибка с путём, а не пустой герой", () => {
@@ -57,6 +73,38 @@ test("профиль Gudini в репозитории валиден и без �
   assert.match(c.appearance, /platinum/);
   const text = `${c.description} ${c.appearance} ${c.clothes} ${c.signature} ${c.styleLock} ${c.world}`.toLowerCase();
   for (const banned of ["naruto", "konoha", "marvel", "avengers", "disney"]) assert.ok(!text.includes(banned), `в профиле есть «${banned}»`);
+});
+
+test("фотореалистичный профиль владельца: живое лицо, костюм из ткани, без старых запретов", () => {
+  const c = loadCharacterProfile("gudini-real", path.join(process.cwd(), "assets", "ai-film", "characters"));
+  assert.equal(c.name, "Gudini");
+  assert.match(c.styleLock, /photorealistic live-action/);
+  // Старый профиль запрещал похожесть на живого человека и щетину — ровно то, что теперь нужно
+  assert.doesNotMatch(c.negative ?? "", /no real actor likeness/);
+  assert.doesNotMatch(c.negative ?? "", /no beard/);
+  assert.match(c.appearance, /stubble/);
+  // Случайные приметы одного снимка не становятся постоянными
+  for (const junk of ["sunglasses", "flower", "earbud"]) {
+    assert.ok(!c.appearance.toLowerCase().includes(junk), `«${junk}» попал в внешность`);
+    assert.ok(!c.clothes.toLowerCase().includes(junk), `«${junk}» попал в костюм`);
+  }
+  assert.match(c.negative ?? "", /no sunglasses/);
+  // Костюм физический, а не рисованный, и он не тянет за собой аниме-мир
+  assert.match(c.clothes, /real (metal zip|fabric)|cotton-nylon/);
+  assert.match(c.negative ?? "", /no anime/);
+  const text = `${c.description} ${c.appearance} ${c.clothes} ${c.signature} ${c.styleLock} ${c.world}`.toLowerCase();
+  for (const banned of ["naruto", "konoha", "marvel", "disney"]) assert.ok(!text.includes(banned), `в профиле есть «${banned}»`);
+});
+
+test("фотореалистичный профиль мира: съёмка вместо рисовки, постановка по типу истории", () => {
+  const u = loadUniverseProfile("gudini-photoreal", path.join(process.cwd(), "assets", "ai-film", "universes"));
+  assert.equal(u.id, "gudini-photoreal");
+  assert.match(u.visualLanguage, /photographic live-action/);
+  assert.match(u.forbiddenDrift, /anime/);
+  assert.ok(u.contentRules.some((r) => /staged reconstruction/i.test(r)), "реконструкция не выдаётся за документ");
+  assert.ok(u.contentRules.some((r) => /Staging follows the kind of story/i.test(r)));
+  assert.ok(u.contentRules.length >= 5);
+  assert.match(u.hash, /^[0-9a-f]{12}$/);
 });
 
 test("пул: не больше n задач одновременно, после ошибки новые не стартуют, запущенные доходят до конца", async () => {

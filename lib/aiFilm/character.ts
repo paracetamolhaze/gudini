@@ -13,7 +13,7 @@ import type { CharacterProfile } from "./types";
  * в ключ кэша сцен: другие картинки — другие сцены.
  */
 
-export const DEFAULT_CHARACTER_ID = "gudini";
+export const DEFAULT_CHARACTER_ID = "gudini-real";
 export const MAX_REFERENCE_IMAGES = 3;
 const IMAGE_RE = /\.(png|jpe?g|webp)$/i;
 
@@ -33,6 +33,23 @@ export function referenceHash(files: string[]): string {
     h.update(fs.readFileSync(f));
   }
   return files.length ? h.digest("hex").slice(0, 16) : "no-refs";
+}
+
+/**
+ * Хэш идентичности: текст профиля И байты эталонов. Только по картинкам его считать нельзя —
+ * правка описания лица, костюма или styleLock при тех же PNG оставляла ключ плана прежним,
+ * и на аниме-эталонах спокойно переиспользовались старые сцены. Теперь любое изменение
+ * идентичности делает план устаревшим, а одинаковый профиль по-прежнему переиспользуется.
+ */
+export function identityHash(
+  profile: Pick<CharacterProfile, "id" | "name" | "description" | "appearance" | "clothes" | "signature" | "styleLock" | "world" | "negative">,
+  files: string[],
+): string {
+  const text = JSON.stringify([
+    profile.id, profile.name, profile.description, profile.appearance,
+    profile.clothes, profile.signature, profile.styleLock, profile.world, profile.negative ?? "",
+  ]);
+  return crypto.createHash("sha1").update(text).update(referenceHash(files)).digest("hex").slice(0, 16);
 }
 
 const s = (v: unknown, field: string, file: string): string => {
@@ -60,10 +77,9 @@ export function loadCharacterProfile(id = characterId(), baseDir = charactersDir
     .sort();
   const names = (listed.length ? listed : discovered).filter((f) => fs.existsSync(path.join(dir, f))).slice(0, MAX_REFERENCE_IMAGES);
   const referenceFiles = names.map((f) => path.join(dir, f));
-  return {
+  const identity = {
     id: s(raw.id ?? id, "id", file),
     name: s(raw.name, "name", file),
-    role: "main_protagonist",
     description: s(raw.description, "description", file),
     appearance: s(raw.appearance, "appearance", file),
     clothes: s(raw.clothes, "clothes", file),
@@ -71,9 +87,13 @@ export function loadCharacterProfile(id = characterId(), baseDir = charactersDir
     styleLock: s(raw.styleLock, "styleLock", file),
     world: s(raw.world, "world", file),
     negative: typeof raw.negative === "string" ? raw.negative.trim() : undefined,
+  };
+  return {
+    ...identity,
+    role: "main_protagonist",
     referenceImages: names,
     referenceFiles,
-    refHash: referenceHash(referenceFiles),
+    refHash: identityHash(identity, referenceFiles),
     dir,
   };
 }

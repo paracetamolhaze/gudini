@@ -130,7 +130,7 @@ export async function generateShot(args: {
   // сцена один раз уходит повторно с описаниями вместо имён.
   const debrandOrThrow = (e: unknown) => {
     if (debranded || !isThirdPartyContentError(e)) throw e;
-    const stripped = debrandPrompt(req.prompt, args.plan.bible);
+    const stripped = debrandPrompt(req.prompt, args.plan.bible, args.plan.character?.name);
     if (stripped === req.prompt) throw e;
     args.onProgress?.(`shot ${shot.id}: Veo отклонил имена персонажей — повтор с описаниями`);
     console.warn(`AI-фильм: shot ${shot.id}: Veo отклонил промпт по правам третьих лиц, повтор без имён`);

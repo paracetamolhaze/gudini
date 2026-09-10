@@ -28,7 +28,11 @@ export function filmBudget(): number {
   return Number.isFinite(v) && v > 0 ? v : 12;
 }
 
-/** Ключ входных данных плана: чистая речь + сценарий + версии + модели + персонаж с эталонами + мир. */
+/**
+ * Ключ входных данных плана: чистая речь + сценарий + версии + модели + персонаж + мир.
+ * `character.refHash` — хэш всей идентичности (текст профиля и эталоны), поэтому правка
+ * одного описания лица или костюма тоже делает план устаревшим.
+ */
 export function planKey(words: Word[], script: string, character: { id: string; refHash: string }, universe: { id: string; hash: string }, duration?: number): string {
   const speech = JSON.stringify({ words: words.map((w) => [w.word, w.start, w.end]), duration: duration ?? words.at(-1)?.end ?? 0 });
   return `${textHash(speech)}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:${character.id}@${character.refHash}:${universe.id}@${universe.hash}`;
@@ -36,7 +40,7 @@ export function planKey(words: Word[], script: string, character: { id: string; 
 
 /** Что именно разошлось между сохранённым планом и текущими данными — по частям ключа. */
 export function planKeyDiff(saved: string, current: string): string[] {
-  const names = ["речь", "сценарий", "версия плана", "модели", "эталоны персонажа", "профиль мира"];
+  const names = ["речь", "сценарий", "версия плана", "модели", "профиль персонажа (описание или эталоны)", "профиль мира"];
   const a = saved.split(":");
   const b = current.split(":");
   const out: string[] = [];

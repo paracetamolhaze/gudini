@@ -1,0 +1,17 @@
+{
+  "id": "gudini-real",
+  "name": "Gudini",
+  "role": "main_protagonist",
+  "description": "Gudini — the channel owner himself, a real man in his late twenties, lean and athletic, filmed in live action; a silent participant inside the story who never speaks to the camera and never looks into the lens",
+  "appearance": "the real face of the owner from the reference pack: an oval, fairly narrow face with a straight jawline and a slightly squared chin; fair skin with a warm undertone, visible pores, faint freckling and ordinary skin texture, no beauty retouching; brown almond eyes set slightly deep with a clear upper-lid crease; medium, softly arched eyebrows in dark blond, noticeably darker than the hair; a straight narrow nose with a softly rounded tip; medium lips with a defined cupid's bow and a fuller lower lip; short patchy stubble on the chin, upper lip and jawline, darker than the hair; hair is a very short bleached platinum buzz cut with natural texture on top and darker roots at the temples and hairline; late twenties, lean athletic build with defined shoulders",
+  "clothes": "a physical, hand-made costume worn by a real person: an orange and black high-collar zip jacket in cotton-nylon with orange body panels, black shoulders and sleeves, a real metal zip, visible topstitching, seams and honest creases at the elbows; orange trousers of the same fabric, a black strap around the right thigh with a small pouch; dark open-toe sandals over wrapped shins; a forehead protector on a black cloth band with a plain brushed-steel plate, no emblem engraved on it",
+  "signature": "very short bleached platinum buzz cut with dark roots, plain brushed-steel forehead plate on a black band, orange and black high-collar jacket in real fabric, orange trousers, dark open-toe sandals",
+  "styleLock": "photorealistic live-action footage: a real person filmed on a real camera, true skin texture and hair strands, fabric with weave and creases, contact shadows, light with a single dominant source, natural motion blur; no illustration, no cel shading, no 3D render",
+  "world": "no fixed world: the places come from the story itself and are filmed as they really look; the costume travels with him and never turns the surrounding world into anime",
+  "negative": "no anime, no cartoon, no cel shading, no ink outlines, no illustration; no 3D render, no CGI or game-engine look, no plastic or waxy skin; no beauty-filter smoothing; no whisker marks on the cheeks, no blue eyes, no long or spiky yellow anime hair, no headband emblem; no sunglasses, no flower in the hair, no earbuds; no hoodie, no sneakers, no modern streetwear; no hair colour change, no change of face; no text, no captions, no logos, no watermarks",
+  "referenceImages": [
+    "reference-01-full.png",
+    "reference-02-portrait.png",
+    "reference-03-three-quarter.png"
+  ]
+}

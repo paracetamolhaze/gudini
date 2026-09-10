@@ -2,7 +2,8 @@ import { mediaComplete, parseJson } from "../mediaLlm";
 import type { Word } from "../transcribe";
 import { characterBlock } from "./character";
 import { universePlannerBlock, type UniverseProfile } from "./universe";
-import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent } from "./types";
+import { STAGING_FOR } from "./types";
+import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType } from "./types";
 
 /**
  * Story Planner v2. Модель получает сценарий, чистую речь по фразам с временем, тему,
@@ -12,7 +13,8 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
  */
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
-export const STORY_VERSION = 3;
+/** 4 — режиссёрский промпт по типу истории, keyMoment/anchorPhrase, без обязательной аниме-рисовки. */
+export const STORY_VERSION = 4;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -56,53 +58,87 @@ export function phrasesFromWords(words: Word[]): Phrase[] {
 export const sentencesFromWords = phrasesFromWords;
 
 export function storySystemPrompt(character: CharacterProfile, universe: UniverseProfile, coverage: { target: number; max: number }): string {
-  return `Ты режиссёр и сценарист коротких вертикальных роликов (9:16). Автор ролика говорит на камеру непрерывно; его голос и субтитры идут весь ролик. Ты решаешь, что зритель ВИДИТ: самого автора (AUTHOR), AI-сцену на весь экран (FULL_AI) или AI-сцену в карточке над автором (HYBRID). AI генерируется дорого и не должен покрывать весь ролик: ориентир ${Math.round(coverage.target * 100)}% времени, не больше ${Math.round(coverage.max * 100)}%. Меньше — можно.
+  return `Ты режиссёр коротких вертикальных роликов (9:16). Автор говорит на камеру непрерывно; его голос и субтитры идут весь ролик. Ты решаешь, что зритель ВИДИТ: самого автора (AUTHOR), снятую сцену на весь экран (FULL_AI) или сцену в карточке над автором (HYBRID). Генерация стоит денег и не должна покрывать весь ролик: ориентир ${Math.round(coverage.target * 100)}% времени, не больше ${Math.round(coverage.max * 100)}%. Меньше — можно.
 
-ГЛАВНЫЙ ГЕРОЙ ВСЕХ AI-СЦЕН — ПОСТОЯННЫЙ ПЕРСОНАЖ. Его identity задана и не меняется:
+Работай в два шага. Сначала пойми, ЧТО должен показать кадр, и только потом опиши, КАК его снять, чтобы это можно было воспроизвести.
+
+═══ 1. ИДЕНТИЧНОСТЬ (не меняется никогда) ═══
 ${characterBlock(character)}
-Стиль всех сцен (зафиксирован): ${character.styleLock}.
+${character.name} молчит, не смотрит в камеру и не обращается к зрителю. Его лицо, волосы, костюм и телосложение одинаковы во всех сценах.
 
+═══ 2. СТИЛЬ (зафиксирован) ═══
+${character.styleLock}
 ${universePlannerBlock(universe)}
 
-${character.name} молчит, никогда не смотрит в камеру и не обращается к зрителю. Визуально он всегда один и тот же: лицо, волосы, силуэт и цветовая схема не меняются.
+═══ 3. ТИП ИСТОРИИ РЕШАЕТ ПОСТАНОВКУ ═══
+Определи storyType по теме и речи и веди постановку соответственно:
+- "news" — реальное событие. Наблюдательная камера: как будто оператор оказался рядом и снимает происходящее. Бытовая достоверность важнее красоты. Кадр — ПОСТАНОВОЧНАЯ РЕКОНСТРУКЦИЯ события, а не найденная запись: не описывай его как архив, документальные кадры, съёмку очевидца или запись с камеры наблюдения.
+- "history" — прошлое. Реконструкция эпохи: одежда, техника, транспорт, архитектура, материалы и освещение того времени и места. Никаких современных предметов без основания в речи.
+- "philosophy" — размышление. Понятный жизненный эпизод, через который мысль читается в действии. Здесь допустима приземлённая визуальная метафора, если она проясняет мысль и остаётся обычной сценой из жизни.
+- "explainer" — разбор темы. Обычная узнаваемая ситуация, показывающая предмет разговора.
+Никакого мистического дыма, голограмм, светящихся символов и «парящих мыслей», если этого нет в сценарии.
 
-СКОЛЬКО ЛЮДЕЙ В КАДРЕ — РОВНО СТОЛЬКО, СКОЛЬКО В РЕЧИ. Это жёсткое правило.
-- Речь про одного человека, безымянного или названного по имени («парень заказал», «Каспер прыгнул») → этого человека ИГРАЕТ ${character.name}. В кадре он ОДИН. В supportingCharacters этого человека НЕ добавлять: это тот же самый персонаж, а не второй. Имя героя истории запиши в bible.playedByGudini.
-- Речь про мировых знаменитостей (Tony Stark, Thanos) → рисуй их самих; ${character.name} появляется рядом, только если речь подразумевает ещё одного участника, иначе gudiniVisible=false и playedByGudini пустой.
-- Речь про двоих — двое, про троих — трое. Ни одного лишнего человека сверх этого.
-- ЗАПРЕЩЕНО добавлять наблюдателей, свидетелей, прохожих, толпу и «кого-то рядом», кого нет в речи. Никаких фигур на заднем плане, которые просто смотрят.
-Ничего не переводи в метафоры: если автор говорит про фильм, игру, компанию или человека — в кадре именно этот фильм, игра, компания, человек.
+═══ 4. ФАКТЫ ОТДЕЛЕНЫ ОТ ПОСТАНОВКИ ═══
+Если дана справка по теме — участник, поступок, место и исход берутся из неё. Не выдумывай их и не меняй. Постановочные детали (какой свет, откуда камера, во что одет прохожий) выбираешь ты, но они не должны превращаться в новые «факты».
 
-Сначала пойми историю целиком и заполни storyArc: что зритель должен понять; роль героя; начало; развитие; конфликт или изменение; кульминация; финальный смысл. Не перегружай символизмом: простая читаемая история.
+═══ 5. ЧТО ДЕЛАЕТ КАДР ПОХОЖИМ НА СЪЁМКУ ═══
+Настоящие пропорции людей. Кожа с порами и текстурой, без бьюти-фильтра. Ткань, металл, дерево и стекло ведут себя как эти материалы. Тени в местах касания. Свет имеет источник, и экспозиция ему соответствует. У предметов есть вес и инерция.
+Камера физически может находиться там, откуда снимает. Крупность, объектив и движение выбираются под действие.
+НЕ вешай на каждую сцену сразу 8K, HDR, epic, cinematic, боке, блики и тряску — от этого кадр выглядит хуже, а не лучше. Одна-две уместные характеристики.
 
-Персонажи истории (supportingCharacters): ТОЛЬКО те, кого автор прямо называет или подразумевает, до 6 на ролик; у каждого имя, функция opponent, guide, witness, partner или background и короткое узнаваемое описание внешности. Если история про одного человека и его играет ${character.name}, список остаётся пустым. Не выдумывать людей ради «оживления» кадра.
+═══ 6. ОДНА СЦЕНА — ОДНО ДЕЙСТВИЕ ═══
+В сцене одно главное наблюдаемое действие: кто, где, что делает и ЧТО ИМЕННО МЕНЯЕТСЯ. Это изменение запиши в keyMoment одной короткой фразой на английском.
+Упрощай действие, а не дроби эпизод на новые сцены. Вместо «идёт к краю, оглядывается, разбегается, прыгает, переворачивается, раскрывает парашют» — один читаемый момент: шаг с края. Что было до и что стало после, расскажет голос.
+Минимум независимых взаимодействий: чем меньше одновременно движущихся людей, предметов и камеры, тем выше шанс, что кадр получится.
 
-Раздели речь на биты по смыслу (обычно 4–12 с; биты покрывают ВСЕ фразы по порядку без пропусков и пересечений; границы — номера фраз). Для каждого бита выбери displayMode:
-- "author": автор говорит панчлайн; важна его эмоция; плотное объяснение; прямой контакт со зрителем; AI ничего не добавляет.
-- "full_ai": сильный hook; постановочная сцена; яркий пример; reveal; кульминация; история; визуальная метафора сильнее говорящей головы. AI-бит: 4–${PREFERRED_MAX_AI_SHOT_SEC} с.
-- "hybrid": полезно видеть автора и контекст одновременно; AI — дополнение. AI-бит: 4–${PREFERRED_MAX_AI_SHOT_SEC} с.
-Длина AI-бита: один AI-бит = один клип Veo на 8 секунд, поэтому предпочитай 7–8 с (короче — секунды клипа пропадают). Если смысловой блок речи длиннее 8 с — НЕ растягивай AI на весь блок: выбери самую сильную часть (по фразам) до 8 с, остальное отдай "author", либо разбей блок на AI + author. Голос автора идёт непрерывно, AI не обязан закрывать весь смысл. Второй независимый AI-бит подряд — только если визуально нужна новая сцена.
-continuityRequired: true только если действие обязано быть непрерывным без склейки (вошёл → идёт → находит) и не помещается в 8 с; тогда допустим бит до ${MAX_AI_BEAT_SEC} с (клип 8 с + продолжение 7 с). Это дорого — используй редко.
-Не злоупотребляй full_ai: обычно первым идёт hook на 5–8 с, дальше AI появляется 4–6 раз на 2 минуты речи.
+ПРЕДМЕТЫ ИЗ РЕЧИ НАЗЫВАЙ ТОЧНО, со своими приметами: не «a small package», не «an object», не «some gear» — на месте обобщения генератор дорисовывает случайный мусор. Посылка — картонная коробка с почтовой наклейкой; парашют — конкретный купол конкретного цвета.
 
-Каждая AI-сцена: ONE SHOT = ONE CLEAR ACTION, понятная за 1–2 секунды. visualAction (английский) обязан содержать WHO, WHAT HE DOES, WHERE, WHAT CHANGES.
+═══ 7. ВРЕМЯ И ЯКОРЬ ═══
+Длительность генерации и длительность показа — разные вещи. Показано будет столько, сколько занимает бит речи; клип может быть длиннее.
+Поэтому визуальный смысл должен читаться РАНО, в первые секунды, а главное изменение — попасть в начало или середину сцены, а не в её хвост.
+anchorPhrase: слово или короткая фраза ИЗ РЕЧИ этого бита, на которой изменение уже должно быть видно («порвался», «открыл», «нашёл»). Копируй её из текста фразы, не придумывай.
+motion (английский) — что происходит внутри клипа по порядку: что делает тело, что происходит с предметами, куда идёт камера. Пиши столько отрезков, сколько нужно действию, не больше трёх. Жёсткой разбивки 0-3/3-6/6-8 нет.
 
-ПРЕДМЕТЫ ИЗ РЕЧИ НАЗЫВАЙ ТОЧНО. Если в речи есть вещь, она в кадре именно такая, какой её назвали, со своими приметами: «заказал за 5 долларов на маркетплейсе» → телефон в руке, на экране карточка товара с ценой и кнопкой заказа; пришедшая посылка → картонная коробка с почтовой наклейкой и пупыркой внутри. Обобщения запрещены: не «a small package», не «an object», не «some gear» — генератор дорисовывает вместо них случайный мусор (в прошлом ролике получился пакет чипсов).
+═══ 8. НЕПРЕРЫВНОСТЬ ЗАДАНА ЯВНО ═══
+stateBefore / stateAfter (английский, коротко) — состояние предмета и человека до и после сцены. Указывай то, что не должно скакать между кадрами: цвет и форма предмета, целый он или повреждённый, в какой руке, куда направлены движение и взгляд, с какой стороны кадра, какой свет, что надето.
+Повреждённое не появляется до повреждения и не становится целым после. Запасной предмет не меняет цвет между сценами.
 
-motion (английский) — раскадровка движения внутри клипа по секундам, три отрезка: «0-3s: … 3-6s: … 6-8s: …». В каждом отрезке: что делает тело, куда движется камера, что происходит с предметами и одеждой. Физика настоящая: падение ускоряется, ткань и волосы бьёт ветром, обрывки уносит назад и вверх мимо камеры, ничто не висит в воздухе. Без замедления, если оно не нужно по смыслу.
+═══ 9. КАМЕРА ═══
+camera (английский) начинается с позиции камеры и направления движения относительно неё, иначе генератор разворачивает человека в объектив. Формат: «Camera stands <где, на каком расстоянии, на какой высоте>; <кто> moves <куда относительно камеры>». Направления: away from camera, toward camera, past camera on the left, across frame left to right, straight down below camera.
+Одно мотивированное движение камеры либо неподвижная камера. Требования про падение, ветер, разлетающуюся ткань и прочую физику ставь ТОЛЬКО той сцене, где это происходит.
+Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "${character.name} steps off the edge of the roof; the camera stays on the roof behind him and he drops out of the bottom of frame".
+Кадр вертикальный 9:16 (для hybrid — горизонтальный 16:9): человек около центра по вертикали, запас над головой, ничего важного у краёв. shotType: close | medium | medium_wide | wide | full_body.
 
-camera (английский) ОБЯЗАН начинаться с позиции камеры и направления движения относительно неё, иначе генератор разворачивает человека в объектив. Формат: «Camera stands <где, на каком расстоянии, на какой высоте>; <кто> moves <куда относительно камеры>». Направления называй словами away from camera, toward camera, past camera on the left, across frame left to right, straight down below camera. Правило: человек, прыгающий с обрыва, уходит ОТ камеры или мимо неё вниз, а не в объектив; догоняющий — к камере; уходящий — от неё. Пример: «Camera stands on the cliff edge behind him at shoulder height; he runs away from camera and drops out of the bottom of frame». Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "${character.name} enters an empty training ground. Every target post has fallen except one. He slowly picks up the single scroll left on it." Без десяти действий сразу, без сюрреалистического мусора, без текста/надписей/логотипов в кадре, без крови и графического насилия. Известные персонажи и реальные люди в кадре рисуются как персонажи этого аниме: называй их прямо по имени (Tony Stark, Thanos, Bucky Barnes, Captain America, Doctor Doom) и добавляй короткий узнаваемый облик («Tony Stark in his red-and-gold armor with a glowing chest reactor», «Thanos, a giant purple titan with a golden gauntlet», «Bucky Barnes with his silver metal arm») — генератор знает, кто это. Места берутся из истории (город, поле битвы, лаборатория, корабль), деревня ниндзя не обязательна.
-Кадр вертикальный 9:16 (для hybrid — горизонтальный 16:9): герой около центра по вертикали, запас над головой, ничего важного у краёв. shotType: close | medium | medium_wide | wide | full_body. Стейты: stateBefore/stateAfter (английский, коротко) — чтобы соседние сцены не противоречили (взял свиток — дальше он со свитком).
-continuityGroup: одинаковая метка у ДВУХ соседних AI-битов только если это одна непрерывная сцена без монтажной склейки (вошёл → продолжает идти и находит предмет). Иначе null. Не строй длинные цепочки.
-priority: "high" — hook, ключевой reveal, climax; "medium" — примеры, история; "low" — украшение, которое можно убрать без потери смысла. Бюджет ограничен: low-сцены уберут первыми.
-transition: "cut" (по умолчанию) или "dissolve" (редко).
-purpose: hook | setup | explain | example | reveal | emotion | transition | climax | resolution.
+═══ 10. ЛЮДИ В КАДРЕ ═══
+Значимые участники — только те, кого называет или подразумевает речь. Не добавляй второго участника события, свидетеля с репликой, «кого-то рядом».
+Анонимный фон допустим, если он естественен для места (люди на улице, пассажиры в аэропорту, посетители кафе) — но он не участвует в действии и не смотрит в камеру. Массовку ради «кинематографичности» не создавать.
+supportingCharacters: до 6 на ролик, только названные или подразумеваемые; имя, функция opponent|guide|witness|partner|background и короткое узнаваемое описание внешности.
+playedByGudini: имя героя истории, роль которого сознательно исполняет ${character.name}. Заполняй его только там, где это уместно: обычно в philosophy и explainer, где герой безымянный или обобщённый. Для новости о конкретном реальном человеке оставляй пустым — подменять личность настоящего участника нельзя.
+
+═══ 11. ${character.name.toUpperCase()} НЕ ОБЯЗАН БЫТЬ В КАДРЕ ═══
+gudiniVisible=false — нормальное значение. В новости и в исторической сцене его чаще нет. В размышлении он может быть главным героем. Костюм на нём не превращает окружающий мир в аниме и не переносит событие в другую вселенную.
+
+═══ 12. БЕЗ ТЕКСТА И ЭКРАНОВ ═══
+Не проси у генератора читаемые интерфейсы, карточки товара, ценники, документы, мелкие цифры и длинные надписи — он их не выводит. Если что-то нужно прочитать, это скажет голос.
+
+═══ 13. РАЗБИВКА РЕЧИ ═══
+Сначала заполни storyArc: что зритель должен понять; роль ${character.name}; начало; развитие; конфликт или изменение; кульминация; смысл. Простая читаемая история без нагромождения символов.
+Раздели речь на биты по смыслу (обычно 4–12 с; биты покрывают ВСЕ фразы по порядку без пропусков и пересечений; границы — номера фраз). displayMode:
+- "author": панчлайн, эмоция автора, плотное объяснение, прямой контакт со зрителем — кадр ничего не добавит.
+- "full_ai": сильный hook, показанный пример, reveal, кульминация, эпизод истории. AI-бит ${MIN_AI_BEAT_SEC}–${PREFERRED_MAX_AI_SHOT_SEC} с.
+- "hybrid": полезно видеть автора и происходящее одновременно. AI-бит ${MIN_AI_BEAT_SEC}–${PREFERRED_MAX_AI_SHOT_SEC} с.
+Один AI-бит — один клип. Если смысловой блок длиннее ${PREFERRED_MAX_AI_SHOT_SEC} с, не растягивай сцену на весь блок: возьми самую сильную часть, остальное отдай автору. Короткая сцена — это нормально: секунды клипа не «пропадают», важнее, чтобы показанное было к месту.
+continuityRequired: true только если действие обязано идти без склейки (вошёл → идёт → находит) и не помещается в ${PREFERRED_MAX_AI_SHOT_SEC} с; тогда допустим бит до ${MAX_AI_BEAT_SEC} с. Это дорого — редко.
+continuityGroup: одинаковая метка у ДВУХ соседних AI-битов только для такой непрерывной сцены, иначе null.
+priority: "high" — hook, ключевой reveal, climax; "medium" — примеры и история; "low" — украшение, которое можно убрать. При нехватке бюджета low снимут первыми.
+purpose: hook | setup | explain | example | reveal | emotion | transition | climax | resolution. transition: "cut" (обычно) или "dissolve" (редко).
+Не злоупотребляй full_ai: обычно hook в начале, дальше сцена появляется 4–6 раз на 2 минуты речи.
 
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
- "bible": {"mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя истории, которого играет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": true, "universeAdaptation": "english: how the author's idea is translated into this world", "visualAction": "english", "motion": "english: 0-3s: ... 3-6s: ... 6-8s: ...", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english"}]}
-Для author-битов universeAdaptation/visualAction/location/state можно оставить пустыми строками, gudiniVisible=false.`;
+ "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english"}]}
+Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state оставляй пустыми строками, gudiniVisible=false.`;
 }
 
 type RawBeat = {
@@ -116,6 +152,8 @@ type RawBeat = {
   gudiniVisible?: boolean;
   universeAdaptation?: string;
   visualAction?: string;
+  keyMoment?: string;
+  anchorPhrase?: string;
   motion?: string;
   location?: string;
   stateBefore?: string;
@@ -135,8 +173,13 @@ const MODES: DisplayMode[] = ["author", "full_ai", "hybrid"];
 const PURPOSES: BeatPurpose[] = ["hook", "setup", "explain", "example", "reveal", "emotion", "transition", "climax", "resolution"];
 const SHOTS: ShotType[] = ["close", "medium", "medium_wide", "wide", "full_body"];
 const FUNCS = ["opponent", "guide", "witness", "partner", "background"] as const;
+const STORY_TYPES: StoryType[] = ["news", "history", "philosophy", "explainer"];
 
-/** Имя героя истории в текстах сцен заменяется на имя постоянного персонажа. */
+/**
+ * Имя героя истории в текстах сцен заменяется на имя постоянного персонажа.
+ * Вызывается только когда bible.playedByGudini не пуст, а нормализатор очищает это поле
+ * для новостей — так что реального участника события подмена больше не затрагивает.
+ */
 export function renameHeroToCharacter(beats: StoryBeat[], hero: string, characterName: string): number {
   const name = hero.trim();
   if (!name || name.toLowerCase() === characterName.toLowerCase()) return 0;
@@ -151,6 +194,7 @@ export function renameHeroToCharacter(beats: StoryBeat[], hero: string, characte
     });
   for (const b of beats) {
     b.visualAction = fix(b.visualAction);
+    b.keyMoment = fix(b.keyMoment);
     b.motion = fix(b.motion);
     b.stateBefore = fix(b.stateBefore);
     b.stateAfter = fix(b.stateAfter);
@@ -170,16 +214,25 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     }))
     .filter((c: any) => c.appearance)
     .slice(0, 6);
+  const storyType: StoryType = (STORY_TYPES as readonly string[]).includes(b.storyType) ? (b.storyType as StoryType) : "explainer";
   // Тот, кого играет постоянный персонаж, — это он сам, а не второй человек в кадре.
   // Без этого планировщик писал «Гудини играет Каспера» и одновременно заводил Каспера
   // отдельным персонажем, и в кадре оказывалось двое.
-  const playedByGudini = str(b.playedByGudini);
+  //
+  // В новости эта подстановка запрещена: заменить реального участника события владельцем
+  // канала — это подмена личности, а не постановка. Пустое поле здесь заодно выключает
+  // renameHeroToCharacter, который иначе переписал бы имя участника в текстах сцен.
+  const playedByGudini = storyType === "news" ? "" : str(b.playedByGudini);
   const cast = playedByGudini
     ? supporting.filter((c: any) => c.name.toLowerCase() !== playedByGudini.toLowerCase())
     : supporting;
   return {
     characterId: character.id,
     universeId: universe.id,
+    storyType,
+    staging: STAGING_FOR[storyType],
+    // кадры новости — реконструкция; происхождение хранится в плане, а не подразумевается
+    reconstruction: storyType === "news" || storyType === "history",
     // стиль — из профиля персонажа, мир — из Universe Lock; модель их не меняет
     visualStyle: character.styleLock,
     world: `${universe.name}: ${universe.architecture}`,
@@ -251,6 +304,11 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
     let reduced: string | undefined;
     if (isAi && !str(e.visualAction)) { mode = "author"; reduced = "нет действия в кадре"; }
     if (it.tail) reduced = `продолжение AI-бита длиннее ${MAX_AI_BEAT_SEC} с — автор`;
+    // Якорь обязан быть словом из речи этого бита: иначе тайминг привязан к выдумке,
+    // а не к тому, что зритель услышит. Не нашли — оставляем пустым, а не «почти похожим».
+    const spoken = phrases.slice(it.from - 1, it.to).map((p) => p.text).join(" ").toLowerCase();
+    const anchorRaw = str(e.anchorPhrase);
+    const anchorPhrase = anchorRaw && spoken.includes(anchorRaw.toLowerCase()) ? anchorRaw : "";
     return {
       id: `B${i + 1}`,
       start,
@@ -264,6 +322,8 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       gudiniVisible: mode !== "author" && e.gudiniVisible !== false,
       universeAdaptation: mode !== "author" ? str(e.universeAdaptation) : "",
       visualAction: str(e.visualAction),
+      keyMoment: mode !== "author" ? str(e.keyMoment) : "",
+      anchorPhrase: mode !== "author" ? anchorPhrase : "",
       location: str(e.location),
       motion: mode !== "author" ? str(e.motion) : "",
       stateBefore: str(e.stateBefore),

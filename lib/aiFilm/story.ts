@@ -463,6 +463,8 @@ export async function planStory(args: {
   universe: UniverseProfile;
   duration: number;
   coverage: { target: number; max: number };
+  /** что было нарушено в прошлой попытке — второй заход с названными ошибками */
+  retryNote?: string;
 }): Promise<{ bible: StoryBible; beats: StoryBeat[]; phrases: Phrase[] }> {
   const phrases = phrasesFromWords(args.words);
   if (phrases.length < 2) throw new Error("AI-фильм: в речи меньше двух фраз — не из чего строить историю");
@@ -471,7 +473,11 @@ export async function planStory(args: {
     `${args.topic ? `Тема ролика: ${args.topic}\n` : ""}` +
     `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
     `Сценарий (что автор хотел сказать):\n${args.script.slice(0, 4000)}\n\n` +
-    `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}`;
+    `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}` +
+    (args.retryNote
+      ? `\n\nПРЕДЫДУЩИЙ ТВОЙ ПЛАН НА ЭТУ ЖЕ РЕЧЬ НАРУШИЛ ЖЁСТКИЕ ТРЕБОВАНИЯ К СТРУКТУРЕ:\n${args.retryNote}\n` +
+        `Составь план заново и исправь именно это. Остальное можно оставить прежним.`
+      : "");
   // без скрытых размышлений: на речи в 124 с модель потратила на них все 16 000 токенов и не выдала текст
   const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", reasoning: "off", system: storySystemPrompt(args.character, args.universe, args.coverage), user });
   const parsed = parseJson<RawStory>(raw, "AI Film Story");

@@ -85,9 +85,30 @@ export async function runAiFilmStage(args: {
     args.setStep("AI-фильм: разбор истории", 26);
     const research = await args.research.catch(() => null);
     const summary = research ? research.facts.slice(0, 8).map((f) => f.text).filter(Boolean).join("; ") : "";
-    const story = await planStory({ words, script: project.script ?? "", topic: project.topic, researchSummary: summary, character, universe, duration, coverage });
+    const ask = (retryNote?: string) =>
+      planStory({ words, script: project.script ?? "", topic: project.topic, researchSummary: summary, character, universe, duration, coverage, retryNote });
+    let story = await ask();
     args.setStep("AI-фильм: план сцен", 30);
-    const plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
+    let plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
+    // Требования к структуре проверяемы, поэтому не «как повезёт»: если план начинается
+    // с говорящей головы или содержит длинный кусок без сцен, планировщик получает ровно
+    // один второй заход с названными нарушениями. Дороже это на один запрос к модели.
+    const broken = (p: AiFilmPlan) => p.warnings.filter((w) => /Первая сцена появляется|Длинные куски без сцен|В ролике нет ни одной/.test(w));
+    const first = broken(plan);
+    if (first.length) {
+      console.warn(`AI-фильм: план нарушил структуру (${first.join("; ")}) — второй заход`);
+      args.setStep("AI-фильм: правка плана", 29);
+      const retry = await ask(first.map((w) => `- ${w}`).join("\n"));
+      const retryPlan = buildFilmPlan({ character, bible: retry.bible, beats: retry.beats, duration, cfg });
+      // берём лучший из двух: второй заход не обязан оказаться удачнее
+      if (broken(retryPlan).length < first.length) {
+        story = retry;
+        plan = retryPlan;
+        console.log(`AI-фильм: второй заход исправил структуру (осталось ${broken(retryPlan).length} из ${first.length})`);
+      } else {
+        console.warn("AI-фильм: второй заход не улучшил структуру, остаётся первый план");
+      }
+    }
     fs.writeFileSync(path.join(dir, PLAN_FILE), JSON.stringify(plan, null, 2), "utf8");
     const s = plan.stats;
     console.log(

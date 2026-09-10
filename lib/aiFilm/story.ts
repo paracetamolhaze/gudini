@@ -257,8 +257,13 @@ export function angleFromCameraText(text: string): CameraAngle | null {
   if (/^(?:on the ground|at ground level)/.test(pos)) return "ground_level";
   if (/^above/.test(pos)) return /looking (?:straight )?down/.test(t) && /straight|directly/.test(t) ? "overhead" : "high_angle";
   if (/bird'?s.?eye|top-?down|camera looking straight down/.test(t)) return "overhead";
-  if (/over (?:his|the) shoulder|behind (?:his|the) shoulder/.test(t)) return "over_shoulder";
-  if (/in profile|square to his side/.test(t)) return "profile";
+  // Дальше — фразы, которые ищем по всей клаузе о камере. «below» и «above» так искать
+  // нельзя (это чаще про мир: земля внизу, купол вверху), а вот «за плечом» и «перед ним»
+  // в описании камеры всегда про точку съёмки.
+  const clause = t.split(";")[0];
+  if (/over (?:his|the) shoulder|behind (?:his|the) shoulder|from behind him/.test(clause)) return "over_shoulder";
+  if (/in profile|square to his side|beside him|alongside him/.test(clause)) return "profile";
+  if (/in front of (?:him|gudini)|facing him|opposite him/.test(clause)) return "eye_level";
   return null;
 }
 

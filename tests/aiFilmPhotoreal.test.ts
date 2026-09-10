@@ -480,3 +480,32 @@ test("камера и композиция сводятся к одному не
   assert.equal(reconcileFraming(fine), false);
   assert.equal(fine.cameraAngle, "overhead");
 });
+
+test("камера перед героем и из-за плеча — тоже противоречие", async () => {
+  const { angleFromCameraText, reconcileFraming } = await import("../lib/aiFilm/story");
+  // строка из настоящего плана: ракурс «из-за плеча», а камера стоит перед ним
+  const real = "Camera is at desk height about one meter in front of him; he leans forward pressing the trackpad";
+  assert.equal(angleFromCameraText(real), "eye_level");
+  const b = { camera: real, cameraAngle: "over_shoulder" as const, composition: "center" as const };
+  assert.equal(reconcileFraming(b), true);
+  assert.equal(b.cameraAngle, "eye_level");
+  // а настоящее «из-за плеча» распознаётся как есть
+  assert.equal(angleFromCameraText("Camera is behind his shoulder as he reads the screen"), "over_shoulder");
+});
+
+test("склейка внутри одной сцены попадает в предупреждения", async () => {
+  const { buildFilmPlan } = await import("../lib/aiFilm/plan");
+  const bible = bibleOf("explainer");
+  const cfg = { key: "k", universe, budgetUsd: 12, maxCoverage: 0.65, concurrency: 3, callMinutes: 2 };
+  const author = { ...beat({ visualAction: "" }), id: "B2", start: 8, end: 40, displayMode: "author" as const, requiresGeneration: false, gudiniVisible: false };
+  const withCut = buildFilmPlan({
+    character: withRefs, bible, duration: 40, cfg,
+    beats: [beat({ id: "B1", start: 0, end: 8, visualAction: "Gudini taps a checkout button, then cuts to him opening the box" }), author],
+  });
+  assert.ok(withCut.warnings.some((w) => /Склейка внутри одной сцены \(B1\)/.test(w)), withCut.warnings.join(" | "));
+  const clean = buildFilmPlan({
+    character: withRefs, bible, duration: 40, cfg,
+    beats: [beat({ id: "B1", start: 0, end: 8, visualAction: "Gudini taps a checkout button on the laptop" }), author],
+  });
+  assert.ok(!clean.warnings.some((w) => /Склейка внутри/.test(w)), clean.warnings.join(" | "));
+});

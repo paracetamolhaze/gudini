@@ -648,6 +648,10 @@ export function buildFilmPlan(args: {
     .filter((b) => !hasEvent(`${b.visualAction} ${b.keyMoment}`) || (b.stateBefore && b.stateBefore === b.stateAfter))
     .map((b) => b.id);
   if (idle.length) warnings.push(`Сцены без события (${idle.join(", ")}): герой стоит или готовится, но ничего не меняется`);
+  // Склейка внутри одной сцены. Veo снимает один непрерывный кадр, и «then cuts to» он
+  // выполняет как умеет: либо игнорирует, либо ломает кадр пополам.
+  const cuts = beats.filter((b) => isAi(b) && /\b(?:cuts? to|cut away|then we see|jump cut)\b/i.test(`${b.visualAction} ${b.motion}`)).map((b) => b.id);
+  if (cuts.length) warnings.push(`Склейка внутри одной сцены (${cuts.join(", ")}): Veo снимает один непрерывный кадр, монтаж внутри него невозможен`);
   // Два соседних кадра с одного ракурса — это тот самый «всегда одинаковый вид»,
   // с которого начался разбор. Правило есть в промпте, но модель его иногда пропускает.
   const shown = beats.filter(isAi);

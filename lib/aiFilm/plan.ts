@@ -321,6 +321,9 @@ export function closeTinyAuthorGaps(beats: StoryBeat[]): StoryBeat[] {
     const next = work[i + 1];
     const d = gap.end - gap.start;
     if (gap.displayMode !== "author" || d >= MIN_AUTHOR_GAP_SECONDS || prev.displayMode === "author" || next.displayMode === "author") continue;
+    // Сдвигать нельзя то, у чего время привязано к словам. Развязка, показанная на пару
+    // секунд раньше, чем автор её произнёс, — это спойлер собственного ролика, а не косметика.
+    if (next.purpose === "reveal" || next.purpose === "climax" || next.anchorPhrase) continue;
     const len = next.end - next.start;
     next.start = gap.start;
     next.end = Math.round((gap.start + len) * 1000) / 1000;

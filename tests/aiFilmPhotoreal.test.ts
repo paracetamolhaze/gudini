@@ -203,3 +203,23 @@ test("на сцену остаётся один вызов Veo и один ва�
     assert.ok(!sources.includes(banned), `в lib/aiFilm появился путь генерации картинок: ${banned}`);
   }
 });
+
+test("развязку не сдвигают встык: сцена с якорем или reveal остаётся на своих словах", async () => {
+  const { closeTinyAuthorGaps } = await import("../lib/aiFilm/plan");
+  const mk = (id: string, start: number, end: number, o: Partial<StoryBeat> = {}): StoryBeat =>
+    ({ ...beat({ visualAction: id === "B2" ? "" : "x" }), id, start, end, suggestedDuration: end - start, ...o });
+
+  // обычная сцена: короткий автор между двумя AI закрывается сдвигом
+  const plain = closeTinyAuthorGaps([
+    mk("B1", 0, 8), mk("B2", 8, 10, { displayMode: "author", requiresGeneration: false }), mk("B3", 10, 18), mk("B4", 18, 30, { displayMode: "author", requiresGeneration: false }),
+  ]);
+  assert.equal(plain.find((b) => b.id === "B3")?.start, 8, "обычную сцену сдвигаем");
+
+  // reveal и сцена с якорем остаются на месте
+  for (const o of [{ purpose: "reveal" as const }, { anchorPhrase: "порвался" }]) {
+    const kept = closeTinyAuthorGaps([
+      mk("B1", 0, 8), mk("B2", 8, 10, { displayMode: "author", requiresGeneration: false }), mk("B3", 10, 18, o), mk("B4", 18, 30, { displayMode: "author", requiresGeneration: false }),
+    ]);
+    assert.equal(kept.find((b) => b.id === "B3")?.start, 10, `сцену ${JSON.stringify(o)} сдвигать нельзя`);
+  }
+});

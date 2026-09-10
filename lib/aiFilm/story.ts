@@ -3,7 +3,7 @@ import type { Word } from "../transcribe";
 import { characterBlock } from "./character";
 import { universePlannerBlock, type UniverseProfile } from "./universe";
 import { STAGING_FOR } from "./types";
-import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType, CameraAngle, Composition } from "./types";
+import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType, CameraAngle, Composition, ObjectState, StoryEvent } from "./types";
 
 /**
  * Story Planner v2. Модель получает сценарий, чистую речь по фразам с временем, тему,
@@ -13,11 +13,17 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
  */
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
-/** 7 — в сцене обязано что-то происходить: события истории вместо подводок к ним. */
-export const STORY_VERSION = 7;
+/** 8 — контракт обязательных событий: сначала содержание, потом экранное время. */
+export const STORY_VERSION = 8;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
+/**
+ * Сколько секунд ПОКАЗА достаточно, чтобы прочитать событие. Клип у Veo всё равно не короче
+ * четырёх секунд, но показать его можно меньше: распаковка и набранный отзыв читаются за три.
+ * Раньше эти два ограничения были одним числом, и обязательные события выпадали из ролика.
+ */
+export const MIN_SHOWN_AI_SEC = 2.5;
 export const MAX_AI_BEAT_SEC = 15;
 /** Один независимый AI-бит — максимум один клип Veo на 8 с; длиннее только с continuityRequired. */
 export const PREFERRED_MAX_AI_SHOT_SEC = 8;
@@ -71,13 +77,50 @@ export function phrasesFromWords(words: Word[]): Phrase[] {
 /** обратная совместимость с прежним именем */
 export const sentencesFromWords = phrasesFromWords;
 
+/**
+ * Через сколько секунд от начала бита звучит якорная фраза. Ищется по пословной расшифровке:
+ * номера фраз для этого слишком грубы, а именно к слову привязано видимое изменение.
+ * null — слова в этом отрезке речи нет.
+ */
+export function anchorOffset(words: Word[], anchor: string, start: number, end: number): number | null {
+  const target = anchor.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!target.length || !words.length) return null;
+  const inside = words.filter((w) => w.end > start - 1e-6 && w.start < end + 1e-6);
+  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const flat = inside.map((w) => norm(w.word));
+  const want = target.map(norm).filter(Boolean);
+  for (let i = 0; i + want.length <= flat.length; i++) {
+    if (want.every((t, k) => flat[i + k] === t)) {
+      return Math.max(0, Math.round((inside[i].start - start) * 10) / 10);
+    }
+  }
+  return null;
+}
+
 export function storySystemPrompt(character: CharacterProfile, universe: UniverseProfile, coverage: { target: number; max: number }): string {
   return `Ты режиссёр коротких вертикальных роликов (9:16). Автор говорит на камеру непрерывно; его голос и субтитры идут весь ролик. Ты решаешь, что зритель ВИДИТ: самого автора (AUTHOR), снятую сцену на весь экран (FULL_AI) или сцену в карточке над автором (HYBRID). Генерация стоит денег и не должна покрывать весь ролик: ориентир ${Math.round(coverage.target * 100)}% времени, не больше ${Math.round(coverage.max * 100)}%. Меньше — можно.
 
-ДВА ЖЁСТКИХ ТРЕБОВАНИЯ К СТРУКТУРЕ. Их выполняй ПЕРВЫМИ, до того как распределять оставшееся покрытие:
-1. Первый бит ролика — full_ai, если в первых фразах есть хоть что-нибудь показуемое (предмет, действие, место, человек). Заказал, купил, приехал, открыл, увидел — всё это показуемо. Ролик, который начинается с двадцати секунд говорящей головы, зритель закрывает, и никакая сильная сцена в конце этого уже не исправит.
-2. Между сценами не больше ${MAX_AUTHOR_STRETCH_SEC} секунд подряд одного автора. Если между двумя сценами получается длиннее — поставь сцену в середине этого куска.
-Сначала заложи hook и вставки в длинные куски, и только ОСТАТОК ориентира тратьте на кульминацию и развязку. Лучше четыре коротких сцены по всей длине, чем две длинные в конце.
+ПОРЯДОК РАБОТЫ. Сначала содержание, потом экранное время. Не наоборот.
+
+ШАГ 1. Выпиши СОБЫТИЯ истории (bible.events). Событие — это то, без чего рассказ разваливается: то, что произошло, а не то, о чём рассуждают. Из речи «заказал парашют, он пришёл, я прыгнул, купол порвался, раскрыл запасной, приземлился, написал отзыв» событий семь, и каждое зритель должен УВИДЕТЬ, если оно попало в кадр.
+У каждого события: короткий id; observable — наблюдаемое изменение по-английски; required — обязательно ли оно для понимания истории; номера фраз, где оно звучит; objects — предметы с их состоянием до и после.
+objects.id — устойчивое короткое имя предмета: main-canopy, reserve-canopy, parcel, phone, harness. Основной и запасной купол — РАЗНЫЕ предметы с разными id, их состояния не смешиваются.
+
+ШАГ 2. Реши, какие события показываешь. Не обязаны все: генерация стоит денег, ориентир ${Math.round(coverage.target * 100)}% времени ролика, не больше ${Math.round(coverage.max * 100)}%. Но обязательные события должны быть показаны или явно помечены как необязательные. Число сцен определяется историей и бюджетом, а не заранее заданной цифрой.
+
+ШАГ 3. Разложи выбранные события по речи и добавь, где нужно, связки автора.
+- Первый бит ролика — full_ai, если в первых фразах есть что показать. Ролик, начинающийся с двадцати секунд говорящей головы, зритель закрывает.
+- Между сценами не больше ${MAX_AUTHOR_STRETCH_SEC} секунд подряд одного автора.
+- Каждая AI-сцена ссылается на события, которые она показывает, через eventIds.
+
+СЦЕНА ОБЯЗАНА ВЫПОЛНИТЬ ОБЕЩАНИЕ СОБЫТИЯ. Это проверяется, и несоответствие — ошибка плана, а не мелочь:
+- «заказ» — видно действие покупки, а не человек рядом с телефоном;
+- «получение» — герой забирает или вскрывает коробку; уже стоящая на столе коробка получением НЕ считается;
+- «прыжок» — герой отрывается от опоры; стояние у края НЕ считается;
+- «разрыв» — видно превращение целого в повреждённое; уже разорванная ткань НЕ считается;
+- «запасной» — появляется и наполняется ДРУГОЙ купол, основной остаётся повреждённым;
+- «отзыв» — герой набирает или отправляет отзыв; приземление отзывом НЕ считается.
+Для других историй выведи собственные события по этому же принципу.
 
 Работай в два шага. Сначала пойми, ЧТО должен показать кадр, и только потом опиши, КАК его снять, чтобы это можно было воспроизвести.
 
@@ -124,9 +167,10 @@ ${universePlannerBlock(universe)}
 anchorPhrase: слово или короткая фраза ИЗ РЕЧИ этого бита, на которой изменение уже должно быть видно («порвался», «открыл», «нашёл»). Копируй её из текста фразы, не придумывай.
 motion (английский) — что происходит внутри клипа по порядку: что делает тело, что происходит с предметами, куда идёт камера. Пиши столько отрезков, сколько нужно действию, не больше трёх. Жёсткой разбивки 0-3/3-6/6-8 нет.
 
-═══ 8. НЕПРЕРЫВНОСТЬ ЗАДАНА ЯВНО ═══
-stateBefore / stateAfter (английский, коротко) — состояние предмета и человека до и после сцены. Указывай то, что не должно скакать между кадрами: цвет и форма предмета, целый он или повреждённый, в какой руке, куда направлены движение и взгляд, с какой стороны кадра, какой свет, что надето.
-Повреждённое не появляется до повреждения и не становится целым после. Запасной предмет не меняет цвет между сценами.
+═══ 8. НЕПРЕРЫВНОСТЬ ПО ПРЕДМЕТАМ ═══
+objects (у бита) — список предметов сцены с их состоянием до и после. Идентификаторы те же, что в событиях: main-canopy, reserve-canopy, parcel, phone. Пиши только те предметы, которые в этой сцене есть или меняются, чужие не тащи.
+Повреждённое не появляется до повреждения и не становится целым после. Основной и запасной купол — разные предметы: разрыв основного не делает запасной порванным, а упакованный запасной не отменяет разрыв основного.
+stateBefore / stateAfter (английский, одна строка) — короткая человеческая сводка того же для промпта: свет, положение, что надето, куда направлен взгляд.
 
 ═══ 9. РАКУРС И КОМПОЗИЦИЯ ВЫБИРАЮТСЯ ПОД ДЕЙСТВИЕ ═══
 Это не формальность. Одинаковый ракурс во всех сценах — главная причина, по которой ролик выглядит дёшево.
@@ -151,7 +195,11 @@ composition — где человек в кадре и, главное, ДЛЯ �
 
 camera (английский) начинается с позиции камеры и направления движения относительно неё, иначе генератор разворачивает человека в объектив. Формат: «Camera is <где, на каком расстоянии, на какой высоте, под каким углом>; <кто> moves <куда относительно камеры>». Направления: away from camera, toward camera, past camera on the left, across frame left to right, straight down below camera.
 Одно мотивированное движение камеры либо неподвижная камера. Требования про падение, ветер, разлетающуюся ткань и прочую физику ставь ТОЛЬКО той сцене, где это происходит.
-Плохо: "${character.name} reflects on uncertainty while symbolic lights shift". Хорошо: "Camera is above him looking straight down as he falls away from it; the canopy fills the top of the frame".
+Плохо: "${character.name} reflects on uncertainty while symbolic lights shift" — нет ни действия, ни точки съёмки.
+Плохо: "Camera is above him looking straight down; the canopy fills the top of the frame" — камера сверху, а купол над ним: купол окажется между ним и камерой и закроет собой весь кадр.
+Хорошо: "Camera is below him looking up as he falls toward it; the canopy fills the top of the frame" — и человек, и купол видны.
+Хорошо: "Camera is at ground level a few meters ahead; he lands and stumbles toward camera".
+ВАЖНО: если что-то важное находится НАД человеком, камера обязана быть сбоку или снизу. Если важное ПОД ним — камера сверху. Направление движения в camera и в motion пиши уже под выбранную точку съёмки, а не под прежнюю.
 shotType: close | medium | medium_wide | wide | full_body. Кадр вертикальный 9:16, для hybrid — горизонтальный 16:9.
 
 ═══ 9a. ОДИН ПРЕДМЕТ — ОДНО НАЗВАНИЕ ═══
@@ -194,9 +242,10 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
- "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
-Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state оставляй пустыми строками, gudiniVisible=false.`;
+ "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."],
+  "events": [{"id": "order", "observable": "english: what the viewer sees change", "required": true, "fromPhrase": 1, "toPhrase": 2, "objects": [{"id": "phone", "before": "english", "after": "english"}]}]},
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english"}], "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
+Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state/objects оставляй пустыми, eventIds пустым списком, gudiniVisible=false.`;
 }
 
 type RawBeat = {
@@ -223,12 +272,37 @@ type RawBeat = {
   camera?: string;
   cameraAngle?: string;
   composition?: string;
+  eventIds?: unknown;
+  objects?: unknown;
 };
 
 type RawStory = { storyArc?: Partial<StoryBible["storyArc"]>; bible?: any; beats?: RawBeat[] };
 
 const str = (v: unknown, d = "") => (typeof v === "string" && v.trim() ? v.trim() : d);
 const arr = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
+
+/** Идентификатор предмета: короткий, из латиницы и дефисов, чтобы состояния сходились по нему. */
+const objectId = (v: unknown) =>
+  String(v ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32);
+
+/** Состояния предметов сцены или события: без id состояние бесполезно, такие записи выбрасываем. */
+export function objectStates(v: unknown): ObjectState[] {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  const out: ObjectState[] = [];
+  for (const raw of v) {
+    const id = objectId((raw as any)?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, before: str((raw as any)?.before), after: str((raw as any)?.after) });
+  }
+  return out.slice(0, 8);
+}
 const MODES: DisplayMode[] = ["author", "full_ai", "hybrid"];
 const PURPOSES: BeatPurpose[] = ["hook", "setup", "explain", "example", "reveal", "emotion", "transition", "climax", "resolution"];
 const SHOTS: ShotType[] = ["close", "medium", "medium_wide", "wide", "full_body"];
@@ -275,12 +349,30 @@ export function angleFromCameraText(text: string): CameraAngle | null {
 }
 
 /**
+ * Направление движения относительно камеры после её переноса сверху вниз. Слова «прочь от
+ * камеры» и «к камере» меняются местами: камера теперь с другой стороны, а движение тела
+ * осталось прежним.
+ */
+export function flipCameraRelativeMotion(motion: string): string {
+  const MARK = "@@FLIP@@";
+  return motion
+    .replace(/\baway from (?:the )?camera\b/gi, MARK)
+    .replace(/\btowards? (?:the )?camera\b/gi, "away from camera")
+    .split(MARK)
+    .join("toward camera")
+    .replace(/\bfalls? away from it\b/gi, "falls toward it")
+    .replace(/\bout of the bottom of frame\b/gi, "past the camera");
+}
+
+
+
+/**
  * Ракурс и композиция не должны противоречить друг другу. Камера строго сверху и место
  * в кадре, оставленное НАД человеком, — это взаимоисключающие требования: то, что над ним,
  * находится между ним и камерой и просто закроет кадр.
  */
 export function reconcileFraming(
-  beat: Pick<StoryBeat, "camera" | "cameraAngle" | "composition"> & Partial<Pick<StoryBeat, "visualAction" | "keyMoment">>,
+  beat: Pick<StoryBeat, "camera" | "cameraAngle" | "composition"> & Partial<Pick<StoryBeat, "visualAction" | "keyMoment" | "motion">>,
 ): boolean {
   let changed = false;
 
@@ -291,10 +383,14 @@ export function reconcileFraming(
   const objectAbove = /\babove (?:him|his head|gudini)\b|\boverhead\b/i.test(`${beat.visualAction ?? ""} ${beat.keyMoment ?? ""}`);
   const camAbove = angleFromCameraText(beat.camera) ?? beat.cameraAngle;
   if (objectAbove && (camAbove === "overhead" || camAbove === "high_angle")) {
-    const tail = beat.camera.includes(";") ? beat.camera.slice(beat.camera.indexOf(";")) : "";
-    beat.camera = `Camera is below him looking up, so that both he and what is above him are in frame${tail}`;
+    // Хвост описания после точки с запятой раньше сохранялся как есть, и после переворота
+    // камеры в промпте оставалось «он падает ОТ неё» при камере снизу. Направление движения
+    // относительно камеры пересчитывается вместе с её положением, иначе противоречие просто
+    // переезжает из одной строки в другую.
+    beat.camera = "Camera is below him looking up, so that both he and what is above him stay in frame; he falls toward the camera";
     beat.cameraAngle = "low_angle";
     beat.composition = "low_space_above";
+    if (beat.motion) beat.motion = flipCameraRelativeMotion(beat.motion);
     return true;
   }
 
@@ -359,6 +455,19 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     .filter((c: any) => c.appearance)
     .slice(0, 6);
   const storyType: StoryType = (STORY_TYPES as readonly string[]).includes(b.storyType) ? (b.storyType as StoryType) : "explainer";
+  // События — контракт содержания. Без id и наблюдаемого изменения событие ничего не проверяет,
+  // такие записи не сохраняем: пустой контракт хуже отсутствующего, он создаёт ложную уверенность.
+  const events: StoryEvent[] = (Array.isArray(b.events) ? b.events : [])
+    .map((e: any) => ({
+      id: objectId(e?.id),
+      observable: str(e?.observable),
+      required: e?.required !== false,
+      fromPhrase: Math.max(1, Math.round(Number(e?.fromPhrase) || 1)),
+      toPhrase: Math.max(1, Math.round(Number(e?.toPhrase) || Number(e?.fromPhrase) || 1)),
+      objects: objectStates(e?.objects),
+    }))
+    .filter((e: StoryEvent) => e.id && e.observable)
+    .slice(0, 12);
   // Тот, кого играет постоянный персонаж, — это он сам, а не второй человек в кадре.
   // Без этого планировщик писал «Гудини играет Каспера» и одновременно заводил Каспера
   // отдельным персонажем, и в кадре оказывалось двое.
@@ -389,6 +498,7 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     supportingCharacters: cast,
     playedByGudini,
     continuityRules: arr(b.continuityRules).slice(0, 8),
+    events,
     storyArc: {
       understand: str(a.understand),
       gudiniRole: str(a.gudiniRole, `${character.name} lives the story`),
@@ -406,7 +516,7 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
  * биты встык от 0 до конца ролика; AI-биты короче MIN_AI_BEAT_SEC становятся author,
  * длиннее MAX_AI_BEAT_SEC режутся по фразам на независимые части.
  */
-export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number): StoryBeat[] {
+export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number, words: Word[] = []): StoryBeat[] {
   if (!phrases.length) return [];
   const n = phrases.length;
   const clamp = (v: number) => Math.max(1, Math.min(n, Math.round(Number(v) || 1)));
@@ -454,6 +564,9 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
     const spoken = phrases.slice(it.from - 1, it.to).map((p) => p.text).join(" ").toLowerCase();
     const anchorRaw = str(e.anchorPhrase);
     const anchorPhrase = anchorRaw && spoken.includes(anchorRaw.toLowerCase()) ? anchorRaw : "";
+    // Секунда якоря внутри бита: раньше якорь никуда не влиял, и его смена оставляла
+    // побайтно тот же промпт. Считается по пословной расшифровке, а не по номеру фразы.
+    const anchorAtSec = anchorPhrase ? anchorOffset(words, anchorPhrase, start, end) : null;
     return {
       id: `B${i + 1}`,
       start,
@@ -469,6 +582,9 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       visualAction: str(e.visualAction),
       keyMoment: mode !== "author" ? str(e.keyMoment) : "",
       anchorPhrase: mode !== "author" ? anchorPhrase : "",
+      anchorAtSec: mode !== "author" ? anchorAtSec : null,
+      eventIds: mode !== "author" ? arr(e.eventIds).map(objectId).filter(Boolean).slice(0, 6) : [],
+      objects: mode !== "author" ? objectStates(e.objects) : [],
       location: str(e.location),
       motion: mode !== "author" ? str(e.motion) : "",
       stateBefore: str(e.stateBefore),
@@ -496,18 +612,26 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
   // соберут промпт: иначе Veo получает «камера сверху» и «камера снизу» в одном тексте.
   for (const b of beats) if (b.displayMode !== "author") reconcileFraming(b);
 
-  // AI-бит короче минимума — автор (AI за 2–3 секунды не прочитать). Открывающий бит
-  // пропускаем: им занимаемся ниже, когда соседи уже приведены в порядок.
+  // Длительность генерации и длительность показа — разные вещи. Клип Veo короче четырёх
+  // секунд не заказывается, но ПОКАЗАТЬ его можно и три секунды: распаковка коробки или
+  // набранный отзыв читаются за это время. Раньше здесь всё короче четырёх секунд уходило
+  // автору, и обязательные события истории пропадали из ролика при живом бюджете.
+  //
+  // Оставляем короткую сцену, только если она несёт событие: три секунды украшения ради
+  // украшения не нужны никому. Открывающий бит пропускаем, им занимаемся ниже.
   for (let i = 0; i < beats.length; i++) {
     const b = beats[i];
-    if (i === 0) continue;
-    if (b.displayMode !== "author" && b.end - b.start < MIN_AI_BEAT_SEC - 1e-6) {
-      b.displayMode = "author";
-      b.requiresGeneration = false;
-      b.gudiniVisible = false;
-      b.continuityGroup = null;
-      b.reduced = `AI-бит короче ${MIN_AI_BEAT_SEC} с`;
-    }
+    if (i === 0 || b.displayMode === "author") continue;
+    const dur = b.end - b.start;
+    if (dur >= MIN_AI_BEAT_SEC - 1e-6) continue;
+    if (dur >= MIN_SHOWN_AI_SEC - 1e-6 && (b.eventIds ?? []).length) continue;
+    b.displayMode = "author";
+    b.requiresGeneration = false;
+    b.gudiniVisible = false;
+    b.continuityGroup = null;
+    b.reduced = (b.eventIds ?? []).length
+      ? `показ короче ${MIN_SHOWN_AI_SEC} с — событие не прочитать`
+      : `AI-бит короче ${MIN_AI_BEAT_SEC} с и без события`;
   }
 
   // Открывающая сцена короче минимума не выбрасывается, а дотягивается за счёт следующего
@@ -517,7 +641,8 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
   // Делается ПОСЛЕ общей проверки: сосед мог сам быть коротким AI-битом и только что стать
   // автором — тогда занимать время у него уже можно.
   const first = beats[0];
-  if (first && first.displayMode !== "author" && first.end - first.start < MIN_AI_BEAT_SEC - 1e-6) {
+  const firstShownEnough = first && first.end - first.start >= MIN_SHOWN_AI_SEC - 1e-6 && (first.eventIds ?? []).length > 0;
+  if (first && first.displayMode !== "author" && !firstShownEnough && first.end - first.start < MIN_AI_BEAT_SEC - 1e-6) {
     let need = MIN_AI_BEAT_SEC - (first.end - first.start);
     // Считаем всю авторскую цепочку сразу за хуком: между ним и длинным объяснением
     // часто стоит ещё один коротышка, и проверка только ближайшего соседа промахивалась.
@@ -588,7 +713,7 @@ export async function planStory(args: {
   const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", reasoning: "off", system: storySystemPrompt(args.character, args.universe, args.coverage), user });
   const parsed = parseJson<RawStory>(raw, "AI Film Story");
   const bible = normalizeBible(parsed, args.character, args.universe);
-  const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration);
+  const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration, args.words);
   if (!beats.length) throw new Error("AI Film Story: модель не вернула биты");
   // Герой истории и постоянный персонаж — один человек: в тексте сцен остаётся одно имя,
   // иначе Veo рисует и «Каспера», и Гудини рядом.

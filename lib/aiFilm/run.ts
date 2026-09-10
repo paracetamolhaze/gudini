@@ -6,7 +6,7 @@ import type { StoryResearchPack } from "../storyResearch";
 import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
 import { planStory, STORY_VERSION } from "./story";
-import { buildFilmPlan, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
+import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
 import { generateGroups } from "./generate";
 import { loadCharacterProfile } from "./character";
 import { loadUniverseProfile } from "./universe";
@@ -33,14 +33,24 @@ export function filmBudget(): number {
  * `character.refHash` — хэш всей идентичности (текст профиля и эталоны), поэтому правка
  * одного описания лица или костюма тоже делает план устаревшим.
  */
-export function planKey(words: Word[], script: string, character: { id: string; refHash: string }, universe: { id: string; hash: string }, duration?: number): string {
+export function planKey(
+  words: Word[],
+  script: string,
+  character: { id: string; refHash: string },
+  universe: { id: string; hash: string },
+  duration?: number,
+  fingerprint = "",
+): string {
   const speech = JSON.stringify({ words: words.map((w) => [w.word, w.start, w.end]), duration: duration ?? words.at(-1)?.end ?? 0 });
-  return `${textHash(speech)}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:${character.id}@${character.refHash}:${universe.id}@${universe.hash}`;
+  return (
+    `${textHash(speech)}:${textHash(script)}:${STORY_VERSION}.${PLAN_VERSION}:${VEO_MODEL}/${ENVIRONMENT_MODEL}:` +
+    `${character.id}@${character.refHash}:${universe.id}@${universe.hash}:${fingerprint}`
+  );
 }
 
 /** Что именно разошлось между сохранённым планом и текущими данными — по частям ключа. */
 export function planKeyDiff(saved: string, current: string): string[] {
-  const names = ["речь", "сценарий", "версия плана", "модели", "профиль персонажа (описание или эталоны)", "профиль мира"];
+  const names = ["речь", "сценарий", "версия плана", "модели", "профиль персонажа (описание или эталоны)", "профиль мира", "промпты планировщика и сборщика"];
   const a = saved.split(":");
   const b = current.split(":");
   const out: string[] = [];
@@ -76,7 +86,7 @@ export async function runAiFilmStage(args: {
   const request = project.aiFilm?.request ?? "plan";
   const character = loadCharacterProfile();
   const universe = loadUniverseProfile();
-  const key = planKey(words, project.script ?? "", character, universe, duration);
+  const key = planKey(words, project.script ?? "", character, universe, duration, compilerFingerprint(character, universe));
   const budget = filmBudget();
   const coverage = coverageConfig();
   const cfg = { key, universe, budgetUsd: budget, maxCoverage: coverage.max, concurrency: veoConcurrency(), callMinutes: veoCallMinutes() };
@@ -94,21 +104,13 @@ export async function runAiFilmStage(args: {
     // с говорящей головы или содержит длинный кусок без сцен, планировщик получает ровно
     // один второй заход с названными нарушениями. Дороже это на один запрос к модели.
     // Второй заход даётся не на всё подряд, а только на то, что портит оплаченный клип:
-    // дыры в структуре и физически невыполнимые указания. Замечания про однообразие
-    // ракурсов и плотность действий остаются предупреждениями — это вкус, а не поломка.
-    const HARD = [
-      /Первая сцена появляется/,
-      /Длинные куски без сцен/,
-      /В ролике нет ни одной/,
-      /Сцены без события/,
-      /Камера сверху, а важное находится НАД человеком/,
-      /Камера описана и как неподвижная, и как движущаяся/,
-      /Повреждённый предмет снова целый/,
-      /Действие возвращается в прежнее место/,
-      /Склейка внутри одной сцены/,
-      /Сцена требует читаемый текст/,
+    // непокрытое обязательное событие, дыры в структуре и физически невыполнимые указания.
+    // Тяжесть берётся из типизированных проблем плана, а не из подсчёта строк предупреждений.
+    const STRUCTURE = [/Первая сцена появляется/, /Длинные куски без сцен/, /В ролике нет ни одной/, /Склейка внутри одной сцены/];
+    const broken = (p: AiFilmPlan) => [
+      ...p.issues.filter((i) => i.severity === "block").map((i) => i.message),
+      ...p.warnings.filter((w) => STRUCTURE.some((re) => re.test(w))),
     ];
-    const broken = (p: AiFilmPlan) => p.warnings.filter((w) => HARD.some((re) => re.test(w)));
     const first = broken(plan);
     if (first.length) {
       console.warn(`AI-фильм: план нарушил структуру (${first.join("; ")}) — второй заход`);
@@ -159,6 +161,15 @@ export async function runAiFilmStage(args: {
     throw new Error(`AI-фильм: оценка плана $${plan.stats.estimatedCost.toFixed(2)} выше предела MEDIA_FILM_MAX_COST_USD=$${budget}. Veo не вызывался`);
   }
   if (!plan.shots.length) throw new Error("AI-фильм: в плане нет ни одной AI-сцены — генерировать нечего");
+  // Ворота перед оплатой. Раньше их не было вовсе: план с непоказанным обязательным
+  // событием или с физически невыполнимым кадром спокойно доходил до кнопки генерации.
+  const blocking = (plan.issues ?? []).filter((i) => i.severity === "block");
+  if (blocking.length) {
+    throw new Error(
+      `AI-фильм: план не готов к генерации. ${blocking.map((i) => i.message).join(". ")}. ` +
+        `Соберите план заново; если событие показать нечем, пометьте его необязательным. Veo не вызывался`,
+    );
+  }
   // предел этого запуска — бюджет фильма (обычный предел $2 рассчитан на карточки)
   setRunCostLimit(budget);
   args.setStep("AI-фильм: генерация сцен", 28);

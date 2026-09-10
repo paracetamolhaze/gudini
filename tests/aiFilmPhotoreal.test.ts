@@ -32,7 +32,7 @@ const beat = (o: Partial<StoryBeat> & { visualAction: string }): StoryBeat => ({
   id: "B1", start: 0, end: 8, meaning: "", storyBeat: "", displayMode: "full_ai",
   purpose: "explain", priority: "medium", requiresGeneration: true, gudiniVisible: false,
   universeAdaptation: "", location: "a city street", motion: "he steps forward",
-  keyMoment: "", anchorPhrase: "", stateBefore: "", stateAfter: "",
+  keyMoment: "", anchorPhrase: "", anchorAtSec: null, eventIds: [], objects: [], stateBefore: "", stateAfter: "",
   continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium",
   camera: "Camera stands across the street at eye height; he walks past camera on the left",
   cameraAngle: "eye_level", composition: "center",
@@ -40,7 +40,7 @@ const beat = (o: Partial<StoryBeat> & { visualAction: string }): StoryBeat => ({
 });
 
 const promptFor = (bible: StoryBible, b: StoryBeat, c: CharacterProfile = character) =>
-  shotPrompt({ character: c, universe, bible, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+  shotPrompt({ character: c, universe, bible, beats: [b], prev: null, mode: "text", aspectRatio: "9:16" });
 
 // ─────────────────────────────── 1. новость
 
@@ -61,7 +61,7 @@ test("новость: наблюдательная постановка, рек�
   // он в кадре и он тот же самый человек
   assert.match(p, /Main character GUDINI/);
   assert.match(p, /high-collar zip jacket/);
-  assert.match(p, /People in frame: exactly 1 — Gudini/);
+  assert.match(p, /People taking part in the action: exactly 1 — Gudini/);
   // и никакого случайного реквизита из чужих сцен
   assert.doesNotMatch(p, /torn pieces|hammered by the airflow|falling bodies accelerate/);
 
@@ -559,10 +559,15 @@ test("разбор плана находит противоречия и не ш
   // флаг героя расходится с действием
   assert.ok(codes([beat({ gudiniVisible: true, visualAction: "a man in a suit walks out" })]).includes("hero-flag-mismatch"));
 
-  // порванное стало целым
+  // порванное стало целым — проверяется по идентификатору предмета, а не по словам
   assert.ok(codes([
-    beat({ id: "B1", visualAction: "the canopy tears", stateAfter: "the canopy is torn and shredded" }),
-    beat({ id: "B2", visualAction: "he lands", stateBefore: "the canopy is whole and folded" }),
+    beat({ id: "B1", visualAction: "the canopy tears", objects: [{ id: "main-canopy", before: "whole", after: "torn and shredded" }] }),
+    beat({ id: "B2", visualAction: "he lands", objects: [{ id: "main-canopy", before: "whole and folded", after: "whole and folded" }] }),
+  ]).includes("state-regression"));
+  // порванный основной и упакованный запасной — разные предметы, ложной регрессии нет
+  assert.ok(!codes([
+    beat({ id: "B1", visualAction: "the canopy tears", objects: [{ id: "main-canopy", before: "whole", after: "torn and shredded" }] }),
+    beat({ id: "B2", visualAction: "he pulls the reserve", objects: [{ id: "reserve-canopy", before: "packed and closed", after: "fully open" }] }),
   ]).includes("state-regression"));
 
   // место возвращается через сцену
@@ -625,7 +630,10 @@ test("камера переставляется вниз, если важное 
   assert.equal(b.cameraAngle, "low_angle");
   assert.equal(b.composition, "low_space_above");
   assert.match(b.camera, /below him looking up/);
-  assert.match(b.camera, /he falls away from it/, "описание движения человека сохраняется");
+  // прежний хвост «он падает ОТ неё» сохранялся как есть и противоречил новой камере:
+  // направление движения пересчитывается вместе с точкой съёмки
+  assert.match(b.camera, /he falls toward the camera/);
+  assert.doesNotMatch(b.camera, /away from/);
   assert.doesNotMatch(b.camera, /directly above/);
 
   // если над головой ничего нет, съёмка сверху остаётся как была

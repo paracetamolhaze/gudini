@@ -51,6 +51,9 @@ export const beat = (
   visualAction: mode === "author" ? "" : o.visualAction ?? `Gudini does action ${id}`,
   keyMoment: mode === "author" ? "" : o.keyMoment ?? `something changes in ${id}`,
   anchorPhrase: mode === "author" ? "" : o.anchorPhrase ?? "",
+  anchorAtSec: null,
+  eventIds: [],
+  objects: [],
   location: mode === "author" ? "" : "village rooftop",
   motion: mode === "author" ? "" : "0-3s: he steps forward. 3-6s: camera pushes in. 6-8s: he stops.",
   stateBefore: "he stands", stateAfter: `state after ${id}`,
@@ -257,17 +260,17 @@ test("нормализация длительностей Veo: 4/6/8, с реф�
 
 test("промпт shot: WHO/WHAT/WHERE/WHAT CHANGES, вертикальный кадр, запреты", () => {
   const b = beat("B1", 0, 8, "full_ai", { visualAction: "Gudini enters an empty training ground and picks up the last scroll" });
-  const p = shotPrompt({ character: gudini, universe, bible, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+  const p = shotPrompt({ character: gudini, universe, bible, beats: [b], prev: null, mode: "text", aspectRatio: "9:16" });
   assert.match(p, /Action: Gudini enters/);
   assert.match(p, /Location: village rooftop/);
   assert.match(p, /After: state after B1/);
   assert.match(p, /vertical 9:16 portrait composition/);
   // текст запрещён один раз отдельной строкой, старый дублирующий хвост убран
-  assert.match(p, /No readable text anywhere in frame/);
+  assert.match(p, /Nothing readable in frame/);
   assert.doesNotMatch(p, /No text, no captions, no subtitles/);
   assert.match(p, /No split screen, no talking to camera\.$/);
   assert.match(p, /no hair color change/);
-  const h = shotPrompt({ character: gudini, universe, bible, beat: { ...b, displayMode: "hybrid" }, prev: null, mode: "text", aspectRatio: "16:9" });
+  const h = shotPrompt({ character: gudini, universe, bible, beats: [{ ...b, displayMode: "hybrid" }], prev: null, mode: "text", aspectRatio: "16:9" });
   assert.match(h, /horizontal 16:9/);
 });
 
@@ -290,13 +293,15 @@ test("Герой истории и постоянный персонаж — о�
 
 test("Промпт шота: действие впереди, состав кадра назван, лишних людей нет", () => {
   const b = beat("B1", 0, 8, "full_ai", { visualAction: "Gudini opens a cardboard parcel with a shipping label" });
-  const p = shotPrompt({ character: withRefs, universe, bible, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+  const p = shotPrompt({ character: withRefs, universe, bible, beats: [b], prev: null, mode: "text", aspectRatio: "9:16" });
   const action = p.indexOf("Action:");
   assert.ok(action >= 0 && action < 200, `действие должно быть в начале промпта, а оно на ${action}`);
   assert.ok(action < p.indexOf("Style:"), "стиль должен идти после действия");
   assert.match(p, /Motion in order: 0-3s/);
-  assert.match(p, /People in frame: exactly 1 — Gudini/);
-  assert.match(p, /No other people at all/);
+  assert.match(p, /People taking part in the action: exactly 1 — Gudini/);
+  // участников не добавляем, но естественный фон в общественном месте больше не запрещён
+  assert.match(p, /No other participants/);
+  assert.match(p, /Incidental passers-by are allowed only where the place would naturally have them/);
   assert.match(p, /nothing hovers, floats or drifts in place/);
   // Единственная цель кадра идёт сразу за действием, до стиля и запретов
   const key = p.indexOf("The one thing that must be visible");
@@ -306,9 +311,9 @@ test("Промпт шота: действие впереди, состав ка�
   assert.doesNotMatch(p, /falling bodies accelerate/);
   assert.doesNotMatch(p, /hammered by the airflow/);
   assert.doesNotMatch(p, /torn pieces/);
-  assert.match(p, /No readable text anywhere in frame/);
+  assert.match(p, /Nothing readable in frame/);
   const alone = beat("B2", 0, 8, "full_ai", { gudiniVisible: false });
-  assert.match(shotPrompt({ character: withRefs, universe, bible, beat: alone, prev: null, mode: "text", aspectRatio: "9:16" }), /People in frame: exactly as described above/);
+  assert.match(shotPrompt({ character: withRefs, universe, bible, beats: [alone], prev: null, mode: "text", aspectRatio: "9:16" }), /People taking part in the action: exactly as described above/);
 });
 
 test("Устаревший план называет, что именно разошлось", () => {
@@ -458,16 +463,16 @@ test("в промпт сцены попадают только персонаж�
     ],
   };
   const b = beat("B1", 0, 8, "full_ai", { visualAction: "Tony Stark kneels on the battlefield; Gudini kneels beside him" });
-  const p = shotPrompt({ character: gudini, universe, bible: cast, beat: b, prev: null, mode: "text", aspectRatio: "9:16" });
+  const p = shotPrompt({ character: gudini, universe, bible: cast, beats: [b], prev: null, mode: "text", aspectRatio: "9:16" });
   assert.match(p, /Characters in this shot: Tony Stark: red-and-gold armor\./);
   assert.doesNotMatch(p, /Thanos/);
   assert.doesNotMatch(p, /Captain America/);
   const porch = beat("B2", 8, 16, "full_ai", { visualAction: "An elderly Steve Rogers hands his shield to Sam Wilson" });
-  const p2 = shotPrompt({ character: gudini, universe, bible: cast, beat: porch, prev: null, mode: "text", aspectRatio: "9:16" });
+  const p2 = shotPrompt({ character: gudini, universe, bible: cast, beats: [porch], prev: null, mode: "text", aspectRatio: "9:16" });
   assert.match(p2, /Steve Rogers \/ Captain America/);
   assert.doesNotMatch(p2, /Thanos/);
   const none = beat("B3", 16, 24, "full_ai", { visualAction: "Gudini watches two glowing worlds collide" });
-  assert.doesNotMatch(shotPrompt({ character: gudini, universe, bible: cast, beat: none, prev: null, mode: "text", aspectRatio: "9:16" }), /Characters in this shot/);
+  assert.doesNotMatch(shotPrompt({ character: gudini, universe, bible: cast, beats: [none], prev: null, mode: "text", aspectRatio: "9:16" }), /Characters in this shot/);
 });
 
 test("отказ Veo по правам третьих лиц распознаётся, промпт без имён сохраняет узнаваемость", () => {

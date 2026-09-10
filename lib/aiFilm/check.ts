@@ -12,7 +12,14 @@ import type { AiFilmPlan } from "./types";
  * Всё локально, без платных вызовов.
  */
 
-export const FILM_CHECK_STEP_SEC = 2;
+/**
+ * Шаг выборки кадров. Был две секунды, и в четырёхсекундном окне получалось два кадра,
+ * а замершим окно признавалось только от трёх: полностью неподвижный короткий клип
+ * проходил проверку. Полсекунды дают три кадра даже на самом коротком показе.
+ */
+export const FILM_CHECK_STEP_SEC = 0.5;
+/** Минимум кадров, на которых вообще имеет смысл судить о неподвижности. */
+export const FILM_CHECK_MIN_FRAMES = 3;
 const W = 16;
 const H = 9;
 const MIN_HASH_DISTANCE = 8;
@@ -62,11 +69,11 @@ export async function checkAiSegments(dir: string, plan: AiFilmPlan, authorSourc
     if (hamming(a, b) < MIN_HASH_DISTANCE) {
       throw new Error(`Проверка AI-фильма: на ${mid.toFixed(1)} с (${seg.mode}) в кадре автор, а не AI-сцена — наложение не сработало`);
     }
-    const stats = motionStats(await grayFrames(dir, outFile, crop, seg.start, seg.end - seg.start, path.join(tmp, "chk-mot.gray"), `fps=1/${FILM_CHECK_STEP_SEC},scale=${W}:${H},format=gray`));
+    const stats = motionStats(await grayFrames(dir, outFile, crop, seg.start, seg.end - seg.start, path.join(tmp, "chk-mot.gray"), `fps=${(1 / FILM_CHECK_STEP_SEC).toFixed(3)},scale=${W}:${H},format=gray`));
     if (stats.frames >= 2 && stats.dark / stats.frames > 0.5) {
       throw new Error(`Проверка AI-фильма: окно ${seg.start.toFixed(1)}–${seg.end.toFixed(1)} с почти чёрное`);
     }
-    if (stats.frames >= 3 && stats.changed === 0) {
+    if (stats.frames >= FILM_CHECK_MIN_FRAMES && stats.changed === 0) {
       throw new Error(`Проверка AI-фильма: окно ${seg.start.toFixed(1)}–${seg.end.toFixed(1)} с застыло — кадры не меняются`);
     }
   }

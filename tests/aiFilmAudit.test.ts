@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
 import { generateGroups, generateShot } from "../lib/aiFilm/generate";
 import { shotKey } from "../lib/aiFilm/plan";
-import { resetLedger } from "../lib/costLedger";
+import { resetLedger, setRunCostLimit } from "../lib/costLedger";
 import { audioFilter, compositeFilter, overlaysFor } from "../lib/aiFilm/composite";
 import { checkAiSegments } from "../lib/aiFilm/check";
 import { ffmpegBin, probe, runFfmpeg } from "../lib/ffmpeg";
@@ -17,7 +17,7 @@ const shot: FilmShot = {
   id: "G1-1", groupId: "G1", index: 0, beatIds: ["B1"], displayMode: "full_ai",
   gudiniVisible: false, generationProfile: "environment", model: "veo-3.1-fast-generate-001",
   mode: "text", usedSeconds: 8, veoSeconds: 8, aspectRatio: "9:16", resolution: "720p",
-  useReferences: false, prompt: "An empty forest", dependsOn: null, cost: 0.64,
+  useReferences: false, eventIds: [], changeBySec: null, prompt: "An empty forest", dependsOn: null, cost: 0.64,
 };
 
 test("Veo: a failed download resumes the accepted operation without paying for a second generation", async (t) => {
@@ -102,4 +102,60 @@ test("music ducking preserves the normalized voice level", () => {
   };
   const deltaDb = 20 * Math.log10(rms(true) / rms(false));
   assert.ok(Math.abs(deltaDb) < 0.5, `silent music changed voice loudness by ${deltaDb.toFixed(2)} dB`);
+});
+
+test("повторный запуск после отказа операции снова проходит бюджетный контроль", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-veo-budget-"));
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); resetLedger(); setRunCostLimit(null); });
+  resetLedger();
+  // Предел ровно на один клип: вторая принятая операция обязана упереться в бюджет.
+  setRunCostLimit(0.64);
+  t.mock.method(GoogleAuth.prototype, "getClient", async () => ({ getAccessToken: async () => ({ token: "test-token" }) }) as any);
+  let starts = 0;
+  t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
+    const address = String(url);
+    if (address.endsWith(":predictLongRunning")) return Response.json({ name: `operations/budget-${++starts}` });
+    // первая операция отклонена по правам третьих лиц — сцена уходит на повтор без имён
+    if (address.endsWith(":fetchPredictOperation")) {
+      return starts === 1
+        ? Response.json({ done: true, error: { message: "the interests of third-party content providers" } })
+        : Response.json({ done: true, response: { videos: [{ gcsUri: "gs://test/result.mp4" }] } });
+    }
+    if (address.startsWith("https://storage.googleapis.com/")) return new Response("download unavailable", { status: 503 });
+    throw new Error(`Unexpected network request: ${address}`);
+  });
+  const named: FilmShot = { ...shot, prompt: "Tony Stark walks out of the hangar", cost: 0.64 };
+  const plan = { bible: { supportingCharacters: [], reconstruction: false }, character: { name: "Gudini" } } as any;
+  await assert.rejects(
+    generateShot({ dir, projectId: "budget", plan, shot: named, key: shotKey(named, "refs", null), references: [] }),
+    /предел|budget|лимит/i,
+    "второй запуск обязан упереться в бюджет, а не уйти в Veo",
+  );
+  assert.equal(starts, 1, "принятых операций должно быть ровно одна");
+});
+
+test("замершее окно отвергается и на коротком показе, и на длинном", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-frozen-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const still = (seconds: number, file: string) =>
+    execFileSync(ffmpegBin(), [
+      "-hide_banner", "-y", "-f", "lavfi", "-i", `color=c=gray:size=270x480:duration=${seconds}:rate=25`,
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path.join(dir, file),
+    ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const moving = (seconds: number, file: string) =>
+    execFileSync(ffmpegBin(), [
+      "-hide_banner", "-y", "-f", "lavfi", "-i", `testsrc2=size=270x480:duration=${seconds}:rate=25`,
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path.join(dir, file),
+    ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+
+  for (const len of [3, 8]) {
+    still(len, "out.mp4");
+    moving(len, "src.mp4");
+    const plan = { timeline: [{ start: 0, end: len, mode: "full_ai", beatIds: ["B1"] }] } as any;
+    await assert.rejects(
+      checkAiSegments(dir, plan, "src.mp4", "out.mp4"),
+      /застыло/,
+      `полностью неподвижное окно ${len} с обязано отклоняться`,
+    );
+  }
 });

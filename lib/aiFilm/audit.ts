@@ -1,4 +1,4 @@
-import type { CharacterProfile, StoryBeat, StoryBible } from "./types";
+import type { CharacterProfile, PlanIssue, StoryBeat, StoryBible, StoryEvent } from "./types";
 
 /**
  * Разбор готового плана на противоречия — все известные классы разом, до генерации.
@@ -31,18 +31,53 @@ const OBJECT_ABOVE = /\babove (?:him|his head|gudini)\b|\boverhead\b/i;
 const ACTION_VERB =
   /\b(?:tears?|rips?|opens?|pulls?|drops?|falls?|jumps?|steps?|lands?|throws?|breaks?|snaps?|deploys?|catches?|hits?|cuts?|lifts?|pushes?|closes?|clicks?|presses?|taps?|grabs?|releases?|climbs?|runs?|walks?|turns?|reaches?|stumbles?|kneels?|sits?|stands?)\b/gi;
 
-export type PlanAudit = { code: string; beatIds: string[]; message: string };
+export type { PlanIssue } from "./types";
+/** прежнее имя типа */
+export type PlanAudit = PlanIssue;
+
+/**
+ * Показано ли событие. Проверяется по предметам, а не по словам: сцена обязана объявить
+ * тот же предмет и то же состояние после, которое обещает событие. Приземление не может
+ * закрыть событие «отзыв», потому что предметы у них разные.
+ */
+export function eventCovered(event: StoryEvent, beats: StoryBeat[]): boolean {
+  const claiming = beats.filter((b) => isAi(b) && (b.eventIds ?? []).includes(event.id));
+  if (!claiming.length) return false;
+  if (!event.objects.length) return claiming.some((b) => b.keyMoment.trim().length > 0);
+  // хотя бы один предмет события меняется в сцене так, как обещано
+  return claiming.some((b) =>
+    event.objects.some((want) => {
+      const got = (b.objects ?? []).find((o) => o.id === want.id);
+      if (!got) return false;
+      const after = got.after.trim().toLowerCase();
+      return after.length > 0 && after !== got.before.trim().toLowerCase();
+    }),
+  );
+}
 
 export function auditPlan(
   beats: StoryBeat[],
   bible: StoryBible,
   character: Pick<CharacterProfile, "name" | "referenceFiles">,
-): PlanAudit[] {
-  const out: PlanAudit[] = [];
+): PlanIssue[] {
+  const out: PlanIssue[] = [];
   const shown = beats.filter(isAi);
-  const add = (code: string, ids: string[], message: string) => {
-    if (ids.length) out.push({ code, beatIds: ids, message });
+  const add = (code: string, ids: string[], message: string, severity: "block" | "warn" = "warn") => {
+    if (ids.length) out.push({ code, severity, beatIds: ids, message });
   };
+
+  // Обязательные события. Проверяется ПОСЛЕ нормализации, группировки и сокращения бюджета:
+  // именно там события пропадали незаметно.
+  const missing = (bible.events ?? []).filter((e) => e.required && !eventCovered(e, beats));
+  if (missing.length) {
+    out.push({
+      code: "event-not-covered",
+      severity: "block",
+      beatIds: [],
+      eventIds: missing.map((e) => e.id),
+      message: `Обязательные события не показаны: ${missing.map((e) => `${e.id} (${e.observable})`).join("; ")}`,
+    });
+  }
 
   // Крупность против композиции: на крупном плане в кадр не влезет то, ради чего
   // оставляли место сверху или снизу.
@@ -69,6 +104,7 @@ export function auditPlan(
       })
       .map((b) => b.id),
     "Камера описана и как неподвижная, и как движущаяся",
+    "block",
   );
 
   // Камера сверху и предмет НАД человеком: предмет окажется между ним и камерой и закроет
@@ -80,6 +116,7 @@ export function auditPlan(
       .filter((b) => OBJECT_ABOVE.test(`${b.visualAction} ${b.keyMoment}`))
       .map((b) => b.id),
     "Камера сверху, а важное находится НАД человеком — оно закроет собой кадр",
+    "block",
   );
 
   // Слишком много действий в одной сцене: Veo выполняет первое и путает остальные.
@@ -101,16 +138,23 @@ export function auditPlan(
     "readable-text",
     shown.filter((b) => READABLE.test(`${b.visualAction} ${b.keyMoment}`)).map((b) => b.id),
     "Сцена требует читаемый текст на экране или бумаге — Veo его не выводит",
+    "block",
   );
 
-  // Состояние предмета отыгрывается назад: было порвано, стало целым.
+  // Состояние отыгрывается назад — но у КОНКРЕТНОГО предмета. Сравнение по словам без
+  // идентификатора ошибалось в обе стороны: переход от порванного основного купола к
+  // упакованному запасному считался восстановлением, а настоящее восстановление основного
+  // терялось, если рядом упоминался другой повреждённый предмет.
   const regress: string[] = [];
-  for (let i = 1; i < shown.length; i++) {
-    const before = shown[i - 1].stateAfter;
-    const now = shown[i].stateBefore;
-    if (DAMAGED.test(before) && INTACT.test(now) && !DAMAGED.test(now)) regress.push(shown[i].id);
+  const lastSeen = new Map<string, string>();
+  for (const b of shown) {
+    for (const o of b.objects ?? []) {
+      const prev = lastSeen.get(o.id);
+      if (prev && DAMAGED.test(prev) && INTACT.test(o.before) && !DAMAGED.test(o.before)) regress.push(`${b.id}/${o.id}`);
+      if (o.after) lastSeen.set(o.id, o.after);
+    }
   }
-  add("state-regression", regress, "Повреждённый предмет снова целый в следующей сцене");
+  add("state-regression", regress, "Повреждённый предмет снова целый в следующей сцене", "block");
 
   // Место действия возвращается через сцену — флешбэк, а в ролике он читается как ошибка.
   const flash: string[] = [];
@@ -120,7 +164,7 @@ export function auditPlan(
     const c = shown[i].location.trim().toLowerCase();
     if (a && b && c && a === c && a !== b) flash.push(shown[i].id);
   }
-  add("location-jump-back", flash, "Действие возвращается в прежнее место через сцену — порядок событий выглядит сломанным");
+  add("location-jump-back", flash, "Действие возвращается в прежнее место через сцену — порядок событий выглядит сломанным", "block");
 
   // Сцена с героем без эталонов: лицо будет случайным.
   if (!character.referenceFiles.length) {

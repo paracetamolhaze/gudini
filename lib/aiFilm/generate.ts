@@ -123,7 +123,19 @@ export async function generateShot(args: {
     }
   } catch {}
 
-  const reservation = reserveBudget("AI Film Generation", operation ? 0 : shot.cost);
+  // Резерв берётся ПЕРЕД КАЖДЫМ новым запуском, а не один раз до цикла. Раньше после
+  // отказа операции по правам третьих лиц повторный запуск уходил в Veo уже без проверки
+  // бюджета: предел в $0.64 пропускал две принятые операции на $1.28.
+  let reservation = -1;
+  const reserve = () => {
+    if (reservation < 0) reservation = reserveBudget("AI Film Generation", shot.cost);
+  };
+  const release = () => {
+    if (reservation >= 0) {
+      releaseBudget(reservation);
+      reservation = -1;
+    }
+  };
   let debranded = false;
   // Google отклоняет имена чужих персонажей либо при отправке, либо уже внутри операции
   // (операция завершается отказом через ~15 с). В обоих случаях денег это не стоит, и
@@ -141,9 +153,11 @@ export async function generateShot(args: {
     let result: Awaited<ReturnType<typeof waitVeo>> | null = null;
     while (!result) {
       if (!operation) {
+        reserve();
         try {
           operation = await startVeo(req, (attempt, why) => args.onProgress?.(`shot ${shot.id}: повтор запуска ${attempt} (${why})`));
         } catch (e) {
+          release();
           debrandOrThrow(e);
           continue;
         }
@@ -152,7 +166,7 @@ export async function generateShot(args: {
         recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: shot.cost, estimated: true });
         // The accepted call is now in the ledger; do not also count its reservation
         // while the other groups are waiting to start.
-        releaseBudget(reservation);
+        release();
       }
       try {
         result = await waitVeo(shot.model, operation, (sec) => args.onProgress?.(`shot ${shot.id}: Veo работает ${Math.round(sec)} с`));
@@ -173,7 +187,7 @@ export async function generateShot(args: {
     if (operation) recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: 0, estimated: true, failed: true });
     throw new Error(`AI-фильм, shot ${shot.id} (${shot.mode}, ${shot.veoSeconds} с): ${String((e as any)?.message ?? e)}`);
   } finally {
-    releaseBudget(reservation);
+    release();
   }
 }
 

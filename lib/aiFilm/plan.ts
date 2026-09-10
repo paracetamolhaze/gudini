@@ -4,8 +4,9 @@ import { universePromptBlock, type UniverseProfile } from "./universe";
 import { veoPricePerSecond, round2 } from "./pricing";
 import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
 import { auditPlan } from "./audit";
+import { storySystemPrompt } from "./story";
 import type {
-  AiFilmPlan, CameraAngle, CharacterProfile, Composition, ContinuityGroup, FilmShot, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
+  AiFilmPlan, CameraAngle, CharacterProfile, Composition, ContinuityGroup, FilmShot, ObjectState, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
 } from "./types";
 
 /**
@@ -93,35 +94,148 @@ export const STAGING_LINE: Record<StagingMode, string> = {
     "No symbolic effects, no glowing objects, no smoke or haze that the action does not call for.",
 };
 
+/**
+ * Можно ли снять два действия одним непрерывным кадром. Разное место снять без склейки
+ * нельзя вообще; разная точка съёмки означает две разные сцены, а не одну.
+ */
+export function compatibleInOneShot(a: StoryBeat, b: StoryBeat): boolean {
+  const place = (s: string) => s.trim().toLowerCase();
+  if (place(a.location) && place(b.location) && place(a.location) !== place(b.location)) return false;
+  if (a.cameraAngle !== b.cameraAngle) return false;
+  if (a.displayMode !== b.displayMode) return false;
+  return true;
+}
+
+/** Совместимый префикс окна: первый бит и всё, что снимается вместе с ним. */
+export function compatiblePrefix(window: StoryBeat[]): StoryBeat[] {
+  const out = [window[0]];
+  for (let i = 1; i < window.length; i++) {
+    if (!compatibleInOneShot(out[out.length - 1], window[i])) break;
+    out.push(window[i]);
+  }
+  return out;
+}
+
+/**
+ * К какой секунде клипа изменение обязано быть видно. Считается по якорю в речи: он
+ * привязан к слову, на котором зритель услышит про изменение. Без якоря остаётся null,
+ * и промпт просто просит показать изменение рано, не выдумывая точных секунд.
+ */
+export function changeDeadline(beats: StoryBeat[], shotStart: number): number | null {
+  for (const b of beats) {
+    if (b.anchorAtSec == null) continue;
+    const abs = b.start + b.anchorAtSec;
+    const rel = Math.round((abs - shotStart) * 10) / 10;
+    if (rel >= 0) return rel;
+  }
+  return null;
+}
+
+/** Состояния предметов сцены одной строкой: «main-canopy — packed and intact; parcel — sealed». */
+export function stateLine(objects: ObjectState[] | undefined, side: "before" | "after"): string {
+  return (objects ?? [])
+    .map((o) => ({ id: o.id, text: side === "before" ? o.before : o.after }))
+    .filter((o) => o.text)
+    .map((o) => `${o.id.replace(/-/g, " ")} — ${o.text}`)
+    .join("; ");
+}
+
+/**
+ * Правила непрерывности, относящиеся именно к этой сцене. Раньше в промпт бытового кадра
+ * уезжал весь список, включая указания про порванный купол, которого в кадре нет.
+ */
+export function applicableContinuity(rules: string[], objects: ObjectState[], text: string): string[] {
+  if (!rules.length) return [];
+  const words = new Set(
+    [...objects.flatMap((o) => o.id.split("-")), ...text.toLowerCase().split(/[^a-z0-9]+/)].filter((w) => w.length >= 4),
+  );
+  return rules.filter((r) => {
+    const rw = r.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
+    return rw.some((w) => words.has(w));
+  });
+}
+
+/** Синтетическая сцена для отпечатка: любое изменение сборщика меняет её текст. */
+const PROBE_BEAT: StoryBeat = {
+  id: "probe", start: 0, end: 8, meaning: "", storyBeat: "", displayMode: "full_ai",
+  purpose: "explain", priority: "medium", requiresGeneration: true, gudiniVisible: true,
+  universeAdaptation: "", visualAction: "he opens a box", keyMoment: "the box opens",
+  anchorPhrase: "", anchorAtSec: null, eventIds: ["probe"], objects: [{ id: "box", before: "sealed", after: "open" }],
+  location: "a room", motion: "he lifts the lid", stateBefore: "sealed", stateAfter: "open",
+  continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium",
+  camera: "Camera is at eye level in front of him", cameraAngle: "eye_level", composition: "center",
+  suggestedDuration: 8,
+};
+
+/**
+ * Отпечаток режиссёрского промпта и сборщика запросов. Считается по их фактическому выводу,
+ * поэтому меняется от любой правки инструкций или сборки — в отличие от номера версии,
+ * который одиннадцать коммитов подряд оставался прежним, и сохранённый план со старыми
+ * промптами считался актуальным.
+ */
+export function compilerFingerprint(character: CharacterProfile, universe: UniverseProfile): string {
+  const bible: StoryBible = {
+    characterId: character.id, universeId: universe.id, storyType: "explainer", staging: "everyday_life",
+    reconstruction: false, visualStyle: character.styleLock, world: universe.name, mood: "calm",
+    lighting: "daylight", cameraLanguage: "steady", locations: [], importantObjects: [],
+    supportingCharacters: [], playedByGudini: "", continuityRules: ["the box stays the same colour"],
+    storyArc: { understand: "", gudiniRole: "", beginning: "", development: "", conflict: "", climax: "", meaning: "" },
+    events: [],
+  };
+  const probe = shotPrompt({
+    character, universe, bible, beats: [PROBE_BEAT], prev: null, mode: "text", aspectRatio: "9:16", changeBySec: 3,
+  });
+  return shortHash(`${storySystemPrompt(character, universe, { target: 0.5, max: 0.65 })}\n---\n${probe}`);
+}
+
 /** Промпт shot: WHO / WHAT / WHERE / WHAT CHANGES, кадр, камера, непрерывность, запреты. */
 export function shotPrompt(args: {
   character: CharacterProfile;
   universe: UniverseProfile;
   bible: StoryBible;
-  beat: StoryBeat;
   prev: StoryBeat | null;
+  /** биты, попадающие в этот клип, по порядку; первый задаёт кадр и камеру */
+  beats: StoryBeat[];
   mode: "text" | "extend";
   aspectRatio: "16:9" | "9:16";
+  /** к какой секунде клипа изменение обязано быть видно */
+  changeBySec?: number | null;
 }): string {
-  const { character, universe, bible, beat, prev, mode, aspectRatio } = args;
+  const { character, universe, bible, beats, prev, mode, aspectRatio, changeBySec } = args;
+  const beat = beats[0];
   const lines: string[] = [];
   // Порядок важен: Veo сильнее слушает начало промпта, поэтому сперва действие и движение,
   // а стиль, мир и запреты уходят вниз. Раньше первые полторы тысячи знаков были служебными,
   // и на само действие оставалась одна фраза — отсюда выдуманные предметы в кадре.
+  const before = stateLine(beat.objects, "before") || beat.stateBefore;
   if (mode === "extend") {
     lines.push(`Continue the same shot without a cut. Previous moment: ${prev?.stateAfter || prev?.visualAction || "the scene continues"}.`);
-  } else if (beat.stateBefore) {
-    lines.push(`Before: ${beat.stateBefore}.`);
+  } else if (before) {
+    lines.push(`Before: ${before}.`);
   }
-  lines.push(`Action: ${beat.visualAction}`);
+  // Все действия клипа по порядку. Отсюда брался один «главный» бит, и второе действие
+  // объединённой сцены исчезало из запроса, оставаясь только в списке идентификаторов.
+  if (beats.length === 1) {
+    lines.push(`Action: ${beat.visualAction}`);
+  } else {
+    lines.push(`Action, in this order and all of it inside one continuous take:`);
+    beats.forEach((b, i) => lines.push(`${i + 1}. ${b.visualAction}`));
+  }
   // Одно изменение ради которого снимается сцена — сразу после действия и до всего
   // остального: у генератора должна быть одна цель, а не список равноправных задач.
-  if (beat.keyMoment) {
-    lines.push(`The one thing that must be visible: ${beat.keyMoment}. It happens early in the shot, not at the very end.`);
+  const keyMoments = beats.map((b) => b.keyMoment).filter(Boolean);
+  if (keyMoments.length) {
+    const deadline =
+      changeBySec != null
+        ? ` It has to be visible by second ${Math.max(1, Math.round(changeBySec))} of the clip, not at the very end.`
+        : " It happens early in the shot, not at the very end.";
+    lines.push(`The one thing that must be visible: ${keyMoments.join("; then ")}.${deadline}`);
   }
-  if (beat.motion) lines.push(`Motion in order: ${beat.motion}`);
+  const motions = beats.map((b) => b.motion).filter(Boolean);
+  if (motions.length) lines.push(`Motion in order: ${motions.join(" Then: ")}`);
   if (beat.location) lines.push(`Location: ${beat.location}.`);
-  if (beat.stateAfter) lines.push(`After: ${beat.stateAfter}.`);
+  const after = stateLine(beats[beats.length - 1].objects, "after") || beats[beats.length - 1].stateAfter;
+  if (after) lines.push(`After: ${after}.`);
   const shot = beat.shotType.replace("_", "-");
   const ratio = aspectRatio === "9:16" ? "vertical 9:16 portrait composition" : "horizontal 16:9 composition";
   lines.push(`Framing: ${ratio}, ${shot} shot. ${COMPOSITION_LINE[beat.composition]}`);
@@ -152,7 +266,7 @@ export function shotPrompt(args: {
 
   // Люди в кадре: только те, кого назвала речь. Наблюдателей и прохожих быть не должно —
   // в прошлом ролике рядом с героем истории каждый раз вырастал лишний зритель.
-  const text = `${beat.visualAction} ${beat.motion} ${beat.stateBefore} ${beat.stateAfter}`.toLowerCase();
+  const text = beats.map((b) => `${b.visualAction} ${b.motion} ${b.stateBefore} ${b.stateAfter}`).join(" ").toLowerCase();
   const inScene = bible.supportingCharacters.filter((c) =>
     c.name
       .split(/[\s/()]+/)
@@ -160,13 +274,17 @@ export function shotPrompt(args: {
       .some((w) => text.includes(w.toLowerCase())),
   );
   const cast: string[] = [];
-  if (beat.gudiniVisible) cast.push(character.name);
+  if (beats.some((b) => b.gudiniVisible)) cast.push(character.name);
   for (const c of inScene) cast.push(c.name);
+  // Запрет был абсолютным — «никаких людей на фоне вообще», — и спорил с разрешением
+  // планировщика на естественный фон: улица и аэропорт выходили вымершими. Запрещаем
+  // добавлять УЧАСТНИКОВ, а не всякое присутствие людей в общественном месте.
   lines.push(
-    `People in frame: exactly ${cast.length || "as described above"}${cast.length ? ` — ${cast.join(", ")}` : ""}. ` +
-      "No other people at all: no bystanders, no onlookers, no crowd, no figures in the background.",
+    `People taking part in the action: exactly ${cast.length || "as described above"}${cast.length ? ` — ${cast.join(", ")}` : ""}. ` +
+      "No other participants: nobody else acts, reacts, helps or watches the action. " +
+      "Incidental passers-by are allowed only where the place would naturally have them, out of focus, never interacting with him and never looking at the camera.",
   );
-  if (beat.gudiniVisible) {
+  if (beats.some((b) => b.gudiniVisible)) {
     lines.push(characterBlock(character));
     // Эталоны сняты на ровном сером фоне, и Veo притаскивал этот фон в сцену вместо
     // описанного места: первая сцена «на крыльце» вышла в студии.
@@ -183,10 +301,14 @@ export function shotPrompt(args: {
 
   lines.push(`Style: ${bible.visualStyle}. Mood: ${bible.mood}. Lighting: ${bible.lighting}.`);
   lines.push(universePromptBlock(universe));
+  // Раньше запрещался интерфейс вообще, и заказ на телефоне показать было нечем. Запрещаем
+  // читаемый текст, а не сам экран: действие с телефоном видно, содержимое — нет.
   lines.push(
-    "No readable text anywhere in frame: no interface, no price tag, no document, no signage, no numbers on screens.",
+    "Nothing readable in frame: no legible words, numbers, prices, documents or signage. " +
+      "Using a phone or a screen is fine as long as what is on it stays unreadable.",
   );
-  if (bible.continuityRules.length) lines.push(`Continuity: ${bible.continuityRules.slice(0, 8).join("; ")}.`);
+  const applicable = applicableContinuity(bible.continuityRules, beats.flatMap((b) => b.objects ?? []), text);
+  if (applicable.length) lines.push(`Continuity: ${applicable.slice(0, 6).join("; ")}.`);
   // Хвост запретов один раз: текст и логотипы уже названы отдельной строкой выше,
   // и повторять их третий раз в конце промпта смысла нет
   lines.push(`${character.negative ? `${character.negative}. ` : ""}No split screen, no talking to camera.`);
@@ -421,16 +543,25 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       const veoSeconds = mode === "text" ? normalizeVeoDuration(Math.min(span, 8), "text", { references: useReferences }) : VEO_EXTEND_SECONDS;
       const from = first.start + covered;
       const to = Math.min(last.end, from + veoSeconds);
-      // бит, на который приходится больше всего времени этого shot
-      const beat = gBeats.reduce((best, b) => (Math.min(b.end, to) - Math.max(b.start, from) > Math.min(best.end, to) - Math.max(best.start, from) ? b : best), gBeats[0]);
+      // Все биты, попадающие в этот клип, по порядку. Раньше отсюда брался ОДИН бит с
+      // наибольшим пересечением, а остальные оставались только в beatIds: из двух
+      // последовательных действий «вскрывает посылку» и «достаёт парашют» в промпт уходило
+      // первое, и второе действие просто исчезало из ролика.
+      const inside = gBeats.filter((b) => b.end > from + 1e-6 && b.start < to - 1e-6);
+      const window = inside.length ? inside : [gBeats[0]];
+      // Несовместимые по месту или точке съёмки действия в один непрерывный кадр не
+      // объединяются: берём совместимый префикс, остальное уедет в следующий клип.
+      const merged = compatiblePrefix(window);
+      const beat = merged[0];
       const prev = mode === "extend" ? (gBeats[gBeats.indexOf(beat) - 1] ?? beat) : prevBeat;
+      const eventIds = [...new Set(merged.flatMap((b) => b.eventIds ?? []))];
       const shot: FilmShot = {
         id: `${id}-${idx + 1}`,
         groupId: id,
         index: idx,
-        beatIds: gBeats.filter((b) => b.end > from && b.start < to).map((b) => b.id),
+        beatIds: merged.map((b) => b.id),
         displayMode,
-        gudiniVisible: beat.gudiniVisible,
+        gudiniVisible: merged.some((b) => b.gudiniVisible),
         generationProfile: mode === "extend" ? "continuation" : beat.gudiniVisible ? "character" : "environment",
         model: groupModel,
         mode,
@@ -439,7 +570,9 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
         aspectRatio,
         resolution: RESOLUTION,
         useReferences: mode === "text" && useReferences,
-        prompt: shotPrompt({ character, universe: cfg.universe, bible, beat, prev, mode, aspectRatio }),
+        eventIds,
+        changeBySec: changeDeadline(merged, from),
+        prompt: shotPrompt({ character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, changeBySec: changeDeadline(merged, from) }),
         dependsOn: idx === 0 ? null : `${id}-${idx}`,
         cost: round2(veoSeconds * priceOf(groupModel)),
       };
@@ -638,10 +771,13 @@ export function buildFilmPlan(args: {
   const model = cfg.model || VEO_MODEL;
   const price = veoPricePerSecond(model, { audio: false, resolution: RESOLUTION });
   const { beats, built, stats } = reduceToBudget(args.beats, character, bible, duration, cfg);
+  // Разбор идёт по битам ПОСЛЕ редьюсера и по собранным запросам: события пропадали
+  // именно на этих шагах, а не в ответе модели.
+  const issues = auditPlan(beats, bible, character);
   const warnings = [
     ...built.warnings,
     ...authorStretchWarnings(built.timeline, duration),
-    ...auditPlan(beats, bible, character).map((a) => `${a.message} (${a.beatIds.join(", ")})`),
+    ...issues.map((a) => `${a.severity === "block" ? "ОБЯЗАТЕЛЬНО: " : ""}${a.message}${a.beatIds.length ? ` (${a.beatIds.join(", ")})` : ""}`),
   ];
   // Планировщик пишет русское имя героя в bible, а в английских полях зовёт его латиницей
   // («Каспер» → «Casper»), поэтому автозамена имени промахивается и в промпт уходят сразу
@@ -694,6 +830,8 @@ export function buildFilmPlan(args: {
     budgetUsd: cfg.budgetUsd,
     stats,
     warnings,
+    issues,
+    compilerFingerprint: compilerFingerprint(character, cfg.universe),
   };
 }
 

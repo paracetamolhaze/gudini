@@ -98,11 +98,19 @@ export function loadCharacterProfile(id = characterId(), baseDir = charactersDir
   };
 }
 
-/** Блок описания персонажа для промптов Veo и для сценариста. */
+/**
+ * Блок описания персонажа для промптов Veo и для сценариста.
+ *
+ * «Always visible» раньше включало брюки и сандалии, и это спорило с крупным планом:
+ * ноги в портрет не помещаются. Одежда остаётся той же, но требование видеть её целиком
+ * снято — постоянным остаётся лицо и то, что действительно в кадре.
+ */
 export function characterBlock(c: CharacterProfile): string {
   return (
     `Main character ${c.name.toUpperCase()} (the same person in every shot, must match the reference images): ` +
-    `${c.description}. Appearance: ${c.appearance}. Clothes: ${c.clothes}. Always visible: ${c.signature}.`
+    `${c.description}. Face and hair, unchanged in every shot: ${c.appearance}. ` +
+    `He is dressed in: ${c.clothes}. Whatever part of him is in frame matches this exactly; ` +
+    `parts outside the frame are simply not shown, they are never replaced by other clothing.`
   );
 }
 

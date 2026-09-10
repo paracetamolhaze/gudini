@@ -621,6 +621,11 @@ export function buildFilmPlan(args: {
   // Планировщик пишет русское имя героя в bible, а в английских полях зовёт его латиницей
   // («Каспер» → «Casper»), поэтому автозамена имени промахивается и в промпт уходят сразу
   // два человека: названный по имени герой и описание постоянного персонажа.
+  // Два соседних кадра с одного ракурса — это тот самый «всегда одинаковый вид»,
+  // с которого начался разбор. Правило есть в промпте, но модель его иногда пропускает.
+  const shown = beats.filter(isAi);
+  const repeats = shown.filter((b, i) => i > 0 && b.cameraAngle === shown[i - 1].cameraAngle).map((b) => b.id);
+  if (repeats.length) warnings.push(`Соседние сцены сняты с одного ракурса (${repeats.join(", ")}) — ролик выглядит однообразно`);
   if (bible.playedByGudini) {
     const stray = beats.filter((b) => b.gudiniVisible && b.visualAction && !b.visualAction.includes(character.name));
     if (stray.length) {

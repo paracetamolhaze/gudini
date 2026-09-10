@@ -392,3 +392,29 @@ test("нужное число сцен считается из длины реч
     assert.ok(n * 4 + n * MAX_AUTHOR_STRETCH_SEC >= d, `${d} с не покрывается ${n} сценами`);
   }
 });
+
+test("план замечает два соседних кадра с одного ракурса", async () => {
+  const { buildFilmPlan } = await import("../lib/aiFilm/plan");
+  const bible = bibleOf("explainer");
+  const cfg = { key: "k", universe, budgetUsd: 12, maxCoverage: 0.55, concurrency: 3, callMinutes: 2 };
+  const same = buildFilmPlan({
+    character: withRefs, bible, duration: 40, cfg,
+    beats: [
+      beat({ id: "B1", start: 0, end: 8, cameraAngle: "overhead", visualAction: "x" }),
+      { ...beat({ visualAction: "" }), id: "B2", start: 8, end: 14, displayMode: "author", requiresGeneration: false, gudiniVisible: false },
+      beat({ id: "B3", start: 14, end: 22, cameraAngle: "overhead", visualAction: "y" }),
+      { ...beat({ visualAction: "" }), id: "B4", start: 22, end: 40, displayMode: "author", requiresGeneration: false, gudiniVisible: false },
+    ],
+  });
+  assert.ok(same.warnings.some((w) => /одного ракурса \(B3\)/.test(w)), same.warnings.join(" | "));
+  const varied = buildFilmPlan({
+    character: withRefs, bible, duration: 40, cfg,
+    beats: [
+      beat({ id: "B1", start: 0, end: 8, cameraAngle: "overhead", visualAction: "x" }),
+      { ...beat({ visualAction: "" }), id: "B2", start: 8, end: 14, displayMode: "author", requiresGeneration: false, gudiniVisible: false },
+      beat({ id: "B3", start: 14, end: 22, cameraAngle: "ground_level", visualAction: "y" }),
+      { ...beat({ visualAction: "" }), id: "B4", start: 22, end: 40, displayMode: "author", requiresGeneration: false, gudiniVisible: false },
+    ],
+  });
+  assert.ok(!varied.warnings.some((w) => /одного ракурса/.test(w)), varied.warnings.join(" | "));
+});

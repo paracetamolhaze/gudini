@@ -365,31 +365,42 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
     if (beats[i].end < beats[i].start) beats[i].end = beats[i].start;
     beats[i].suggestedDuration = Math.round((beats[i].end - beats[i].start) * 10) / 10;
   }
-  // Открывающая сцена короче минимума не выбрасывается, а дотягивается за счёт следующего
-  // авторского бита. Хук в речи часто занимает три секунды («парень заказал парашют за
-  // пять долларов»), и правило «короче четырёх — в автора» убивало ровно ту сцену, которая
-  // держит первые секунды ролика. Соседу оставляем минимум полторы секунды.
-  const first = beats[0];
-  const second = beats[1];
-  if (first && first.displayMode !== "author" && first.end - first.start < MIN_AI_BEAT_SEC - 1e-6 && second && second.displayMode === "author") {
-    const need = MIN_AI_BEAT_SEC - (first.end - first.start);
-    const spare = second.end - second.start - 1.5;
-    if (spare >= need) {
-      first.end = Math.round((first.end + need) * 1000) / 1000;
-      second.start = first.end;
-      first.suggestedDuration = Math.round((first.end - first.start) * 10) / 10;
-      second.suggestedDuration = Math.round((second.end - second.start) * 10) / 10;
-    }
-  }
-
-  // AI-бит короче минимума — автор (AI за 2–3 секунды не прочитать)
-  for (const b of beats) {
+  // AI-бит короче минимума — автор (AI за 2–3 секунды не прочитать). Открывающий бит
+  // пропускаем: им занимаемся ниже, когда соседи уже приведены в порядок.
+  for (let i = 0; i < beats.length; i++) {
+    const b = beats[i];
+    if (i === 0) continue;
     if (b.displayMode !== "author" && b.end - b.start < MIN_AI_BEAT_SEC - 1e-6) {
       b.displayMode = "author";
       b.requiresGeneration = false;
       b.gudiniVisible = false;
       b.continuityGroup = null;
       b.reduced = `AI-бит короче ${MIN_AI_BEAT_SEC} с`;
+    }
+  }
+
+  // Открывающая сцена короче минимума не выбрасывается, а дотягивается за счёт следующего
+  // авторского бита. Хук в речи часто занимает три секунды («парень заказал парашют за
+  // пять долларов»), и правило «короче четырёх — в автора» убивало ровно ту сцену, которая
+  // держит первые секунды ролика. Соседу оставляем минимум секунду.
+  // Делается ПОСЛЕ общей проверки: сосед мог сам быть коротким AI-битом и только что стать
+  // автором — тогда занимать время у него уже можно.
+  const first = beats[0];
+  const second = beats[1];
+  if (first && first.displayMode !== "author" && first.end - first.start < MIN_AI_BEAT_SEC - 1e-6) {
+    const need = MIN_AI_BEAT_SEC - (first.end - first.start);
+    const spare = second && second.displayMode === "author" ? second.end - second.start - 1.0 : -1;
+    if (spare >= need) {
+      first.end = Math.round((first.end + need) * 1000) / 1000;
+      second.start = first.end;
+      first.suggestedDuration = Math.round((first.end - first.start) * 10) / 10;
+      second.suggestedDuration = Math.round((second.end - second.start) * 10) / 10;
+    } else {
+      first.displayMode = "author";
+      first.requiresGeneration = false;
+      first.gudiniVisible = false;
+      first.continuityGroup = null;
+      first.reduced = `AI-бит короче ${MIN_AI_BEAT_SEC} с`;
     }
   }
   return beats;

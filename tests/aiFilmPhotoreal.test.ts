@@ -269,7 +269,7 @@ test("открывающая сцена: короткий хук дотягив�
   assert.equal(beats[0].displayMode, "full_ai", "трёхсекундный хук остаётся сценой");
   assert.ok(beats[0].end - beats[0].start >= 4 - 1e-6, `хук дотянут до ${beats[0].end - beats[0].start} с`);
   assert.equal(beats[1].start, beats[0].end, "биты остаются встык");
-  assert.ok(beats[1].end - beats[1].start >= 1.5, "соседу осталось не меньше полутора секунд");
+  assert.ok(beats[1].end - beats[1].start >= 1.0, "соседу осталось не меньше секунды");
 });
 
 test("редьюсер снимает открывающую сцену последней", async () => {
@@ -288,4 +288,23 @@ test("редьюсер снимает открывающую сцену посл
   const r = reduceToBudget(beats, withRefs, bible, 44, cfg);
   assert.equal(r.beats.find((b) => b.id === "B1")?.displayMode, "full_ai", "открывающая сцена остаётся");
   assert.equal(r.beats.find((b) => b.id === "B3")?.displayMode, "author", "снимается поздняя");
+});
+
+test("хук спасается, даже если следующий бит сам был коротким AI", () => {
+  // ровно та форма ответа, на которой прошлая правка не сработала:
+  // B1 три секунды AI, B2 тоже короткий AI, и только потом длинный автор
+  const words = Array.from({ length: 30 }, (_, i) => ({ word: `сл${i}${i % 3 === 2 ? "." : ""}`, start: i * 0.9, end: i * 0.9 + 0.9 }));
+  const phrases = phrasesFromWords(words as any);
+  const beats = beatsFromRaw(
+    [
+      { fromPhrase: 1, toPhrase: 1, displayMode: "full_ai", visualAction: "he taps order on a phone", purpose: "hook", priority: "high" },
+      { fromPhrase: 2, toPhrase: 2, displayMode: "full_ai", visualAction: "a box lands on the doormat" },
+      { fromPhrase: 3, toPhrase: 10, displayMode: "author" },
+    ] as any,
+    phrases, 27,
+  );
+  assert.equal(beats[0].displayMode, "full_ai", "открывающая сцена остаётся сценой");
+  assert.ok(beats[0].end - beats[0].start >= 4 - 1e-6);
+  assert.equal(beats[1].displayMode, "author", "короткий второй AI-бит по-прежнему уходит автору");
+  assert.equal(beats[1].start, beats[0].end, "биты остаются встык");
 });

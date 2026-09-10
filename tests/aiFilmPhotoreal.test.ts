@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeBible, beatsFromRaw, phrasesFromWords } from "../lib/aiFilm/story";
-import { shotPrompt, buildShots, coverageConfig, veoCallMinutes, veoConcurrency } from "../lib/aiFilm/plan";
+import { normalizeBible, beatsFromRaw, phrasesFromWords, storySystemPrompt } from "../lib/aiFilm/story";
+import { shotPrompt, buildShots, coverageConfig, veoCallMinutes, veoConcurrency, authorStretchWarnings } from "../lib/aiFilm/plan";
 import { loadUniverseProfile } from "../lib/aiFilm/universe";
 import { loadCharacterProfile } from "../lib/aiFilm/character";
 import { planKey } from "../lib/aiFilm/run";
@@ -42,24 +42,48 @@ const promptFor = (bible: StoryBible, b: StoryBeat, c: CharacterProfile = charac
 
 // ─────────────────────────────── 1. новость
 
-test("новость: наблюдательная постановка, реконструкция не выдаётся за запись, героя в костюме нет", () => {
-  // планировщик попытался отдать роль реального участника постоянному персонажу
-  const bible = bibleOf("news", { playedByGudini: "Илон Маск" });
+test("новость: наблюдательная постановка, реконструкция, роль героя исполняет персонаж канала", () => {
+  // Обычного героя истории играет персонаж канала — это заявленная постановка,
+  // и она помечена флагом reconstruction, а не выдаётся за запись события.
+  const bible = bibleOf("news", { playedByGudini: "Каспер", supportingCharacters: [{ name: "Каспер", function: "partner", appearance: "a man in a jumpsuit" }] });
   assert.equal(bible.storyType, "news");
   assert.equal(bible.staging, "observational");
   assert.equal(bible.reconstruction, true);
-  assert.equal(bible.playedByGudini, "", "в новости личность реального участника не подменяется");
+  assert.equal(bible.playedByGudini, "Каспер", "роль героя истории исполняет персонаж канала");
+  assert.deepEqual(bible.supportingCharacters, [], "исполняемый герой не заводится вторым человеком в кадре");
 
-  const p = promptFor(bible, beat({ visualAction: "A man in a suit walks out of a courthouse and stops on the steps", keyMoment: "he stops and turns his head" }));
+  const p = promptFor(bible, beat({ gudiniVisible: true, visualAction: "Gudini walks out of a courthouse and stops on the steps", keyMoment: "he stops and turns his head" }), withRefs);
   assert.match(p, /staged reconstruction of a real event/);
   assert.match(p, /must not look like archive footage/);
   assert.match(p, /no timecode/);
-  // костюм и лицо владельца в кадр не попадают
-  assert.doesNotMatch(p, /Main character GUDINI/);
-  assert.doesNotMatch(p, /high-collar zip jacket/);
-  assert.doesNotMatch(p, /forehead protector/);
+  // он в кадре и он тот же самый человек
+  assert.match(p, /Main character GUDINI/);
+  assert.match(p, /high-collar zip jacket/);
+  assert.match(p, /People in frame: exactly 1 — Gudini/);
   // и никакого случайного реквизита из чужих сцен
   assert.doesNotMatch(p, /torn pieces|hammered by the airflow|falling bodies accelerate/);
+
+  // сцена без людей остаётся без него
+  const noPeople = promptFor(bible, beat({ gudiniVisible: false, visualAction: "The torn orange canopy lies on wet grass" }));
+  assert.doesNotMatch(noPeople, /Main character GUDINI/);
+});
+
+test("узнаваемого публичного человека собой не подменяют — правило стоит в промпте планировщика", () => {
+  const prompt = storySystemPrompt(character, universe, { target: 0.45, max: 0.55 });
+  assert.match(prompt, /главного героя истории ИГРАЕТ Gudini/);
+  assert.match(prompt, /широко узнаваемый публичный человек/);
+  assert.match(prompt, /Его показывают им самим/);
+});
+
+test("план ругается на длинные куски без сцен и на поздний старт", () => {
+  const line = (start: number, end: number, mode: "author" | "full_ai") => ({ start, end, mode, beatIds: [] }) as any;
+  // первая сцена на 20-й секунде и двадцать секунд говорящей головы перед ней
+  const late = authorStretchWarnings([line(0, 20, "author"), line(20, 28, "full_ai"), line(28, 44, "author")], 44);
+  assert.ok(late.some((w) => /Первая сцена появляется только на 20.0 с/.test(w)), late.join(" | "));
+  assert.ok(late.some((w) => /0\.0–20\.0 с/.test(w) && /28\.0–44\.0 с/.test(w)), late.join(" | "));
+  // равномерное распределение претензий не вызывает
+  const even = authorStretchWarnings([line(0, 6, "full_ai"), line(6, 16, "author"), line(16, 24, "full_ai"), line(24, 34, "author"), line(34, 42, "full_ai"), line(42, 44, "author")], 44);
+  assert.deepEqual(even, []);
 });
 
 // ─────────────────────────────── 2. история

@@ -35,9 +35,11 @@ export const MIN_AUTHOR_GAP_SECONDS = 3;
 export const RESOLUTION = "720p" as const;
 
 export function coverageConfig(): { target: number; max: number } {
-  const t = Number(process.env.AI_FILM_TARGET_COVERAGE ?? 0.35);
+  // 0.45, а не прежние 0.35: при 35% планировщик обходился тремя сценами на 45 секунд речи
+  // и собирал их во второй половине ролика.
+  const t = Number(process.env.AI_FILM_TARGET_COVERAGE ?? 0.45);
   const m = Number(process.env.AI_FILM_MAX_COVERAGE ?? 0.55);
-  const target = Number.isFinite(t) && t > 0 && t <= 1 ? t : 0.35;
+  const target = Number.isFinite(t) && t > 0 && t <= 1 ? t : 0.45;
   const max = Number.isFinite(m) && m >= target && m <= 1 ? m : Math.max(target, 0.55);
   return { target, max };
 }
@@ -449,6 +451,37 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
   return { groups, shots, timeline, warnings };
 }
 
+/** Дольше этого зритель смотрит на говорящую голову без единой вставки — это провал удержания. */
+export const MAX_AUTHOR_STRETCH_SECONDS = 12;
+/** Позже этой секунды первая сцена уже не работает как hook. */
+export const FIRST_SHOT_DEADLINE_SECONDS = 8;
+
+/**
+ * Куски ролика, где автор идёт слишком долго подряд. Считается по готовому таймлайну,
+ * поэтому видит и то, что редьюсер снял по бюджету, и то, чего планировщик не показал.
+ * Возвращает предупреждения, а не правит план: выдумать сцену за планировщика нельзя.
+ */
+export function authorStretchWarnings(timeline: TimelineSegment[], duration: number): string[] {
+  const out: string[] = [];
+  const ai = timeline.filter((s) => s.mode !== "author");
+  if (!ai.length) {
+    return duration > MAX_AUTHOR_STRETCH_SECONDS ? ["В ролике нет ни одной показанной сцены — весь ролик говорящая голова"] : out;
+  }
+  const first = ai[0].start;
+  if (first > FIRST_SHOT_DEADLINE_SECONDS) {
+    out.push(`Первая сцена появляется только на ${first.toFixed(1)} с — начало ролика без картинки не удержит зрителя`);
+  }
+  const longs: string[] = [];
+  let cursor = 0;
+  for (const s of ai) {
+    if (s.start - cursor > MAX_AUTHOR_STRETCH_SECONDS + 1e-6) longs.push(`${cursor.toFixed(1)}–${s.start.toFixed(1)} с`);
+    cursor = Math.max(cursor, s.end);
+  }
+  if (duration - cursor > MAX_AUTHOR_STRETCH_SECONDS + 1e-6) longs.push(`${cursor.toFixed(1)}–${duration.toFixed(1)} с`);
+  if (longs.length) out.push(`Длинные куски без сцен (больше ${MAX_AUTHOR_STRETCH_SECONDS} с): ${longs.join(", ")}`);
+  return out;
+}
+
 /** Оценка времени по графу: группы — задачи длиной shots × минут, пул из concurrency воркеров (LPT), плюс накладные. */
 export function estimateWallMinutes(groups: { shotIds: string[] }[], concurrency: number, callMinutes: number, overheadMinutes = 1): number {
   if (!groups.length) return 0;
@@ -534,7 +567,7 @@ export function buildFilmPlan(args: {
   const model = cfg.model || VEO_MODEL;
   const price = veoPricePerSecond(model, { audio: false, resolution: RESOLUTION });
   const { beats, built, stats } = reduceToBudget(args.beats, character, bible, duration, cfg);
-  const warnings = [...built.warnings];
+  const warnings = [...built.warnings, ...authorStretchWarnings(built.timeline, duration)];
   if (stats.reducedBeats) warnings.push(`Сцен переведено в автора редьюсером: ${stats.reducedBeats}`);
   if (stats.calls > 0 && stats.generationEfficiency < MIN_GENERATION_EFFICIENCY) {
     warnings.push(

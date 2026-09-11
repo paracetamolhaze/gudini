@@ -323,7 +323,7 @@ test("ракурс и композиция приходят из плана, а 
   assert.match(above, /upper half of the frame is kept clear/);
   assert.match(above, /never cropped by the top edge/);
   assert.match(above, /Camera angle: camera below the subject, tilted up/);
-  assert.match(above, /fully inside the frame, not cropped at any edge/);
+  assert.match(above, /is unmistakable on screen/);
   // прежняя жёсткая строка про центр из промпта ушла
   assert.doesNotMatch(above, /subject near the vertical center/);
 

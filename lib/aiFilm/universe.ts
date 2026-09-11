@@ -25,6 +25,8 @@ export type UniverseProfile = {
   targetFeel: string;
   visualLanguage: string;
   architecture: string;
+  /** короткое описание мира для запроса кадра: без перечисления других возможных мест */
+  shotWorld: string;
   clothingRules: string;
   technologyRules: string;
   socialRules: string;
@@ -69,6 +71,7 @@ export function loadUniverseProfile(id = universeId(), baseDir = universesDir())
     targetFeel: req(raw.targetFeel, "targetFeel", file),
     visualLanguage: req(raw.visualLanguage, "visualLanguage", file),
     architecture: req(raw.architecture, "architecture", file),
+    shotWorld: typeof raw.shotWorld === "string" && raw.shotWorld.trim() ? raw.shotWorld.trim() : req(raw.architecture, "architecture", file),
     clothingRules: req(raw.clothingRules, "clothingRules", file),
     technologyRules: req(raw.technologyRules, "technologyRules", file),
     socialRules: req(raw.socialRules, "socialRules", file),
@@ -89,11 +92,13 @@ export function loadUniverseProfile(id = universeId(), baseDir = universesDir())
  * и второе такое же описание на пятьсот знаков только отодвигало действие вниз промпта.
  */
 export function universePromptBlock(u: UniverseProfile): string {
+  // Перечисление всех возможных мест сюда не идёт: у кадра есть своя локация, и список
+  // «улица, квартира, офис, поле, больничный коридор» подмешивал к ней чужие места.
+  // Запреты стиля тоже не дублируются — они уже стоят одной строкой в конце запроса.
   return (
-    `World (the same in every shot): ${u.architecture} ` +
+    `World (the same in every shot): ${u.shotWorld} ` +
     `Clothing: ${u.clothingRules}. Objects and technology: ${u.technologyRules}. ` +
-    `Show exactly the people, events and places of the story. ` +
-    `Never drift into: ${u.forbiddenDrift}.`
+    `Show exactly the people, events and places of the story.`
   );
 }
 

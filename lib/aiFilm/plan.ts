@@ -6,7 +6,7 @@ import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
 import { auditPlan } from "./audit";
 import { storySystemPrompt } from "./story";
 import type {
-  AiFilmPlan, CameraAngle, CharacterProfile, Composition, ContinuityGroup, EventDeadline, FilmShot, ObjectState, PlanIssue, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
+  AiFilmPlan, BeatPurpose, CameraAngle, CharacterProfile, Composition, ContinuityGroup, EventDeadline, FilmShot, ObjectState, PlanIssue, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
 } from "./types";
 
 /**
@@ -160,6 +160,22 @@ export function changeDeadline(beats: StoryBeat[], shotStart: number, shownSecon
   return eventDeadlines(beats, shotStart, shownSeconds).find((d) => d.bySec != null)?.bySec ?? null;
 }
 
+/**
+ * Сводка сцены без тех её кусков, которые уже сказаны про конкретные предметы. Нужна, чтобы
+ * сводку можно было оставить рядом со списком предметов, не повторяя одно дважды и не склеивая
+ * два описания одного предмета: склейка противоречивых строк — тоже не исправление.
+ */
+export function withoutObjectClauses(summary: string, objects: ObjectState[] | undefined): string {
+  const text = (summary ?? "").trim();
+  if (!text || !objects?.length) return text;
+  const names = objects.map((o) => o.id.replace(/[-_]+/g, " ").toLowerCase()).filter(Boolean);
+  return text
+    .split(/[;,]/)
+    .map((part) => part.trim())
+    .filter((part) => part && !names.some((n) => part.toLowerCase().includes(n)))
+    .join(", ");
+}
+
 /** Состояния предметов сцены одной строкой: «main-canopy — packed and intact; parcel — sealed». */
 export function stateLine(objects: ObjectState[] | undefined, side: "before" | "after"): string {
   return (objects ?? [])
@@ -236,16 +252,25 @@ export function shotPrompt(args: {
   shownSeconds?: number;
   /** изменение бита приходится на следующий клип цепочки: здесь действие только начинается */
   unfinished?: boolean;
+  /** изменение уже произошло в предыдущем клипе цепочки: здесь идут его последствия */
+  changeDone?: boolean;
   /** чем закончился предыдущий клип этой же цепочки */
   previousMoment?: string;
 }): string {
-  const { character, universe, bible, beats, prev, mode, aspectRatio, deadlines, shownSeconds, unfinished, previousMoment } = args;
+  const { character, universe, bible, beats, prev, mode, aspectRatio, deadlines, shownSeconds, unfinished, previousMoment, changeDone } = args;
   const beat = beats[0];
   const lines: string[] = [];
   // Порядок важен: Veo сильнее слушает начало промпта, поэтому сперва действие и движение,
   // а стиль, мир и запреты уходят вниз. Раньше первые полторы тысячи знаков были служебными,
   // и на само действие оставалась одна фраза — отсюда выдуманные предметы в кадре.
-  const before = stateLine(beat.objects, "before") || beat.stateBefore;
+  // Постановка сцены и состояния предметов — РАЗНЫЕ части условия, и одно не заменяет
+  // другое. Прежде сюда шло `stateLine(objects) || stateBefore`, и непустой список предметов
+  // молча выбрасывал сводку: из запроса про прыжок исчез надетый оранжевый ранец, потому что
+  // в objects стоял только harness. Теперь сводка остаётся, а из неё убирается лишь то,
+  // что уже сказано про конкретные предметы.
+  const objectsBefore = stateLine(beat.objects, "before");
+  const summaryBefore = withoutObjectClauses(beat.stateBefore, beat.objects);
+  const before = [objectsBefore, summaryBefore].filter(Boolean).join("; ");
   if (mode === "extend") {
     // Момент, с которого продолжается кадр, — это конец ПРЕДЫДУЩЕГО КЛИПА, а не конец
     // всего бита. Раньше сюда уходило конечное состояние бита, и продолжение начиналось
@@ -255,9 +280,20 @@ export function shotPrompt(args: {
   } else if (before) {
     lines.push(`Before: ${before}.`);
   }
+  // Снаряжение и реквизит сцены: то, что обязано быть в кадре, даже если само не меняется.
+  // Предмет, нужный действию, исчезал из запроса ровно потому, что у него не было перехода.
+  const inFrame = [...(beat.scene?.worn ?? []), ...(beat.scene?.props ?? [])].map((s) => s.trim()).filter(Boolean);
+  if (inFrame.length) lines.push(`Present in frame throughout: ${[...new Set(inFrame)].join("; ")}.`);
+  if (beat.scene?.who?.trim()) lines.push(`Positions: ${beat.scene.who.trim()}.`);
   // Все действия клипа по порядку. Отсюда брался один «главный» бит, и второе действие
   // объединённой сцены исчезало из запроса, оставаясь только в списке идентификаторов.
-  if (beats.length === 1) {
+  if (beats.length === 1 && changeDone) {
+    // Завершённое событие в продолжении не повторяется: иначе коробку открывают дважды.
+    lines.push(
+      `The change has already happened in the previous clip. Do not repeat it${beat.keyMoment ? `: do not show ${beat.keyMoment} again` : ""}. ` +
+        `This clip shows what follows from it: ${stateLine(beat.objects, "after") || beat.stateAfter || beat.visualAction}.`,
+    );
+  } else if (beats.length === 1) {
     lines.push(unfinished ? `Action, of which only the beginning fits in this clip: ${beat.visualAction}` : `Action: ${beat.visualAction}`);
   } else {
     lines.push(`Action, in this order and all of it inside one continuous take:`);
@@ -289,7 +325,9 @@ export function shotPrompt(args: {
   if (shownSeconds != null && shownSeconds > 0) {
     lines.push(`Only the first ${shownSeconds.toFixed(1)} seconds of this clip are used in the edit; everything above must happen inside them.`);
   }
-  const motions = beats.map((b) => b.motion).filter(Boolean);
+  // Движение завершённого действия в продолжении не повторяется: «he lifts the lid» после
+  // уже открытой коробки — это второе открывание.
+  const motions = changeDone ? [] : beats.map((b) => b.motion).filter(Boolean);
   if (motions.length) lines.push(`Motion in order: ${motions.join(" Then: ")}`);
   if (beat.location) lines.push(`Location: ${beat.location}.`);
   // Незавершённый кадр: изменение приходится на следующий клип цепочки, поэтому здесь
@@ -311,11 +349,11 @@ export function shotPrompt(args: {
   const shot = beat.shotType.replace("_", "-");
   const ratio = aspectRatio === "9:16" ? "vertical 9:16 portrait composition" : "horizontal 16:9 composition";
   lines.push(`Framing: ${ratio}, ${shot} shot. ${COMPOSITION_LINE[beat.composition]}`);
-  // Купол над головой не влезал в кадр, потому что здесь для каждой сцены стояло
-  // «subject near the vertical center». Теперь место в кадре выбирается под то,
-  // что должно быть видно, и это требование повторяется явно.
+  // В кадре должно быть ровно столько, чтобы событие читалось: иногда это весь предмет
+  // целиком, иногда — место контакта крупно. Прежнее безусловное «всё названное целиком
+  // в кадре» спорило с крупной деталью и заставляло отъезжать от самого важного.
   if (marks.length) {
-    lines.push(`Everything named above as the thing that must be visible is fully inside the frame, not cropped at any edge.`);
+    lines.push(`Frame it so that ${marks.map((d) => d.keyMoment).filter(Boolean).join("; ") || "the change named above"} is unmistakable on screen: whatever part of the action proves it must be inside the frame, not cropped away.`);
   }
   lines.push(`Camera angle: ${ANGLE_LINE[beat.cameraAngle]}.`);
   lines.push(`Camera: ${beat.camera || bible.cameraLanguage}. Single continuous take, no cuts inside the shot.`);
@@ -324,16 +362,19 @@ export function shotPrompt(args: {
       "and do not have him run or jump into the camera unless the action says so.",
   );
   lines.push(STAGING_LINE[bible.staging]);
-  // Физика общая и безопасная. Раньше здесь висели падающие тела, поток воздуха и летящие
-  // обрывки — инструкции одной конкретной сцены с парашютом, приписанные ко всем подряд:
-  // ткань рвалась в кадрах, где ничего не рвалось. Частности приходят из motion этого бита.
+  // Механика именно этой сцены: что запускает действие, что с чем соприкасается, как меняется
+  // опора и нагрузка. Общие слова «real physics» ничего не описывают и не спасают кадр, где
+  // тело сохраняет одну позу в несовместимых состояниях, поэтому наблюдаемые указания сцены
+  // идут первыми, а общая строка остаётся короткой подстраховкой.
+  const mechanics = [...new Set(beats.map((b) => b.scene?.mechanics?.trim()).filter(Boolean))];
+  if (mechanics.length) lines.push(`How it physically happens: ${mechanics.join(" Then: ")}`);
   lines.push(
-    "Physics: real weight, speed and inertia — things respond to gravity and to contact, they settle and come to rest; " +
-      "nothing hovers, floats or drifts in place; no slow motion unless the action asks for it.",
+    "Bodies and materials behave as themselves: weight and inertia, contact where things touch, " +
+      "nothing hovers or drifts in place, and the body posture changes with what supports it.",
   );
   lines.push(
-    "Realism: true human proportions, skin with real texture and no beauty smoothing, materials that behave like themselves, " +
-      "contact shadows where objects touch, one dominant light source with matching exposure and shadow direction.",
+    "Realism: true human proportions and joints, skin with real texture and no beauty smoothing, " +
+      "one dominant light source with matching exposure and shadow direction.",
   );
 
   // Люди в кадре: только те, кого назвала речь. Наблюдателей и прохожих быть не должно —
@@ -620,6 +661,8 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
     let prevShotTail: StoryBeat | null = null;
     /** чем закончился предыдущий клип этой же цепочки */
     let prevShotEnd: string | null = null;
+    /** биты, чьё изменение уже показано в этой цепочке: в продолжении его не повторяют */
+    const doneBeats = new Set<string>();
     while (covered < span - 0.05) {
       const from = first.start + covered;
       // Бит, с которого начинается этот клип. Смена места ровно на границе окна раньше
@@ -657,7 +700,13 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       const deadlines = eventDeadlines(merged, from, shownSeconds);
       // Действие последнего бита не помещается в этот клип целиком: изменение придёт
       // в продолжение, поэтому здесь оно не должно ни требоваться, ни считаться сделанным.
-      const unfinished = merged[merged.length - 1].end > from + shownSeconds + 0.05;
+      // Но длина бита сама по себе этого не решает: если момент изменения приходится на ЭТОТ
+      // клип, событие здесь и происходит, а дальше идёт его последствие.
+      const tailId = merged[merged.length - 1].id;
+      const changeHere = deadlines.some((d) => d.beatId === tailId && d.bySec != null);
+      const unfinished = !changeHere && merged[merged.length - 1].end > from + shownSeconds + 0.05;
+      // Изменение этого бита уже показано в предыдущем клипе цепочки — дальше идут последствия.
+      const changeDone = mode === "extend" && doneBeats.has(tailId) && !changeHere;
       if (mode === "text") {
         // конец отрезка — конец реально вошедших битов, а не длина генерации: клип на 8 с,
         // из которого в монтаж идут 4, занимает в ролике четыре секунды
@@ -685,7 +734,7 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
         deadlines,
         prompt: shotPrompt({
           character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, deadlines, shownSeconds,
-          unfinished, previousMoment: mode === "extend" ? prevShotEnd ?? undefined : undefined,
+          unfinished, changeDone, previousMoment: mode === "extend" ? prevShotEnd ?? undefined : undefined,
         }),
         dependsOn: mode === "extend" ? owner.shotIds[owner.shotIds.length - 1] : null,
         cost: round2(veoSeconds * priceOf(groupModel)),
@@ -698,6 +747,7 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       const reached = stateLine(tail.objects, "after") || tail.stateAfter || tail.visualAction;
       const midway = `${stateLine(tail.objects, "before") || tail.stateBefore || tail.visualAction} — the action is under way and ${tail.keyMoment || "the change"} has not happened yet`;
       prevShotEnd = unfinished ? midway : reached;
+      if (!unfinished) for (const b of merged) doneBeats.add(b.id);
       prevShotTail = tail;
       owner.end = Math.max(owner.end, Math.min(tail.end, from + shownSeconds));
       const advanced = Math.max(Math.min(tail.end - from, shownSeconds), 0.5);
@@ -979,8 +1029,13 @@ export function buildFilmPlan(args: {
   // два человека: названный по имени герой и описание постоянного персонажа.
   // Сцена, в которой ничего не происходит. Человек, восемь секунд поправляющий лямку,
   // технически безупречен и совершенно не нужен: платим за клип, а событие рассказывает голос.
+  // Сцена обстановки или реакции не обязана менять предмет: требование «в кадре должно
+  // что-то ломаться» и заставляло планировщика выдумывать действия там, где истории нужен
+  // результат или контекст. Спрашиваем изменение с тех сцен, которые заявили событие.
+  const CONTEXT: BeatPurpose[] = ["setup", "transition", "emotion"];
   const idle = beats
     .filter((b) => isAi(b) && b.visualAction)
+    .filter((b) => (b.eventIds ?? []).length > 0 || !CONTEXT.includes(b.purpose))
     .filter((b) => !hasEvent(`${b.visualAction} ${b.keyMoment}`) || (b.stateBefore && b.stateBefore === b.stateAfter))
     .map((b) => b.id);
   if (idle.length) warnings.push(`Сцены без события (${idle.join(", ")}): герой стоит или готовится, но ничего не меняется`);

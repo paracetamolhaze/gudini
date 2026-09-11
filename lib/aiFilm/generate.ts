@@ -192,6 +192,29 @@ export async function generateShot(args: {
 }
 
 /** Цепочка группы: text → extend → extend; клип группы — последний файл (или склейка, если extension вернул только хвост). */
+/**
+ * Контактный лист готового клипа: восемь кадров по всей его длине одной картинкой.
+ *
+ * Нужен потому, что техническая проверка видит только «окно не чёрное и меняется»: она не
+ * скажет, сохранился ли надетый рюкзак, рвётся ли ткань и куда смотрят ноги. Единственный
+ * дубль остаётся единственным — это просто способ посмотреть на него, а не повод
+ * перегенерировать. Ошибка сборки листа генерацию не роняет.
+ */
+export async function contactSheet(clip: string, out: string, seconds: number): Promise<string | null> {
+  if (fs.existsSync(out)) return out;
+  const step = Math.max(0.5, Math.round((seconds / 8) * 10) / 10);
+  try {
+    await runFfmpeg([
+      "-i", clip,
+      "-vf", `fps=1/${step},scale=240:-1,tile=4x2`,
+      "-frames:v", "1", "-q:v", "3", out,
+    ]);
+    return fs.existsSync(out) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 async function generateGroup(args: {
   dir: string;
   projectId: string;
@@ -248,6 +271,7 @@ async function generateGroup(args: {
   if (!sourceFile) throw new Error(`AI-фильм: группа ${group.id} без shots`);
   const out = path.join(filmDir(dir), `group-${group.id}.mp4`);
   fs.copyFileSync(sourceFile, out);
+  await contactSheet(out, path.join(filmDir(dir), `contact-${group.id}.jpg`), sourceDur);
   return { clip: { groupId: group.id, file: path.relative(dir, out), seconds: sourceDur }, generated, cached };
 }
 

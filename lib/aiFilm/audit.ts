@@ -39,6 +39,13 @@ const CAMERA_MOVES = /\b(?:pans?|tilts?|tracks?|dollies|dolly|pushes in|pulls ba
 /** Сцена объявляет себя происходящей раньше: флешбэк в коротком ролике читается как ошибка. */
 const EARLIER = /\bbefore the (?:jump|flight|fall|launch|flare|drop)\b|\bbefore he (?:jump|jumps|jumped|left|leaps|leapt|steps|stepped)\b|\bearlier that (?:day|morning|evening|week)\b|\bflashback\b|\bback (?:at home|in the room) before\b/i;
 
+/** Поза и положение ЧЕЛОВЕКА: в состоянии предмета таких слов быть не должно. */
+const PERSON_POSE = /\b(?:standing|stands|sitting|sits|kneeling|kneels|lying|lies|walking|walks|running|runs|leaning|leans|crouching|both feet|his feet|her feet|facing)\b/i;
+/** Камера идёт за объектом. */
+const CAMERA_FOLLOWS = /\b(?:follows?|following|tracks?|tracking|stays? (?:with|beside|level with)|keeps? pace)\b/i;
+/** Видимый ориентир, по которому читается движение. */
+const MOTION_REFERENCE = /\b(?:background|backdrop|trees|wall|walls|ground|horizon|rock face|cliff face|road|kerb|curb|water|shore|buildings|fence|rails?|sliding past|slides past|moves? past|passes behind|rushes past)\b/i;
+
 /** Что-то важное находится НАД человеком. */
 const OBJECT_ABOVE = /\babove (?:him|his head|gudini)\b|\boverhead\b/i;
 
@@ -386,6 +393,52 @@ export function auditPlan(
       "В одной сцене несколько событий: у них будет общий срок, показать их по отдельности нельзя — разложите на две сцены",
     );
   }
+
+  // Состояние предмета описывает предмет. «harness — standing at the rocky edge, both feet
+  // planted on stone» описывает человека, и надетое снаряжение при этом теряется: в запрос
+  // уходит поза вместо предмета. Где стоит человек — это scene.who.
+  add(
+    "object-state-describes-person",
+    shown
+      .filter((b) => (b.objects ?? []).some((o) => PERSON_POSE.test(`${o.before} ${o.after}`)))
+      .map((b) => b.id),
+    "Состояние предмета описывает позу человека, а не сам предмет — положение людей относится к сцене, а не к вещи",
+  );
+
+  // Фазы смешаны: сцена одновременно объявляет предмет и в исходном, и в конечном состоянии.
+  // Так в одном запросе оказывались «упакован, ещё не раскрыт» и «разорванная ткань заполняет
+  // верх кадра»: генератор выбирает одно из двух наугад.
+  const mixed: string[] = [];
+  for (const b of shown) {
+    for (const o of b.objects ?? []) {
+      if (!o.before.trim() || !o.after.trim() || sameState(o.before, o.after)) continue;
+      const context = `${b.camera} ${b.stateBefore}`;
+      if (stateReached(o.after, context, o.before, [o.id]) && !stateReached(o.before, context, o.after, [o.id])) {
+        mixed.push(`${b.id}/${o.id}`);
+      }
+    }
+  }
+  add("phase-conflict", mixed, "Сцена начинается с предмета в исходном состоянии, а камера уже описывает его конечное состояние", "block");
+
+  // Камера сопровождает движущийся объект, но по чему видно движение — не сказано.
+  // Постоянная дистанция без ориентира читается как зависание.
+  add(
+    "follow-without-reference",
+    shown.filter((b) => CAMERA_FOLLOWS.test(b.camera) && !MOTION_REFERENCE.test(`${b.camera} ${b.motion} ${b.visualAction}`)).map((b) => b.id),
+    "Камера идёт за объектом, но в кадре нет ориентира движения — скорость и перемещение не прочитаются",
+  );
+
+  // Объект идёт в объектив и одновременно должен оставаться целиком в кадре тем же размером.
+  // Либо камера отступает, либо движение проходит мимо неё.
+  add(
+    "toward-lens-fixed-scale",
+    shown
+      .filter((b) => /\btoward (?:the )?camera\b|\binto the lens\b/i.test(`${b.camera} ${b.motion}`))
+      .filter((b) => !CAMERA_MOVES.test(b.camera))
+      .filter((b) => b.composition !== "center")
+      .map((b) => b.id),
+    "Объект движется в объектив, а камера неподвижна и обязана удержать масштаб — задайте отход камеры или движение мимо неё",
+  );
 
   // Сцена, которая сама объявляет себя происходящей раньше предыдущих. В ролике на сорок
   // секунд флешбэк читается как ошибка монтажа, а не как приём: после порванного купола

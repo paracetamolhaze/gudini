@@ -21,5 +21,6 @@
     "Faces and bodies stay real: no beauty smoothing, no plastic skin, no doll proportions, no extra fingers or limbs",
     "No readable interface text, price tags, documents or long signage is requested from the generator; anything that must be read is said in the voice-over"
   ],
-  "forbiddenDrift": "anime, cartoon, cel shading, comic ink outlines and any hand-drawn look; 3D render, CGI or game-engine plastic; beauty-filter skin; the whole stack of 8K, HDR, epic, cinematic, heavy bokeh, lens flare and shake piled onto one shot; magic smoke, holograms, glowing symbols and floating thoughts with no basis in the script; replacing the story's real people, places and events with metaphors; moving a real event into a fictional world because of the character's outfit"
+  "forbiddenDrift": "anime, cartoon, cel shading, comic ink outlines and any hand-drawn look; 3D render, CGI or game-engine plastic; beauty-filter skin; the whole stack of 8K, HDR, epic, cinematic, heavy bokeh, lens flare and shake piled onto one shot; magic smoke, holograms, glowing symbols and floating thoughts with no basis in the script; replacing the story's real people, places and events with metaphors; moving a real event into a fictional world because of the character's outfit",
+  "shotWorld": "the real place named in this shot, built and lit the way it actually looks, with the wear, clutter and imperfection of a used space; nothing from any other location is mixed in"
 }

@@ -303,7 +303,7 @@ test("Промпт шота: действие впереди, состав ка�
   // участников не добавляем, но естественный фон в общественном месте больше не запрещён
   assert.match(p, /No other participants/);
   assert.match(p, /Incidental passers-by are allowed only where the place would naturally have them/);
-  assert.match(p, /nothing hovers, floats or drifts in place/);
+  assert.match(p, /nothing hovers or drifts in place/);
   // Единственная цель кадра идёт сразу за действием, до стиля и запретов
   const key = p.indexOf("The one thing that must be visible");
   assert.ok(key > action && key < p.indexOf("Style:"), "keyMoment должен стоять между действием и стилем");
@@ -335,7 +335,11 @@ test("Universe Lock: мир из профиля попадает в сценар
   assert.doesNotMatch(planner, /нарисован/i, "слово «нарисованы» было вшито в код блока");
   const block = universePromptBlock(universe);
   assert.doesNotMatch(block, /drawn in this style/, "«drawn» было вшито в код production-блока");
-  assert.match(block, /Never drift into: anime/);
+  // Запреты стиля в запрос кадра больше не дублируются: они уже стоят строкой в конце
+  // промпта, а планировщику список запретов по-прежнему выдаётся целиком.
+  assert.doesNotMatch(block, /Never drift into/, "список запретов дублировался в каждом запросе");
+  assert.match(planner, /Запрещено: anime/);
+  assert.doesNotMatch(block, /a street, a flat, an office/, "перечисление чужих мест подмешивалось к локации кадра");
   assert.doesNotMatch(block, /Naruto/i, "в production-промпте нет названия франшизы");
   const plan = buildFilmPlan({ character: withRefs, bible, beats: beats120(), duration: 120, cfg: cfg() });
   assert.equal(plan.universeId, "gudini-photoreal");
@@ -343,7 +347,7 @@ test("Universe Lock: мир из профиля попадает в сценар
   assert.equal(plan.bible.universeId, "gudini-photoreal");
   for (const s of plan.shots) {
     assert.match(s.prompt, /World \(the same in every shot\)/);
-    assert.match(s.prompt, /Never drift into/);
+    assert.match(s.prompt, /No split screen, no talking to camera/);
     assert.doesNotMatch(s.prompt, /Naruto/i);
   }
   const ai = plan.beats.filter((b) => b.displayMode !== "author");

@@ -5,7 +5,7 @@ import type { Project } from "../store";
 import type { StoryResearchPack } from "../storyResearch";
 import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
-import { planStory, STORY_VERSION } from "./story";
+import { planStory, reconcileEventRefs, STORY_VERSION } from "./story";
 import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
 import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, requiredEvents, retryIssues } from "./criteria";
 import { generateGroups } from "./generate";
@@ -124,6 +124,9 @@ export async function runAiFilmStage(args: {
       // Обязательный набор первого захода возвращается силой: снять обязательность вместо
       // постановки сцены модель не может — это делало проверку зелёной, не показав события.
       const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events) };
+      // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
+      // событие в сцене и забывает переписать его в bible.events.
+      reconcileEventRefs(retryBible, retry.beats);
       const retryPlan = buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg });
       // Выбор по тяжести и сохранённым событиям, а не по числу строк.
       const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };

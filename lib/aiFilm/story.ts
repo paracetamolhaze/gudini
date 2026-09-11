@@ -792,5 +792,41 @@ export async function planStory(args: {
   // Герой истории и постоянный персонаж — один человек: в тексте сцен остаётся одно имя,
   // иначе Veo рисует и «Каспера», и Гудини рядом.
   renameHeroToCharacter(beats, bible.playedByGudini, args.character.name);
+  reconcileEventRefs(bible, beats);
   return { bible, beats, phrases };
+}
+
+/**
+ * Сцена сослалась на событие, которого модель не переписала в контракт. Само содержание при
+ * этом на месте: у сцены есть и наблюдаемое изменение, и предметы с состояниями. Такая запись
+ * добавляется в контракт НЕобязательной — ссылка перестаёт висеть в пустоте, а обязательства
+ * не меняются: обязательным событие делает только модель, и непокрытое обязательное событие
+ * по-прежнему запрещает оплату.
+ *
+ * Без этого исправный план — заказ, прыжок, купол, запасной, приземление, отзыв — не проходил
+ * ворота из-за бухгалтерии: во втором заходе модель оставила в контракте четыре события из
+ * семи, хотя сцены описывали все семь.
+ */
+export function reconcileEventRefs(bible: StoryBible, beats: StoryBeat[]): number {
+  const known = new Set(bible.events.map((e) => e.id));
+  let added = 0;
+  for (const b of beats) {
+    if (b.displayMode === "author") continue;
+    for (const id of b.eventIds ?? []) {
+      if (!id || known.has(id)) continue;
+      // Подтвердить нечем — ссылка остаётся битой, и разбор скажет об этом прямо.
+      if (!b.keyMoment || !(b.objects ?? []).length) continue;
+      bible.events.push({
+        id,
+        observable: b.keyMoment,
+        required: false,
+        fromPhrase: 1,
+        toPhrase: 1,
+        objects: b.objects.map((o) => ({ ...o })),
+      });
+      known.add(id);
+      added++;
+    }
+  }
+  return added;
 }

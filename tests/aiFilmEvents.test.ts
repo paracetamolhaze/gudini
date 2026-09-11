@@ -735,3 +735,22 @@ test("экран с картинкой — замечание, требован�
   const hard = withAction("Gudini holds a receipt and the text on it says five dollars", "the price is clearly shows the price on paper");
   assert.ok(hard.some((i) => i.code === "readable-text" && i.severity === "block"), JSON.stringify(hard.map((i) => i.code)));
 });
+
+test("ссылка сцены на событие, забытое в контракте, чинится, а не блокирует план", async () => {
+  const { reconcileEventRefs } = await import("../lib/aiFilm/story");
+  const bible = bibleWith(EVENTS.filter((e) => e.id !== "review"));
+  const { beats } = controlPlan();
+  const added = reconcileEventRefs(bible, beats);
+  assert.equal(added, 1, "забытое событие обязано вернуться в контракт");
+  const restored = bible.events.find((e) => e.id === "review")!;
+  assert.equal(restored.required, false, "восстановленное событие необязательное: обязательность ставит только модель");
+  assert.ok(restored.objects.length, "у восстановленного события есть проверяемые предметы");
+  const issues = auditPlan(beats, bible, character);
+  assert.ok(!issues.some((i) => i.code === "event-unknown-reference"), JSON.stringify(issues.map((i) => i.code)));
+
+  // сцена без предметов подтвердить нечем — ссылка остаётся битой и разбор об этом говорит
+  const bare = bibleWith(EVENTS.filter((e) => e.id !== "review"));
+  const stripped = beats.map((b) => (b.eventIds.includes("review") ? { ...b, objects: [] } : b));
+  assert.equal(reconcileEventRefs(bare, stripped), 0);
+  assert.ok(auditPlan(stripped, bare, character).some((i) => i.code === "event-unknown-reference"));
+});

@@ -32,7 +32,7 @@ const beat = (o: Partial<StoryBeat> & { visualAction: string }): StoryBeat => ({
   id: "B1", start: 0, end: 8, meaning: "", storyBeat: "", displayMode: "full_ai",
   purpose: "explain", priority: "medium", requiresGeneration: true, gudiniVisible: false,
   universeAdaptation: "", location: "a city street", motion: "he steps forward",
-  keyMoment: "", anchorPhrase: "", anchorAtSec: null, eventIds: [], objects: [], stateBefore: "", stateAfter: "",
+  keyMoment: "", anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: [], objects: [], stateBefore: "", stateAfter: "",
   continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium",
   camera: "Camera stands across the street at eye height; he walks past camera on the left",
   cameraAngle: "eye_level", composition: "center",
@@ -541,7 +541,11 @@ test("«at eye level» без притяжательного тоже распо
 
 test("разбор плана находит противоречия и не шумит на здоровых сценах", async () => {
   const { auditPlan } = await import("../lib/aiFilm/audit");
-  const bible = bibleOf("explainer");
+  // контракт событий у здорового плана не пустой: пустой контракт — сам по себе дефект
+  const bible = {
+    ...bibleOf("explainer"),
+    events: [{ id: "open", observable: "the box opens", required: false, fromPhrase: 0, toPhrase: 0, objects: [{ id: "box", before: "sealed", after: "open" }] }],
+  };
   const hero = { name: "Gudini", referenceFiles: ["/tmp/r.png"] };
   const codes = (bs: StoryBeat[]) => auditPlan(bs, bible, hero).map((a) => a.code);
 

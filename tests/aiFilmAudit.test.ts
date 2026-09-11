@@ -17,7 +17,7 @@ const shot: FilmShot = {
   id: "G1-1", groupId: "G1", index: 0, beatIds: ["B1"], displayMode: "full_ai",
   gudiniVisible: false, generationProfile: "environment", model: "veo-3.1-fast-generate-001",
   mode: "text", usedSeconds: 8, veoSeconds: 8, aspectRatio: "9:16", resolution: "720p",
-  useReferences: false, eventIds: [], changeBySec: null, prompt: "An empty forest", dependsOn: null, cost: 0.64,
+  useReferences: false, eventIds: [], changeBySec: null, deadlines: [], prompt: "An empty forest", dependsOn: null, cost: 0.64,
 };
 
 test("Veo: a failed download resumes the accepted operation without paying for a second generation", async (t) => {

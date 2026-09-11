@@ -64,6 +64,8 @@ type AiFilmPlanView = {
     groups: number; independentGroups: number; chains: number; estimatedCost: number; estimatedWallMinutes: number; concurrency: number;
   };
   warnings?: string[];
+  /** типизированные нарушения: те же, по которым воркер не пускает план к оплате */
+  issues?: { code: string; severity: "block" | "warn"; message: string; beatIds: string[] }[];
 };
 
 // версия берётся из общего модуля: своё число на странице однажды отстало от воркера
@@ -911,6 +913,9 @@ function AiFilmPanel({
   const st = plan.stats;
   const aiBeats = plan.beats.filter((b) => b.displayMode !== "author");
   const noScenes = st.calls === 0;
+  // Кнопка выключается ровно по тем же нарушениям, по которым воркер откажет перед оплатой:
+  // иначе пользователь нажимает «Создать видео» и получает отказ уже после ожидания.
+  const blocking = (plan.issues ?? []).filter((i) => i.severity === "block");
   const generated = project.aiFilm?.status === "generated";
   const price = usd(st.estimatedCost);
 
@@ -942,6 +947,12 @@ function AiFilmPanel({
         <div key={i} className="warn-box">{w}</div>
       ))}
 
+      {blocking.length > 0 && (
+        <div className="state-box">
+          План не готов к генерации: {blocking.map((i) => i.message).join(". ")}. Обновите план — сцену нужно поставить так, чтобы событие было видно.
+        </div>
+      )}
+
       {noScenes && (
         <div className="state-box">
           В плане нет AI-сцен: {plan.warnings?.length ? "см. замечания выше" : "разбор истории не выделил эпизодов для генерации"}. Обновите план или измените сценарий.
@@ -958,10 +969,10 @@ function AiFilmPanel({
         {hasOutput ? (
           <>
             <Button onClick={onNext}>К публикации</Button>
-            <Button variant="secondary" onClick={() => void onStart("generate")} busy={starting} disabled={noScenes}>Создать заново · ≈ {price}</Button>
+            <Button variant="secondary" onClick={() => void onStart("generate")} busy={starting} disabled={noScenes || blocking.length > 0}>Создать заново · ≈ {price}</Button>
           </>
         ) : (
-          <Button onClick={() => void onStart("generate")} busy={starting} disabled={noScenes}>Создать видео · ≈ {price}</Button>
+          <Button onClick={() => void onStart("generate")} busy={starting} disabled={noScenes || blocking.length > 0}>Создать видео · ≈ {price}</Button>
         )}
         <button type="button" className="link-btn" onClick={() => void onStart("plan")} disabled={starting}>Обновить план</button>
       </div>

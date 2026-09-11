@@ -84,7 +84,7 @@ test("приземление вместо отзыва не засчитывае
     id: "B1", start: 15, end: 21, meaning: "", storyBeat: "", displayMode: "full_ai", purpose: "resolution",
     priority: "high", requiresGeneration: true, gudiniVisible: true, universeAdaptation: "",
     visualAction: "Gudini lands on the grass and comes to a stop", keyMoment: "his feet touch the ground",
-    anchorPhrase: "", anchorAtSec: null, eventIds: ["review"],
+    anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: ["review"],
     objects: [{ id: "reserve-canopy", before: "open", after: "collapsed on the grass" }],
     location: "a field", motion: "", stateBefore: "", stateAfter: "", continuityGroup: null, continuityRequired: false,
     transition: "cut", shotType: "medium", camera: "Camera is at eye level", cameraAngle: "eye_level",
@@ -165,14 +165,33 @@ test("якорь и длительность показа меняют врем�
 
   // разное время якоря даёт разный контракт в запросе
   const early = changeDeadline([{ ...tear, anchorAtSec: 1 }], tear.start);
-  const late = changeDeadline([{ ...tear, anchorAtSec: 5 }], tear.start);
+  const late = changeDeadline([{ ...tear, anchorAtSec: 3 }], tear.start);
   assert.notEqual(early, late);
   const bible = bibleWith(EVENTS);
   const a = buildFilmPlan({ character, bible, beats: [{ ...tear, anchorAtSec: 1 }], duration, cfg: cfg() }).shots[0].prompt;
-  const b = buildFilmPlan({ character, bible, beats: [{ ...tear, anchorAtSec: 5 }], duration, cfg: cfg() }).shots[0].prompt;
+  const b = buildFilmPlan({ character, bible, beats: [{ ...tear, anchorAtSec: 3 }], duration, cfg: cfg() }).shots[0].prompt;
   assert.notEqual(a, b, "смена якоря обязана менять текст запроса");
   assert.match(a, /visible by second 1 of the clip/);
-  assert.match(b, /visible by second 5 of the clip/);
+  assert.match(b, /visible by second 3 of the clip/);
+
+  // монтажное окно входит в запрос: одно и то же действие с разной используемой длиной
+  // даёт разные тексты. Раньше usedSeconds на промпт не влиял вовсе.
+  const short = buildFilmPlan({ character, bible, beats: [{ ...tear, anchorAtSec: 1 }], duration, cfg: cfg() }).shots[0];
+  const longer = buildFilmPlan({
+    character, bible, beats: [{ ...tear, anchorAtSec: 1, end: tear.start + 8 }], duration: duration + 8, cfg: cfg(),
+  }).shots[0];
+  assert.notEqual(short.usedSeconds, longer.usedSeconds);
+  assert.notEqual(short.prompt, longer.prompt, "длина используемого отрезка обязана менять запрос");
+
+  // якорь за пределами используемого отрезка не превращается в невыполнимый срок:
+  // требовать событие на 10-й секунде клипа, от которого в монтаж идут 3 с, бессмысленно
+  const outside = buildFilmPlan({ character, bible, beats: [{ ...tear, anchorAtSec: 10 }], duration, cfg: cfg() });
+  assert.equal(outside.shots[0].changeBySec, null);
+  assert.doesNotMatch(outside.shots[0].prompt, /visible by second 10/);
+  assert.ok(
+    outside.issues.some((i) => i.code === "anchor-outside-shot"),
+    `невозможный якорь обязан быть виден в плане: ${JSON.stringify(outside.issues)}`,
+  );
 });
 
 test("якорь ищется по словам, а не по номеру фразы", () => {
@@ -196,8 +215,24 @@ test("после переноса камеры вниз движение не о
   assert.equal(b.cameraAngle, "low_angle");
   assert.match(b.camera, /he falls toward the camera/);
   assert.doesNotMatch(b.camera, /away from/);
-  assert.match(b.motion, /toward camera/);
+  assert.match(b.motion, /toward the camera/);
   assert.doesNotMatch(b.motion, /away from camera/);
+
+  // и главное: обычная сцена не получает выдуманного падения. Герой стоит на полу
+  // и поднимает книгу над головой — камера переезжает вниз, действие остаётся прежним.
+  const still = {
+    camera: "Camera is directly above him looking straight down",
+    cameraAngle: "overhead" as const,
+    composition: "high_space_below" as const,
+    visualAction: "Gudini stands still and lifts a book above his head",
+    keyMoment: "the book rises above his head",
+    motion: "he lifts the book slowly",
+  };
+  assert.equal(reconcileFraming(still), true);
+  assert.equal(still.cameraAngle, "low_angle");
+  assert.doesNotMatch(still.camera, /falls/, "падение не выдумывается");
+  assert.doesNotMatch(still.motion, /falls/);
+  assert.equal(still.motion, "he lifts the book slowly");
 });
 
 // ─────────────────────────────── 6. состояния по предметам
@@ -261,4 +296,114 @@ test("в промпт сцены уходят только относящиес�
   const picked = applicableContinuity(rules, [{ id: "parcel", before: "sealed", after: "open" }], "Gudini tears open the parcel");
   assert.deepEqual(picked, ["the parcel keeps the same shipping label"]);
   assert.equal(applicableContinuity(rules, [], "he walks along a road").length, 0);
+});
+
+// ─────────────────────────────── 8. контрпримеры разбора версии 9
+
+test("перекладывание телефона не закрывает отправку отзыва", () => {
+  const raw = controlRaw().map((r) =>
+    r.eventIds[0] === "review"
+      ? {
+          ...r,
+          visualAction: "Gudini takes the phone out of his pocket and puts it on the table",
+          keyMoment: "the phone lies on the table",
+          objects: [{ id: "phone", before: "in his pocket", after: "lying on the table" }],
+        }
+      : r,
+  );
+  const { plan } = controlPlan(raw as any);
+  const missed = plan.issues.find((i) => i.code === "event-not-covered");
+  assert.ok(missed, "обещанного перехода нет — событие не показано");
+  assert.ok(missed!.eventIds?.includes("review"), JSON.stringify(plan.issues));
+  assert.equal(missed!.severity, "block");
+});
+
+test("испорченный контракт и ссылка в никуда не дают зелёного плана", () => {
+  // событие без предметов: доказывать нечем
+  const bare = auditPlan(
+    controlPlan().beats,
+    bibleWith([{ id: "order", observable: "he taps buy", required: true, fromPhrase: 1, toPhrase: 1, objects: [] } as StoryEvent]),
+    character,
+  );
+  assert.ok(bare.some((i) => i.code === "event-contract-broken" && i.severity === "block"), JSON.stringify(bare));
+  // ссылка на событие, которого в контракте нет
+  const dangling = auditPlan(
+    controlPlan().beats,
+    bibleWith(EVENTS.filter((e) => e.id !== "review")),
+    character,
+  );
+  assert.ok(dangling.some((i) => i.code === "event-unknown-reference" && i.severity === "block"), JSON.stringify(dangling));
+});
+
+test("несовместимый соседний бит не исчезает из запросов", () => {
+  // два действия одной непрерывной группы, но в разных местах: в один кадр их не снять
+  const raw = controlRaw().map((r, i) => (i < 2 ? { ...r, continuityGroup: "c1", continuityRequired: true } : r));
+  const { plan } = controlPlan(raw as any);
+  const inShots = new Set(plan.shots.flatMap((s) => s.beatIds));
+  const shown = plan.beats.filter((b) => b.displayMode !== "author");
+  for (const b of shown) assert.ok(inShots.has(b.id), `бит ${b.id} остался в таймлайне, но не попал ни в один запрос`);
+  assert.ok(!plan.issues.some((i) => i.code === "beat-not-in-shot"), JSON.stringify(plan.issues));
+  // и оба действия видны в текстах запросов, а не только первое
+  const prompts = plan.shots.map((s) => s.prompt).join(" ");
+  assert.match(prompts, /taps buy/);
+  assert.match(prompts, /tears open the delivered parcel/);
+  assert.ok(!plan.issues.some((i) => i.code === "event-not-covered"), JSON.stringify(plan.issues));
+});
+
+test("два события одного клипа получают разные сроки", () => {
+  // одно место, один ракурс, одна группа: биты объединяются в один запрос
+  const raw = controlRaw().slice(0, 2).map((r, i) => ({
+    ...r,
+    location: "a kitchen table",
+    cameraAngle: "eye_level",
+    camera: "Camera is at eye level in front of him",
+    continuityGroup: "c1",
+    continuityRequired: true,
+    anchorPhrase: i === 0 ? "заказал" : "коробка",
+  }));
+  const { plan } = controlPlan(raw as any);
+  const merged = plan.shots.find((s) => s.beatIds.length > 1);
+  assert.ok(merged, `биты не объединились: ${JSON.stringify(plan.shots.map((s) => s.beatIds))}`);
+  assert.equal(merged!.deadlines.length, 2);
+  const seconds = merged!.deadlines.map((d) => d.bySec);
+  assert.notEqual(seconds[0], seconds[1], `сроки совпали: ${JSON.stringify(merged!.deadlines)}`);
+  assert.match(merged!.prompt, /each at its own time/);
+});
+
+test("пауза в речи не сдвигает момент события", () => {
+  // предыдущая фраза кончается на 4 с, следующая начинается на 6 с, слово звучит на 7 с
+  const words: Word[] = [
+    { word: "Он", start: 0, end: 1 },
+    { word: "прыгнул.", start: 3, end: 4 },
+    { word: "Купол", start: 6, end: 6.8 },
+    { word: "порвался", start: 7, end: 7.8 },
+    { word: "сразу.", start: 8, end: 8.6 },
+  ];
+  const phrases = phrasesFromWords(words);
+  const raw = [
+    { fromPhrase: 1, toPhrase: 1, displayMode: "author", visualAction: "", keyMoment: "", eventIds: [], objects: [], location: "", cameraAngle: "eye_level", camera: "", motion: "" },
+    { fromPhrase: 2, toPhrase: 2, displayMode: "full_ai", visualAction: "The canopy tears above Gudini", keyMoment: "the canopy tears", anchorPhrase: "порвался", eventIds: ["tear"], objects: [{ id: "main-canopy", before: "open and whole", after: "torn into strips" }], location: "open sky", cameraAngle: "low_angle", camera: "Camera is below him looking up", motion: "the seam splits" },
+  ];
+  const beats = beatsFromRaw(raw as any, phrases, 8.6, words);
+  const tear = beats.find((b) => b.eventIds.includes("tear"))!;
+  assert.ok(tear.anchorAtSec != null, "якорь не найден");
+  const absolute = tear.start + tear.anchorAtSec!;
+  assert.ok(Math.abs(absolute - 7) < 0.35, `момент уехал: начало ${tear.start}, смещение ${tear.anchorAtSec}, абсолютно ${absolute}`);
+});
+
+test("возвращение в прежнее место и нечитаемая квитанция не запрещают генерацию", () => {
+  const bible = bibleWith(EVENTS);
+  const home = auditPlan(
+    controlPlan(controlRaw().map((r, i) => (i === 0 || i === 2 ? { ...r, location: "a kitchen table" } : i === 1 ? { ...r, location: "a doorstep" } : r)) as any).beats,
+    bible, character,
+  );
+  const jump = home.find((i) => i.code === "location-jump-back");
+  if (jump) assert.equal(jump.severity, "warn", "возвращение домой не доказывает нарушение хронологии");
+  const receipt = auditPlan(
+    controlPlan(controlRaw().map((r) => (r.eventIds[0] === "delivery"
+      ? { ...r, visualAction: "Gudini folds an unreadable receipt and puts it in his pocket", keyMoment: "the receipt goes into his pocket" }
+      : r)) as any).beats,
+    bible, character,
+  );
+  assert.ok(!receipt.some((i) => i.code === "readable-text"), JSON.stringify(receipt));
 });

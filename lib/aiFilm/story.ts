@@ -82,7 +82,7 @@ export const sentencesFromWords = phrasesFromWords;
  * номера фраз для этого слишком грубы, а именно к слову привязано видимое изменение.
  * null — слова в этом отрезке речи нет.
  */
-export function anchorOffset(words: Word[], anchor: string, start: number, end: number): number | null {
+export function anchorAbsolute(words: Word[], anchor: string, start: number, end: number): number | null {
   const target = anchor.toLowerCase().split(/\s+/).filter(Boolean);
   if (!target.length || !words.length) return null;
   const inside = words.filter((w) => w.end > start - 1e-6 && w.start < end + 1e-6);
@@ -91,10 +91,16 @@ export function anchorOffset(words: Word[], anchor: string, start: number, end: 
   const want = target.map(norm).filter(Boolean);
   for (let i = 0; i + want.length <= flat.length; i++) {
     if (want.every((t, k) => flat[i + k] === t)) {
-      return Math.max(0, Math.round((inside[i].start - start) * 10) / 10);
+      return Math.round(inside[i].start * 100) / 100;
     }
   }
   return null;
+}
+
+/** Прежнее имя: смещение якоря от начала отрезка. */
+export function anchorOffset(words: Word[], anchor: string, start: number, end: number): number | null {
+  const abs = anchorAbsolute(words, anchor, start, end);
+  return abs == null ? null : Math.max(0, Math.round((abs - start) * 10) / 10);
 }
 
 export function storySystemPrompt(character: CharacterProfile, universe: UniverseProfile, coverage: { target: number; max: number }): string {
@@ -106,7 +112,7 @@ export function storySystemPrompt(character: CharacterProfile, universe: Univers
 У каждого события: короткий id; observable — наблюдаемое изменение по-английски; required — обязательно ли оно для понимания истории; номера фраз, где оно звучит; objects — предметы с их состоянием до и после.
 objects.id — устойчивое короткое имя предмета: main-canopy, reserve-canopy, parcel, phone, harness. Основной и запасной купол — РАЗНЫЕ предметы с разными id, их состояния не смешиваются.
 
-ШАГ 2. Реши, какие события показываешь. Не обязаны все: генерация стоит денег, ориентир ${Math.round(coverage.target * 100)}% времени ролика, не больше ${Math.round(coverage.max * 100)}%. Но обязательные события должны быть показаны или явно помечены как необязательные. Число сцен определяется историей и бюджетом, а не заранее заданной цифрой.
+ШАГ 2. Реши, какие события показываешь. Не обязаны все: генерация стоит денег, ориентир ${Math.round(coverage.target * 100)}% времени ролика, не больше ${Math.round(coverage.max * 100)}%. Обязательное событие должно быть показано. Снять с него обязательность, чтобы план прошёл проверку, нельзя: required ставится один раз по смыслу истории, а не по удобству. Число сцен определяется историей и бюджетом, а не заранее заданной цифрой.
 
 ШАГ 3. Разложи выбранные события по речи и добавь, где нужно, связки автора.
 - Первый бит ролика — full_ai, если в первых фразах есть что показать. Ролик, начинающийся с двадцати секунд говорящей головы, зритель закрывает.
@@ -281,12 +287,16 @@ type RawStory = { storyArc?: Partial<StoryBible["storyArc"]>; bible?: any; beats
 const str = (v: unknown, d = "") => (typeof v === "string" && v.trim() ? v.trim() : d);
 const arr = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
 
-/** Идентификатор предмета: короткий, из латиницы и дефисов, чтобы состояния сходились по нему. */
-const objectId = (v: unknown) =>
+/**
+ * Идентификатор предмета или события: короткий слаг. Буквы любых алфавитов сохраняются:
+ * прежняя версия вырезала кириллицу целиком, и событие с id «отзыв» молча исчезало из
+ * контракта, а план с непокрытым событием становился «зелёным».
+ */
+const slugId = (v: unknown) =>
   String(v ?? "")
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/[^\p{L}\p{N}-]+/gu, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);
 
@@ -296,7 +306,7 @@ export function objectStates(v: unknown): ObjectState[] {
   const seen = new Set<string>();
   const out: ObjectState[] = [];
   for (const raw of v) {
-    const id = objectId((raw as any)?.id);
+    const id = slugId((raw as any)?.id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
     out.push({ id, before: str((raw as any)?.before), after: str((raw as any)?.after) });
@@ -356,11 +366,12 @@ export function angleFromCameraText(text: string): CameraAngle | null {
 export function flipCameraRelativeMotion(motion: string): string {
   const MARK = "@@FLIP@@";
   return motion
-    .replace(/\baway from (?:the )?camera\b/gi, MARK)
-    .replace(/\btowards? (?:the )?camera\b/gi, "away from camera")
+    .replace(/\baway from (?:the camera|it)\b/gi, MARK)
+    .replace(/\btowards? (?:the camera|it)\b/gi, "away from the camera")
+    .replace(/\baway from camera\b/gi, MARK)
+    .replace(/\btowards? camera\b/gi, "away from the camera")
     .split(MARK)
-    .join("toward camera")
-    .replace(/\bfalls? away from it\b/gi, "falls toward it")
+    .join("toward the camera")
     .replace(/\bout of the bottom of frame\b/gi, "past the camera");
 }
 
@@ -383,11 +394,15 @@ export function reconcileFraming(
   const objectAbove = /\babove (?:him|his head|gudini)\b|\boverhead\b/i.test(`${beat.visualAction ?? ""} ${beat.keyMoment ?? ""}`);
   const camAbove = angleFromCameraText(beat.camera) ?? beat.cameraAngle;
   if (objectAbove && (camAbove === "overhead" || camAbove === "high_angle")) {
-    // Хвост описания после точки с запятой раньше сохранялся как есть, и после переворота
-    // камеры в промпте оставалось «он падает ОТ неё» при камере снизу. Направление движения
-    // относительно камеры пересчитывается вместе с её положением, иначе противоречие просто
-    // переезжает из одной строки в другую.
-    beat.camera = "Camera is below him looking up, so that both he and what is above him stay in frame; he falls toward the camera";
+    // Камера переезжает вниз, но ДЕЙСТВИЕ не выдумывается. Прошлая версия дописывала
+    // «он падает к камере» в любую сцену — даже туда, где герой стоит на полу и поднимает
+    // книгу над головой. Сохраняем собственное движение героя, только переворачивая
+    // направление относительно камеры.
+    const tail = beat.camera.includes(";") ? beat.camera.slice(beat.camera.indexOf(";") + 1).trim() : "";
+    const moved = tail ? flipCameraRelativeMotion(tail) : "";
+    beat.camera =
+      "Camera is below him looking up, so that both he and what is above him stay in frame" +
+      (moved ? `; ${moved}` : "");
     beat.cameraAngle = "low_angle";
     beat.composition = "low_space_above";
     if (beat.motion) beat.motion = flipCameraRelativeMotion(beat.motion);
@@ -459,14 +474,16 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
   // такие записи не сохраняем: пустой контракт хуже отсутствующего, он создаёт ложную уверенность.
   const events: StoryEvent[] = (Array.isArray(b.events) ? b.events : [])
     .map((e: any) => ({
-      id: objectId(e?.id),
+      id: slugId(e?.id),
       observable: str(e?.observable),
       required: e?.required !== false,
       fromPhrase: Math.max(1, Math.round(Number(e?.fromPhrase) || 1)),
       toPhrase: Math.max(1, Math.round(Number(e?.toPhrase) || Number(e?.fromPhrase) || 1)),
       objects: objectStates(e?.objects),
     }))
-    .filter((e: StoryEvent) => e.id && e.observable)
+    // Битые записи НЕ выбрасываются: молча удалённое обязательное событие превращало
+    // непокрытый план в «зелёный». Они доезжают до разбора и там становятся ошибкой контракта.
+    .filter((e: StoryEvent) => e.id || e.observable)
     .slice(0, 12);
   // Тот, кого играет постоянный персонаж, — это он сам, а не второй человек в кадре.
   // Без этого планировщик писал «Гудини играет Каспера» и одновременно заводил Каспера
@@ -566,7 +583,7 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
     const anchorPhrase = anchorRaw && spoken.includes(anchorRaw.toLowerCase()) ? anchorRaw : "";
     // Секунда якоря внутри бита: раньше якорь никуда не влиял, и его смена оставляла
     // побайтно тот же промпт. Считается по пословной расшифровке, а не по номеру фразы.
-    const anchorAtSec = anchorPhrase ? anchorOffset(words, anchorPhrase, start, end) : null;
+    const anchorAbs = anchorPhrase ? anchorAbsolute(words, anchorPhrase, start, end) : null;
     return {
       id: `B${i + 1}`,
       start,
@@ -582,8 +599,9 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       visualAction: str(e.visualAction),
       keyMoment: mode !== "author" ? str(e.keyMoment) : "",
       anchorPhrase: mode !== "author" ? anchorPhrase : "",
-      anchorAtSec: mode !== "author" ? anchorAtSec : null,
-      eventIds: mode !== "author" ? arr(e.eventIds).map(objectId).filter(Boolean).slice(0, 6) : [],
+      anchorAtSec: null,
+      anchorAbsSec: mode !== "author" ? anchorAbs : null,
+      eventIds: mode !== "author" ? arr(e.eventIds).map(slugId).filter(Boolean).slice(0, 6) : [],
       objects: mode !== "author" ? objectStates(e.objects) : [],
       location: str(e.location),
       motion: mode !== "author" ? str(e.motion) : "",
@@ -608,6 +626,14 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
     if (beats[i].end < beats[i].start) beats[i].end = beats[i].start;
     beats[i].suggestedDuration = Math.round((beats[i].end - beats[i].start) * 10) / 10;
   }
+  // Относительное смещение якоря считается ПОСЛЕ всех сдвигов границ. Паузы в речи
+  // переносят начало бита, и смещение, посчитанное по исходной фразе, указывало не туда.
+  for (const b of beats) {
+    if (b.anchorAbsSec == null) { b.anchorAtSec = null; continue; }
+    const rel = Math.round((b.anchorAbsSec - b.start) * 10) / 10;
+    b.anchorAtSec = rel >= -1e-6 && rel <= b.end - b.start + 1e-6 ? Math.max(0, rel) : null;
+  }
+
   // Камера и композиция сводятся к одному непротиворечивому описанию до того, как из них
   // соберут промпт: иначе Veo получает «камера сверху» и «камера снизу» в одном тексте.
   for (const b of beats) if (b.displayMode !== "author") reconcileFraming(b);

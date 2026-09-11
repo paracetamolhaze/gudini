@@ -52,6 +52,7 @@ export const beat = (
   keyMoment: mode === "author" ? "" : o.keyMoment ?? `something changes in ${id}`,
   anchorPhrase: mode === "author" ? "" : o.anchorPhrase ?? "",
   anchorAtSec: null,
+  anchorAbsSec: null,
   eventIds: [],
   objects: [],
   location: mode === "author" ? "" : "village rooftop",

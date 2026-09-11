@@ -6,7 +6,7 @@ import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
 import { auditPlan } from "./audit";
 import { storySystemPrompt } from "./story";
 import type {
-  AiFilmPlan, CameraAngle, CharacterProfile, Composition, ContinuityGroup, FilmShot, ObjectState, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
+  AiFilmPlan, CameraAngle, CharacterProfile, Composition, ContinuityGroup, EventDeadline, FilmShot, ObjectState, PlanIssue, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
 } from "./types";
 
 /**
@@ -116,19 +116,28 @@ export function compatiblePrefix(window: StoryBeat[]): StoryBeat[] {
   return out;
 }
 
+export type { EventDeadline } from "./types";
+
 /**
- * К какой секунде клипа изменение обязано быть видно. Считается по якорю в речи: он
- * привязан к слову, на котором зритель услышит про изменение. Без якоря остаётся null,
- * и промпт просто просит показать изменение рано, не выдумывая точных секунд.
+ * Сроки КАЖДОГО события клипа отдельно. Прежняя версия возвращала один якорь первого бита
+ * и назначала его всем изменениям сразу: коробка и отзыв требовались к одной и той же секунде.
+ *
+ * Якорь за пределами показанного отрезка не округляется, а отбрасывается: требовать событие
+ * на десятой секунде восьмисекундного клипа бессмысленно, и это отдельная проблема плана.
  */
-export function changeDeadline(beats: StoryBeat[], shotStart: number): number | null {
-  for (const b of beats) {
-    if (b.anchorAtSec == null) continue;
-    const abs = b.start + b.anchorAtSec;
-    const rel = Math.round((abs - shotStart) * 10) / 10;
-    if (rel >= 0) return rel;
-  }
-  return null;
+export function eventDeadlines(beats: StoryBeat[], shotStart: number, shownSeconds: number): EventDeadline[] {
+  return beats
+    .filter((b) => b.keyMoment)
+    .map((b) => {
+      const rel = b.anchorAtSec == null ? null : Math.round((b.start + b.anchorAtSec - shotStart) * 10) / 10;
+      const inside = rel != null && rel >= 0 && rel <= shownSeconds + 1e-6;
+      return { beatId: b.id, eventIds: b.eventIds ?? [], keyMoment: b.keyMoment, bySec: inside ? rel : null };
+    });
+}
+
+/** Прежнее имя: срок первого события клипа. */
+export function changeDeadline(beats: StoryBeat[], shotStart: number, shownSeconds = Number.POSITIVE_INFINITY): number | null {
+  return eventDeadlines(beats, shotStart, shownSeconds).find((d) => d.bySec != null)?.bySec ?? null;
 }
 
 /** Состояния предметов сцены одной строкой: «main-canopy — packed and intact; parcel — sealed». */
@@ -160,7 +169,7 @@ const PROBE_BEAT: StoryBeat = {
   id: "probe", start: 0, end: 8, meaning: "", storyBeat: "", displayMode: "full_ai",
   purpose: "explain", priority: "medium", requiresGeneration: true, gudiniVisible: true,
   universeAdaptation: "", visualAction: "he opens a box", keyMoment: "the box opens",
-  anchorPhrase: "", anchorAtSec: null, eventIds: ["probe"], objects: [{ id: "box", before: "sealed", after: "open" }],
+  anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: ["probe"], objects: [{ id: "box", before: "sealed", after: "open" }],
   location: "a room", motion: "he lifts the lid", stateBefore: "sealed", stateAfter: "open",
   continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium",
   camera: "Camera is at eye level in front of him", cameraAngle: "eye_level", composition: "center",
@@ -173,7 +182,7 @@ const PROBE_BEAT: StoryBeat = {
  * который одиннадцать коммитов подряд оставался прежним, и сохранённый план со старыми
  * промптами считался актуальным.
  */
-export function compilerFingerprint(character: CharacterProfile, universe: UniverseProfile): string {
+export function compilerFingerprint(character: CharacterProfile, universe: UniverseProfile, coverage = coverageConfig()): string {
   const bible: StoryBible = {
     characterId: character.id, universeId: universe.id, storyType: "explainer", staging: "everyday_life",
     reconstruction: false, visualStyle: character.styleLock, world: universe.name, mood: "calm",
@@ -182,10 +191,13 @@ export function compilerFingerprint(character: CharacterProfile, universe: Unive
     storyArc: { understand: "", gudiniRole: "", beginning: "", development: "", conflict: "", climax: "", meaning: "" },
     events: [],
   };
-  const probe = shotPrompt({
-    character, universe, bible, beats: [PROBE_BEAT], prev: null, mode: "text", aspectRatio: "9:16", changeBySec: 3,
-  });
-  return shortHash(`${storySystemPrompt(character, universe, { target: 0.5, max: 0.65 })}\n---\n${probe}`);
+  // Отпечаток считается по обеим веткам сборщика — одиночный клип и продолжение —
+  // и по настоящим настройкам покрытия: прежде он брал константы 0.5/0.65, поэтому
+  // смена ограничения покрытия меняла реальные промпты, не меняя отпечатка.
+  const second: StoryBeat = { ...PROBE_BEAT, id: "probe2", start: 8, end: 14, visualAction: "he lifts the lid", keyMoment: "the lid comes off", anchorAtSec: 1, anchorAbsSec: 9 };
+  const single = shotPrompt({ character, universe, bible, beats: [PROBE_BEAT], prev: null, mode: "text", aspectRatio: "9:16", deadlines: eventDeadlines([PROBE_BEAT], 0, 8), shownSeconds: 8 });
+  const pair = shotPrompt({ character, universe, bible, beats: [PROBE_BEAT, second], prev: PROBE_BEAT, mode: "extend", aspectRatio: "16:9", deadlines: eventDeadlines([PROBE_BEAT, second], 0, 6), shownSeconds: 6 });
+  return shortHash([storySystemPrompt(character, universe, coverage), single, pair, JSON.stringify(coverage)].join("\n---\n"));
 }
 
 /** Промпт shot: WHO / WHAT / WHERE / WHAT CHANGES, кадр, камера, непрерывность, запреты. */
@@ -198,10 +210,12 @@ export function shotPrompt(args: {
   beats: StoryBeat[];
   mode: "text" | "extend";
   aspectRatio: "16:9" | "9:16";
-  /** к какой секунде клипа изменение обязано быть видно */
-  changeBySec?: number | null;
+  /** сроки каждого события этого клипа */
+  deadlines?: EventDeadline[];
+  /** сколько секунд клипа реально попадёт в монтаж */
+  shownSeconds?: number;
 }): string {
-  const { character, universe, bible, beats, prev, mode, aspectRatio, changeBySec } = args;
+  const { character, universe, bible, beats, prev, mode, aspectRatio, deadlines, shownSeconds } = args;
   const beat = beats[0];
   const lines: string[] = [];
   // Порядок важен: Veo сильнее слушает начало промпта, поэтому сперва действие и движение,
@@ -223,13 +237,25 @@ export function shotPrompt(args: {
   }
   // Одно изменение ради которого снимается сцена — сразу после действия и до всего
   // остального: у генератора должна быть одна цель, а не список равноправных задач.
-  const keyMoments = beats.map((b) => b.keyMoment).filter(Boolean);
-  if (keyMoments.length) {
-    const deadline =
-      changeBySec != null
-        ? ` It has to be visible by second ${Math.max(1, Math.round(changeBySec))} of the clip, not at the very end.`
-        : " It happens early in the shot, not at the very end.";
-    lines.push(`The one thing that must be visible: ${keyMoments.join("; then ")}.${deadline}`);
+  // Срок у КАЖДОГО изменения свой. Раньше все ключевые моменты клипа склеивались в одну
+  // строку с общим сроком первого якоря: коробка и отзыв требовались к одной секунде.
+  const marks = deadlines?.length ? deadlines : beats.filter((b) => b.keyMoment).map((b) => ({ beatId: b.id, eventIds: b.eventIds ?? [], keyMoment: b.keyMoment, bySec: null as number | null }));
+  if (marks.length === 1) {
+    const d = marks[0];
+    lines.push(
+      `The one thing that must be visible: ${d.keyMoment}.` +
+        (d.bySec != null ? ` It has to be visible by second ${Math.max(1, Math.round(d.bySec))} of the clip.` : " It happens early in the shot, not at the very end."),
+    );
+  } else if (marks.length > 1) {
+    lines.push("What must be visible, each at its own time:");
+    marks.forEach((d, i) =>
+      lines.push(`${i + 1}. ${d.keyMoment}${d.bySec != null ? ` — by second ${Math.max(1, Math.round(d.bySec))} of the clip` : " — early in the shot"}`),
+    );
+  }
+  // Показанная длина входит в текст: один и тот же кадр на три и на восемь секунд — разные
+  // задачи, и прежде промпт этого не различал вовсе.
+  if (shownSeconds != null && shownSeconds > 0) {
+    lines.push(`Only the first ${shownSeconds.toFixed(1)} seconds of this clip are used in the edit; everything above must happen inside them.`);
   }
   const motions = beats.map((b) => b.motion).filter(Boolean);
   if (motions.length) lines.push(`Motion in order: ${motions.join(" Then: ")}`);
@@ -242,7 +268,7 @@ export function shotPrompt(args: {
   // Купол над головой не влезал в кадр, потому что здесь для каждой сцены стояло
   // «subject near the vertical center». Теперь место в кадре выбирается под то,
   // что должно быть видно, и это требование повторяется явно.
-  if (beat.keyMoment) {
+  if (marks.length) {
     lines.push(`Everything named above as the thing that must be visible is fully inside the frame, not cropped at any edge.`);
   }
   lines.push(`Camera angle: ${ANGLE_LINE[beat.cameraAngle]}.`);
@@ -536,11 +562,18 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
     const continuity = gBeats.some((b) => b.continuityRequired);
     let covered = 0;
     let idx = 0;
+    // true, когда прошлый клип оборвался на несовместимом бите: остаток группы — отдельная
+    // сцена, а не продолжение. Раньше остаток просто пропадал: covered прыгал на всю длину
+    // генерации, и второе действие исчезало из запросов, оставаясь «показанным» в таймлайне.
+    let splitByIncompatibility = false;
     while (covered < span - 0.05) {
-      const mode: FilmShot["mode"] = idx === 0 ? "text" : "extend";
-      // extension — только при явном требовании непрерывности; иначе один клип
-      if (mode === "extend" && (!continuity || idx > MAX_CHAIN_EXTENSIONS)) break;
-      const veoSeconds = mode === "text" ? normalizeVeoDuration(Math.min(span, 8), "text", { references: useReferences }) : VEO_EXTEND_SECONDS;
+      const chainStep = idx > 0 && continuity && !splitByIncompatibility;
+      if (idx > 0 && !chainStep && !splitByIncompatibility) break;
+      if (chainStep && idx > MAX_CHAIN_EXTENSIONS) break;
+      const mode: FilmShot["mode"] = chainStep ? "extend" : "text";
+      const veoSeconds = mode === "text"
+        ? normalizeVeoDuration(Math.min(span - covered, 8), "text", { references: useReferences })
+        : VEO_EXTEND_SECONDS;
       const from = first.start + covered;
       const to = Math.min(last.end, from + veoSeconds);
       // Все биты, попадающие в этот клип, по порядку. Раньше отсюда брался ОДИН бит с
@@ -548,13 +581,18 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       // последовательных действий «вскрывает посылку» и «достаёт парашют» в промпт уходило
       // первое, и второе действие просто исчезало из ролика.
       const inside = gBeats.filter((b) => b.end > from + 1e-6 && b.start < to - 1e-6);
-      const window = inside.length ? inside : [gBeats[0]];
+      const window = inside.length ? inside : [gBeats.find((b) => b.end > from + 1e-6) ?? gBeats[gBeats.length - 1]];
       // Несовместимые по месту или точке съёмки действия в один непрерывный кадр не
       // объединяются: берём совместимый префикс, остальное уедет в следующий клип.
       const merged = compatiblePrefix(window);
+      splitByIncompatibility = merged.length < window.length;
       const beat = merged[0];
       const prev = mode === "extend" ? (gBeats[gBeats.indexOf(beat) - 1] ?? beat) : prevBeat;
       const eventIds = [...new Set(merged.flatMap((b) => b.eventIds ?? []))];
+      // Сколько секунд клипа реально попадёт в монтаж: от начала клипа до конца последнего
+      // вошедшего бита, но не больше длины самого клипа.
+      const shownSeconds = Math.round(Math.min(veoSeconds, Math.max(merged[merged.length - 1].end - from, 0)) * 100) / 100;
+      const deadlines = eventDeadlines(merged, from, shownSeconds);
       const shot: FilmShot = {
         id: `${id}-${idx + 1}`,
         groupId: id,
@@ -565,20 +603,22 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
         generationProfile: mode === "extend" ? "continuation" : beat.gudiniVisible ? "character" : "environment",
         model: groupModel,
         mode,
-        usedSeconds: Math.round(Math.min(veoSeconds, span - covered) * 100) / 100,
+        usedSeconds: shownSeconds,
         veoSeconds,
         aspectRatio,
         resolution: RESOLUTION,
         useReferences: mode === "text" && useReferences,
         eventIds,
-        changeBySec: changeDeadline(merged, from),
-        prompt: shotPrompt({ character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, changeBySec: changeDeadline(merged, from) }),
-        dependsOn: idx === 0 ? null : `${id}-${idx}`,
+        changeBySec: deadlines.find((d) => d.bySec != null)?.bySec ?? null,
+        deadlines,
+        prompt: shotPrompt({ character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, deadlines, shownSeconds }),
+        dependsOn: mode === "extend" ? `${id}-${idx}` : null,
         cost: round2(veoSeconds * priceOf(groupModel)),
       };
       shots.push(shot);
       shotIds.push(shot.id);
-      covered += veoSeconds;
+      const advanced = Math.max(merged[merged.length - 1].end - from, 0.5);
+      covered += Math.min(advanced, veoSeconds);
       idx++;
     }
     groups.push({ id, displayMode, start: first.start, end: last.end, shotIds, chain: shotIds.length > 1, aspectRatio });
@@ -659,15 +699,23 @@ export const FIRST_SHOT_DEADLINE_SECONDS = 8;
  * поэтому видит и то, что редьюсер снял по бюджету, и то, чего планировщик не показал.
  * Возвращает предупреждения, а не правит план: выдумать сцену за планировщика нельзя.
  */
-export function authorStretchWarnings(timeline: TimelineSegment[], duration: number): string[] {
-  const out: string[] = [];
+export function authorStretchIssues(timeline: TimelineSegment[], duration: number): PlanIssue[] {
+  const out: PlanIssue[] = [];
   const ai = timeline.filter((s) => s.mode !== "author");
   if (!ai.length) {
-    return duration > MAX_AUTHOR_STRETCH_SECONDS ? ["В ролике нет ни одной показанной сцены — весь ролик говорящая голова"] : out;
+    if (duration > MAX_AUTHOR_STRETCH_SECONDS) {
+      out.push({ code: "no-ai-scenes", severity: "block", beatIds: [], message: "В ролике нет ни одной показанной сцены — весь ролик говорящая голова" });
+    }
+    return out;
   }
   const first = ai[0].start;
   if (first > FIRST_SHOT_DEADLINE_SECONDS) {
-    out.push(`Первая сцена появляется только на ${first.toFixed(1)} с — начало ролика без картинки не удержит зрителя`);
+    out.push({
+      code: "first-scene-late",
+      severity: "warn",
+      beatIds: ai[0].beatIds,
+      message: `Первая сцена появляется только на ${first.toFixed(1)} с — начало ролика без картинки не удержит зрителя`,
+    });
   }
   const longs: string[] = [];
   let cursor = 0;
@@ -676,8 +724,20 @@ export function authorStretchWarnings(timeline: TimelineSegment[], duration: num
     cursor = Math.max(cursor, s.end);
   }
   if (duration - cursor > MAX_AUTHOR_STRETCH_SECONDS + 1e-6) longs.push(`${cursor.toFixed(1)}–${duration.toFixed(1)} с`);
-  if (longs.length) out.push(`Длинные куски без сцен (больше ${MAX_AUTHOR_STRETCH_SECONDS} с): ${longs.join(", ")}`);
+  if (longs.length) {
+    out.push({
+      code: "author-stretch-long",
+      severity: "warn",
+      beatIds: [],
+      message: `Длинные куски без сцен (больше ${MAX_AUTHOR_STRETCH_SECONDS} с): ${longs.join(", ")}`,
+    });
+  }
   return out;
+}
+
+/** Прежнее имя: те же нарушения структуры одними сообщениями. */
+export function authorStretchWarnings(timeline: TimelineSegment[], duration: number): string[] {
+  return authorStretchIssues(timeline, duration).map((i) => i.message);
 }
 
 /** Оценка времени по графу: группы — задачи длиной shots × минут, пул из concurrency воркеров (LPT), плюс накладные. */
@@ -773,12 +833,11 @@ export function buildFilmPlan(args: {
   const { beats, built, stats } = reduceToBudget(args.beats, character, bible, duration, cfg);
   // Разбор идёт по битам ПОСЛЕ редьюсера и по собранным запросам: события пропадали
   // именно на этих шагах, а не в ответе модели.
-  const issues = auditPlan(beats, bible, character);
-  const warnings = [
-    ...built.warnings,
-    ...authorStretchWarnings(built.timeline, duration),
-    ...issues.map((a) => `${a.severity === "block" ? "ОБЯЗАТЕЛЬНО: " : ""}${a.message}${a.beatIds.length ? ` (${a.beatIds.join(", ")})` : ""}`),
+  const issues: PlanIssue[] = [
+    ...auditPlan(beats, bible, character, built.shots),
+    ...authorStretchIssues(built.timeline, duration),
   ];
+  const warnings = [...built.warnings];
   // Планировщик пишет русское имя героя в bible, а в английских полях зовёт его латиницей
   // («Каспер» → «Casper»), поэтому автозамена имени промахивается и в промпт уходят сразу
   // два человека: названный по имени герой и описание постоянного персонажа.
@@ -792,7 +851,17 @@ export function buildFilmPlan(args: {
   // Склейка внутри одной сцены. Veo снимает один непрерывный кадр, и «then cuts to» он
   // выполняет как умеет: либо игнорирует, либо ломает кадр пополам.
   const cuts = beats.filter((b) => isAi(b) && /\b(?:cuts? to|cut away|then we see|jump cut)\b/i.test(`${b.visualAction} ${b.motion}`)).map((b) => b.id);
-  if (cuts.length) warnings.push(`Склейка внутри одной сцены (${cuts.join(", ")}): Veo снимает один непрерывный кадр, монтаж внутри него невозможен`);
+  if (cuts.length) {
+    // Это не пожелание, а невыполнимое указание, поэтому нарушение типизировано и видно
+    // воротам перед оплатой: прежде оно жило строкой в warnings, ворота его не видели,
+    // и план со склейкой доходил до запуска Veo.
+    issues.push({
+      code: "cut-inside-shot",
+      severity: "block",
+      beatIds: cuts,
+      message: `Склейка внутри одной сцены (${cuts.join(", ")}): Veo снимает один непрерывный кадр, монтаж внутри него невозможен`,
+    });
+  }
   // Два соседних кадра с одного ракурса — это тот самый «всегда одинаковый вид»,
   // с которого начался разбор. Правило есть в промпте, но модель его иногда пропускает.
   const shown = beats.filter(isAi);
@@ -813,6 +882,8 @@ export function buildFilmPlan(args: {
       `Низкая эффективность генерации: на экране ${stats.aiSeconds} с из ${stats.generatedSeconds} сгенерированных (${Math.round(stats.generationEfficiency * 100)}%, желательно > 75%) — AI-биты короче 8 с или лишние продолжения`,
     );
   }
+  // Нарушения показываются тем же списком, что и раньше: сайт и лог читают warnings.
+  warnings.push(...issues.map((a) => `${a.severity === "block" ? "ОБЯЗАТЕЛЬНО: " : ""}${a.message}${a.beatIds.length ? ` (${a.beatIds.join(", ")})` : ""}`));
   return {
     version: PLAN_VERSION,
     createdAt: new Date().toISOString(),

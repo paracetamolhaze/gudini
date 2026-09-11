@@ -7,6 +7,7 @@ import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
 import { planStory, STORY_VERSION } from "./story";
 import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
+import { betterPlan, gateIssues, issueLines, missingRequired, preserveRequired, requiredEvents, retryIssues } from "./criteria";
 import { generateGroups } from "./generate";
 import { loadCharacterProfile } from "./character";
 import { loadUniverseProfile } from "./universe";
@@ -100,30 +101,31 @@ export async function runAiFilmStage(args: {
     let story = await ask();
     args.setStep("AI-фильм: план сцен", 30);
     let plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
-    // Требования к структуре проверяемы, поэтому не «как повезёт»: если план начинается
-    // с говорящей головы или содержит длинный кусок без сцен, планировщик получает ровно
-    // один второй заход с названными нарушениями. Дороже это на один запрос к модели.
-    // Второй заход даётся не на всё подряд, а только на то, что портит оплаченный клип:
-    // непокрытое обязательное событие, дыры в структуре и физически невыполнимые указания.
-    // Тяжесть берётся из типизированных проблем плана, а не из подсчёта строк предупреждений.
-    const STRUCTURE = [/Первая сцена появляется/, /Длинные куски без сцен/, /В ролике нет ни одной/, /Склейка внутри одной сцены/];
-    const broken = (p: AiFilmPlan) => [
-      ...p.issues.filter((i) => i.severity === "block").map((i) => i.message),
-      ...p.warnings.filter((w) => STRUCTURE.some((re) => re.test(w))),
-    ];
-    const first = broken(plan);
+    // Второй заход даётся по тем же типизированным нарушениям, по которым план потом
+    // не пускается к оплате: раньше исправление искало строки предупреждений регулярными
+    // выражениями, а ворота смотрели только на issues, и известная склейка внутри кадра
+    // проходила мимо ворот. Теперь набор один — criteria.ts.
+    const required = requiredEvents(story.bible.events);
+    const first = retryIssues(plan);
     if (first.length) {
-      console.warn(`AI-фильм: план нарушил структуру (${first.join("; ")}) — второй заход`);
+      console.warn(`AI-фильм: план нарушил требования (${issueLines(first).join("; ")}) — второй заход`);
       args.setStep("AI-фильм: правка плана", 29);
-      const retry = await ask(first.map((w) => `- ${w}`).join("\n"));
-      const retryPlan = buildFilmPlan({ character, bible: retry.bible, beats: retry.beats, duration, cfg });
-      // берём лучший из двух: второй заход не обязан оказаться удачнее
-      if (broken(retryPlan).length < first.length) {
-        story = retry;
+      const retry = await ask(issueLines(first).map((w) => `- ${w}`).join("\n"));
+      // Обязательный набор первого захода возвращается силой: снять обязательность вместо
+      // постановки сцены модель не может — это делало проверку зелёной, не показав события.
+      const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events) };
+      const retryPlan = buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg });
+      // Выбор по тяжести и сохранённым событиям, а не по числу строк.
+      const was = { blocks: gateIssues(plan).length, lost: missingRequired(plan, required).length };
+      if (betterPlan(retryPlan, plan, required)) {
+        story = { ...retry, bible: retryBible };
         plan = retryPlan;
-        console.log(`AI-фильм: второй заход исправил структуру (осталось ${broken(retryPlan).length} из ${first.length})`);
+        console.log(
+          `AI-фильм: второй заход принят — запретов ${gateIssues(retryPlan).length} (было ${was.blocks}), ` +
+            `потеряно обязательных ${missingRequired(retryPlan, required).length} (было ${was.lost})`,
+        );
       } else {
-        console.warn("AI-фильм: второй заход не улучшил структуру, остаётся первый план");
+        console.warn("AI-фильм: второй заход не лучше первого, остаётся первый план");
       }
     }
     fs.writeFileSync(path.join(dir, PLAN_FILE), JSON.stringify(plan, null, 2), "utf8");
@@ -163,12 +165,18 @@ export async function runAiFilmStage(args: {
   if (!plan.shots.length) throw new Error("AI-фильм: в плане нет ни одной AI-сцены — генерировать нечего");
   // Ворота перед оплатой. Раньше их не было вовсе: план с непоказанным обязательным
   // событием или с физически невыполнимым кадром спокойно доходил до кнопки генерации.
-  const blocking = (plan.issues ?? []).filter((i) => i.severity === "block");
+  const blocking = gateIssues(plan);
   if (blocking.length) {
     throw new Error(
-      `AI-фильм: план не готов к генерации. ${blocking.map((i) => i.message).join(". ")}. ` +
-        `Соберите план заново; если событие показать нечем, пометьте его необязательным. Veo не вызывался`,
+      `AI-фильм: план не готов к генерации. ${issueLines(blocking).join(". ")}. ` +
+        `Соберите план заново — сцену нужно поставить так, чтобы событие было видно. Veo не вызывался`,
     );
+  }
+  // Обязательные события сверяются ещё раз по конечным запросам этого же плана: план
+  // мог быть собран старым кодом, а событие потеряться на группировке или редьюсере.
+  const lost = missingRequired(plan, requiredEvents(plan.bible.events));
+  if (lost.length) {
+    throw new Error(`AI-фильм: обязательные события не попали ни в один запрос Veo: ${lost.join(", ")}. Соберите план заново. Veo не вызывался`);
   }
   // предел этого запуска — бюджет фильма (обычный предел $2 рассчитан на карточки)
   setRunCostLimit(budget);

@@ -234,8 +234,12 @@ export function shotPrompt(args: {
   deadlines?: EventDeadline[];
   /** сколько секунд клипа реально попадёт в монтаж */
   shownSeconds?: number;
+  /** изменение бита приходится на следующий клип цепочки: здесь действие только начинается */
+  unfinished?: boolean;
+  /** чем закончился предыдущий клип этой же цепочки */
+  previousMoment?: string;
 }): string {
-  const { character, universe, bible, beats, prev, mode, aspectRatio, deadlines, shownSeconds } = args;
+  const { character, universe, bible, beats, prev, mode, aspectRatio, deadlines, shownSeconds, unfinished, previousMoment } = args;
   const beat = beats[0];
   const lines: string[] = [];
   // Порядок важен: Veo сильнее слушает начало промпта, поэтому сперва действие и движение,
@@ -243,14 +247,18 @@ export function shotPrompt(args: {
   // и на само действие оставалась одна фраза — отсюда выдуманные предметы в кадре.
   const before = stateLine(beat.objects, "before") || beat.stateBefore;
   if (mode === "extend") {
-    lines.push(`Continue the same shot without a cut. Previous moment: ${prev?.stateAfter || prev?.visualAction || "the scene continues"}.`);
+    // Момент, с которого продолжается кадр, — это конец ПРЕДЫДУЩЕГО КЛИПА, а не конец
+    // всего бита. Раньше сюда уходило конечное состояние бита, и продолжение начиналось
+    // с уже открытой коробки, снова требуя открыть закрытую.
+    const from = previousMoment || prev?.stateAfter || prev?.visualAction || "the scene continues";
+    lines.push(`Continue the same shot without a cut. Previous moment: ${from}.`);
   } else if (before) {
     lines.push(`Before: ${before}.`);
   }
   // Все действия клипа по порядку. Отсюда брался один «главный» бит, и второе действие
   // объединённой сцены исчезало из запроса, оставаясь только в списке идентификаторов.
   if (beats.length === 1) {
-    lines.push(`Action: ${beat.visualAction}`);
+    lines.push(unfinished ? `Action, of which only the beginning fits in this clip: ${beat.visualAction}` : `Action: ${beat.visualAction}`);
   } else {
     lines.push(`Action, in this order and all of it inside one continuous take:`);
     beats.forEach((b, i) => lines.push(`${i + 1}. ${b.visualAction}`));
@@ -284,8 +292,22 @@ export function shotPrompt(args: {
   const motions = beats.map((b) => b.motion).filter(Boolean);
   if (motions.length) lines.push(`Motion in order: ${motions.join(" Then: ")}`);
   if (beat.location) lines.push(`Location: ${beat.location}.`);
-  const after = stateLine(beats[beats.length - 1].objects, "after") || beats[beats.length - 1].stateAfter;
-  if (after) lines.push(`After: ${after}.`);
+  // Незавершённый кадр: изменение приходится на следующий клип цепочки, поэтому здесь
+  // действие только начинается, а состояние к концу клипа остаётся исходным. Прежде сюда
+  // уходило конечное состояние бита, и первый клип требовал того же, что и продолжение.
+  const tail = beats[beats.length - 1];
+  const after = unfinished
+    ? stateLine(tail.objects, "before") || tail.stateBefore
+    : stateLine(tail.objects, "after") || tail.stateAfter;
+  if (after) {
+    lines.push(unfinished ? `At the end of this clip: ${after} — the action is still under way.` : `After: ${after}.`);
+  }
+  if (unfinished) {
+    lines.push(
+      `This clip is the beginning of a longer take: the action starts here and is NOT finished inside it. ` +
+        `${tail.keyMoment ? `Do not show ${tail.keyMoment} in this clip — it happens in the continuation.` : "The change happens in the continuation."}`,
+    );
+  }
   const shot = beat.shotType.replace("_", "-");
   const ratio = aspectRatio === "9:16" ? "vertical 9:16 portrait composition" : "horizontal 16:9 composition";
   lines.push(`Framing: ${ratio}, ${shot} shot. ${COMPOSITION_LINE[beat.composition]}`);
@@ -594,15 +616,27 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
     // сцена, а не продолжение. Раньше остаток просто пропадал: covered прыгал на всю длину
     // генерации, и второе действие исчезало из запросов, оставаясь «показанным» в таймлайне.
     let splitByIncompatibility = false;
+    /** последний бит предыдущего клипа — по нему проверяется стык, а не только окно */
+    let prevShotTail: StoryBeat | null = null;
+    /** чем закончился предыдущий клип этой же цепочки */
+    let prevShotEnd: string | null = null;
     while (covered < span - 0.05) {
-      const chainStep = idx > 0 && continuity && !splitByIncompatibility;
-      if (idx > 0 && !chainStep && !splitByIncompatibility) break;
-      if (chainStep && idx > MAX_CHAIN_EXTENSIONS) break;
+      const from = first.start + covered;
+      // Бит, с которого начинается этот клип. Смена места ровно на границе окна раньше
+      // не замечалась: compatiblePrefix сравнивает биты ВНУТРИ окна, а на стыке клипов
+      // сравнивать было нечего, и сад становился «продолжением того же кадра» кухни.
+      const head = gBeats.find((b) => b.end > from + 1e-6) ?? gBeats[gBeats.length - 1];
+      const boundarySplit = prevShotTail != null && !compatibleInOneShot(prevShotTail, head);
+      // Счётчик продолжений принадлежит ТЕКУЩЕЙ группе, а не всей группе битов: после
+      // двух самостоятельных сцен третьей не доставалось продолжения, и её окно оставалось
+      // без материала — план обещал десять секунд, а запрос был один на восемь.
+      const chainStep = seg != null && continuity && !splitByIncompatibility && !boundarySplit;
+      if (seg != null && !chainStep && !splitByIncompatibility && !boundarySplit) break;
+      if (chainStep && seg!.shotIds.length > MAX_CHAIN_EXTENSIONS) break;
       const mode: FilmShot["mode"] = chainStep ? "extend" : "text";
       const veoSeconds = mode === "text"
         ? normalizeVeoDuration(Math.min(span - covered, 8), "text", { references: useReferences })
         : VEO_EXTEND_SECONDS;
-      const from = first.start + covered;
       const to = Math.min(last.end, from + veoSeconds);
       // Все биты, попадающие в этот клип, по порядку. Раньше отсюда брался ОДИН бит с
       // наибольшим пересечением, а остальные оставались только в beatIds: из двух
@@ -621,6 +655,9 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       // вошедшего бита, но не больше длины самого клипа.
       const shownSeconds = Math.round(Math.min(veoSeconds, Math.max(merged[merged.length - 1].end - from, 0)) * 100) / 100;
       const deadlines = eventDeadlines(merged, from, shownSeconds);
+      // Действие последнего бита не помещается в этот клип целиком: изменение придёт
+      // в продолжение, поэтому здесь оно не должно ни требоваться, ни считаться сделанным.
+      const unfinished = merged[merged.length - 1].end > from + shownSeconds + 0.05;
       if (mode === "text") {
         // конец отрезка — конец реально вошедших битов, а не длина генерации: клип на 8 с,
         // из которого в монтаж идут 4, занимает в ролике четыре секунды
@@ -646,14 +683,24 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
         eventIds,
         changeBySec: deadlines.find((d) => d.bySec != null)?.bySec ?? null,
         deadlines,
-        prompt: shotPrompt({ character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, deadlines, shownSeconds }),
+        prompt: shotPrompt({
+          character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, deadlines, shownSeconds,
+          unfinished, previousMoment: mode === "extend" ? prevShotEnd ?? undefined : undefined,
+        }),
         dependsOn: mode === "extend" ? owner.shotIds[owner.shotIds.length - 1] : null,
         cost: round2(veoSeconds * priceOf(groupModel)),
       };
       shots.push(shot);
       owner.shotIds.push(shot.id);
-      owner.end = Math.max(owner.end, merged[merged.length - 1].end);
-      const advanced = Math.max(merged[merged.length - 1].end - from, 0.5);
+      const tail = merged[merged.length - 1];
+      // Конец клипа: либо достигнутое состояние, либо «действие ещё идёт» — с ним и будет
+      // склеиваться продолжение.
+      const reached = stateLine(tail.objects, "after") || tail.stateAfter || tail.visualAction;
+      const midway = `${stateLine(tail.objects, "before") || tail.stateBefore || tail.visualAction} — the action is under way and ${tail.keyMoment || "the change"} has not happened yet`;
+      prevShotEnd = unfinished ? midway : reached;
+      prevShotTail = tail;
+      owner.end = Math.max(owner.end, Math.min(tail.end, from + shownSeconds));
+      const advanced = Math.max(Math.min(tail.end - from, shownSeconds), 0.5);
       covered += Math.min(advanced, veoSeconds);
       idx++;
     }
@@ -775,6 +822,28 @@ export function authorStretchIssues(timeline: TimelineSegment[], duration: numbe
   return out;
 }
 
+/**
+ * Окно группы, под которое не собрано материала. Раньше метаданные группы растягивались
+ * поверх недостающих секунд: план обещал десятисекундный отрезок, запрос был один на восемь,
+ * и расхождение всплывало только при сборке — уже после оплаты запросов.
+ */
+export function uncoveredGroupIssues(built: BuiltShots): PlanIssue[] {
+  const out: PlanIssue[] = [];
+  for (const g of built.groups) {
+    const covered = built.shots.filter((s) => s.groupId === g.id).reduce((a, s) => a + s.usedSeconds, 0);
+    const need = g.end - g.start;
+    if (covered + 0.3 < need) {
+      out.push({
+        code: "group-not-covered",
+        severity: "block",
+        beatIds: built.shots.filter((s) => s.groupId === g.id).flatMap((s) => s.beatIds),
+        message: `Отрезок ${g.start.toFixed(1)}–${g.end.toFixed(1)} с длиннее собранного материала (${covered.toFixed(1)} с): сцену нужно разделить или укоротить`,
+      });
+    }
+  }
+  return out;
+}
+
 /** Прежнее имя: те же нарушения структуры одними сообщениями. */
 export function authorStretchWarnings(timeline: TimelineSegment[], duration: number): string[] {
   return authorStretchIssues(timeline, duration).map((i) => i.message);
@@ -851,9 +920,19 @@ export function reduceToBudget(beats: StoryBeat[], character: CharacterProfile, 
     // Очередь жертв: сначала всё необязательное, потом открывающая сцена, и только потом
     // то, что несёт обязательное событие. Внутри каждой очереди порядок прежний:
     // low → medium → high, с конца ролика к началу.
+    // Художественная защита (hook / reveal / climax с high) сильнее обычного порядка, но
+    // слабее обязательного события: иначе необязательное вступление вытесняло обязательный
+    // отзыв, план получал «событие не показано», хотя обратный выбор укладывался в те же деньги.
+    // Защита снимается только ради обязательного события: если обязательных сцен в плане
+    // нет, поведение прежнее — защищённую сцену не трогаем и честно сообщаем, что план
+    // не помещается, вместо тихого удаления хука.
+    const hasRequiredAi = work.some((b) => isAi(b) && carriesRequired(b));
     const tiers: Array<(b: StoryBeat) => boolean> = [
       (b) => !carriesRequired(b) && b !== earliest && !protectedBeat(b),
       (b) => !carriesRequired(b) && !protectedBeat(b),
+      ...(hasRequiredAi
+        ? [(b: StoryBeat) => !carriesRequired(b) && b !== earliest, (b: StoryBeat) => !carriesRequired(b)]
+        : []),
       (b) => b !== earliest && !protectedBeat(b),
       (b) => !protectedBeat(b),
     ];
@@ -892,6 +971,7 @@ export function buildFilmPlan(args: {
   const issues: PlanIssue[] = [
     ...auditPlan(beats, bible, character, built.shots),
     ...authorStretchIssues(built.timeline, duration),
+    ...uncoveredGroupIssues(built),
   ];
   const warnings = [...built.warnings];
   // Планировщик пишет русское имя героя в bible, а в английских полях зовёт его латиницей

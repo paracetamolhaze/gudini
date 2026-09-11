@@ -124,6 +124,10 @@ export function eventCovered(event: StoryEvent, beats: StoryBeat[], shots?: Film
       // Сцена обязана что-то изменить. Неизменное состояние — это не показанное событие,
       // сколько бы слов из обещания в нём ни повторялось.
       if (before && sameState(before, after)) return false;
+      // Результат уже достигнут ДО действия: «уже порванный купол колышется на ветру»
+      // показывает последствие, а не сам разрыв. Добавленные слова про ветер меняют строку,
+      // но не делают событие показанным.
+      if (before && stateReached(want.after, before)) return false;
       // Результат сцены — именно обещанный результат, со знаком: «review not submitted»
       // не закрывает «review submitted».
       if (!stateReached(want.after, after)) return false;

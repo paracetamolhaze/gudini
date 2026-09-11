@@ -176,3 +176,42 @@ test("исходник длиннее своего окна обрезается
   assert.ok(filter.includes("setpts=PTS-STARTPTS+0.000/TB"), filter);
   assert.ok(filter.includes("setpts=PTS-STARTPTS+4.000/TB"), filter);
 });
+
+test("после двух разделений третья сцена получает своё продолжение, а не обещание без материала", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-splits-"));
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); resetLedger(); });
+  resetLedger();
+  const requests = offline(t);
+
+  // три несовместимых места подряд, последнее длиннее одного клипа: 0–6, 6–12, 12–22
+  const plan = planOf([beat("B1", 0, 6, "a kitchen"), beat("B2", 6, 12, "a garden"), beat("B3", 12, 22, "a hangar")], 22);
+  assert.deepEqual(plan.issues.filter((i) => i.severity === "block"), [], JSON.stringify(plan.issues));
+  assert.equal(plan.groups.length, 3, JSON.stringify(plan.groups.map((g) => [g.id, g.start, g.end, g.shotIds])));
+  const last = plan.groups[2];
+  assert.equal(last.shotIds.length, 2, "длинной сцене нужна цепочка, а не одно обещание на десять секунд");
+  const covered = plan.shots.filter((s) => s.groupId === last.id).reduce((a, s) => a + s.usedSeconds, 0);
+  assert.ok(covered + 0.3 >= last.end - last.start, `материала ${covered} с на окно ${last.end - last.start} с`);
+
+  // и сборка это подтверждает: клип длиннее своего окна, монтаж принимает план
+  const lengths = plan.shots.map((s) => (s.mode === "extend" ? s.veoSeconds : s.veoSeconds));
+  seedCache(dir, plan, ["red", "blue", "green", "yellow"], lengths);
+  const out = await generateGroups({ dir, projectId: "splits", plan, character, concurrency: 1 });
+  assert.equal(requests(), 0);
+  assert.equal(out.clips.length, 3);
+  assert.equal(overlaysFor(plan, out.clips).length, 3);
+});
+
+test("смена места ровно на границе окна начинает новую сцену, а не продолжение", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-boundary-"));
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); resetLedger(); });
+  resetLedger();
+  offline(t);
+
+  // кухня ровно до восьмой секунды, дальше сад: раньше сад становился «тем же кадром»
+  const plan = planOf([beat("B1", 0, 8, "a kitchen"), beat("B2", 8, 12, "a garden")], 12);
+  assert.deepEqual(plan.shots.map((s) => s.mode), ["text", "text"], JSON.stringify(plan.shots.map((s) => [s.id, s.mode])));
+  assert.equal(plan.groups.length, 2);
+  assert.equal(plan.shots[1].dependsOn, null);
+  assert.ok(!plan.shots[1].prompt.includes("Continue the same shot"), plan.shots[1].prompt.slice(0, 200));
+  assert.ok(plan.shots[1].prompt.includes("a garden"), plan.shots[1].prompt.slice(0, 300));
+});

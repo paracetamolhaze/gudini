@@ -503,3 +503,119 @@ test("бюджет снимает необязательную вставку р
   assert.ok(plan.shots[0].eventIds.includes("review"), `сняли не ту сцену: ${JSON.stringify(plan.shots[0].eventIds)}`);
   assert.deepEqual(plan.issues.filter((i) => i.severity === "block"), [], JSON.stringify(plan.issues));
 });
+
+// ─────────────────────────────── 10. контрпримеры разбора версии 11
+
+test("уже порванный купол не засчитывается за показ разрыва", () => {
+  const tear: StoryEvent = {
+    id: "tear", observable: "The intact main canopy tears into strips in the air", required: true, fromPhrase: 3, toPhrase: 3,
+    objects: [{ id: "main-canopy", before: "intact orange canopy", after: "torn into strips" }],
+  };
+  const withStates = (visualAction: string, keyMoment: string, before: string, after: string) => {
+    const raw = controlRaw().map((r) => (r.eventIds[0] === "tear"
+      ? { ...r, visualAction, keyMoment, objects: [{ id: "main-canopy", before, after }] }
+      : r));
+    const words = controlSpeech();
+    const duration = words[words.length - 1].end;
+    const beats = beatsFromRaw(raw as any, phrasesFromWords(words), duration, words);
+    const bible = bibleWith([...EVENTS.filter((e) => e.id !== "tear"), tear]);
+    return buildFilmPlan({ character, bible, beats, duration, cfg: cfg() });
+  };
+  const missed = (p: ReturnType<typeof withStates>) =>
+    p.issues.some((i) => i.code === "event-not-covered" && (i.eventIds ?? []).includes("tear"));
+
+  // последствие вместо самого перехода: разрыв уже случился до начала сцены
+  assert.ok(
+    missed(withStates(
+      "Gudini falls beneath the already torn main canopy; the strips flap in the wind",
+      "the loose strips flap in the wind",
+      "torn into strips", "torn into strips fluttering in the wind",
+    )),
+    "колыхание полос — это не разрыв",
+  );
+  // настоящий переход проходит
+  assert.ok(
+    !missed(withStates(
+      "The intact orange canopy splits and tears into strips above Gudini",
+      "the canopy tears into strips",
+      "intact orange canopy", "torn into strips",
+    )),
+    "целый купол, который рвётся, обязан закрывать событие",
+  );
+});
+
+test("первый клип цепочки не требует того, что произойдёт в продолжении", () => {
+  const beat: StoryBeat = {
+    id: "B1", start: 0, end: 12, meaning: "", storyBeat: "", displayMode: "full_ai", purpose: "explain",
+    priority: "high", requiresGeneration: true, gudiniVisible: false, universeAdaptation: "",
+    visualAction: "A hand opens the sealed box and removes the lid", keyMoment: "the box opens",
+    anchorPhrase: "", anchorAtSec: 10, anchorAbsSec: 10, eventIds: ["open"],
+    objects: [{ id: "box", before: "sealed", after: "open" }],
+    location: "a kitchen", motion: "the lid comes off", stateBefore: "sealed", stateAfter: "open",
+    continuityGroup: "c", continuityRequired: true, transition: "cut", shotType: "medium",
+    camera: "Camera is at eye level", cameraAngle: "eye_level", composition: "center", suggestedDuration: 12,
+  };
+  const bible = bibleWith([{ id: "open", observable: "the box opens", required: true, fromPhrase: 1, toPhrase: 1, objects: beat.objects }]);
+  const plan = buildFilmPlan({ character, bible, beats: [beat], duration: 12, cfg: cfg() });
+  assert.deepEqual(plan.shots.map((s) => s.mode), ["text", "extend"]);
+  const [head, tail] = plan.shots;
+
+  // первый клип: коробка остаётся закрытой, открытие в нём не запрашивается
+  assert.deepEqual(head.deadlines, []);
+  assert.ok(!head.prompt.includes("After: box — open"), head.prompt.slice(0, 500));
+  assert.ok(head.prompt.includes("At the end of this clip: box — sealed"), head.prompt.slice(0, 500));
+  assert.ok(head.prompt.includes("Do not show the box opens in this clip"), head.prompt.slice(0, 500));
+
+  // продолжение: начинается с того же закрытого состояния и требует открытия
+  assert.ok(tail.prompt.includes("Previous moment: box — sealed"), tail.prompt.slice(0, 300));
+  assert.ok(tail.prompt.includes("has not happened yet"), tail.prompt.slice(0, 300));
+  assert.ok(tail.prompt.includes("the box opens"), tail.prompt.slice(0, 400));
+  assert.equal(tail.changeBySec, 2);
+  assert.ok(tail.prompt.includes("After: box — open"), tail.prompt.slice(0, 600));
+});
+
+test("защищённое необязательное вступление уступает обязательному событию", () => {
+  const words = controlSpeech();
+  const duration = words[words.length - 1].end;
+  const intro: StoryEvent = { id: "intro", observable: "he puts the phone on the table", required: false, fromPhrase: 1, toPhrase: 1, objects: [{ id: "phone", before: "in his pocket", after: "resting on the table" }] };
+  const review = EVENTS.find((e) => e.id === "review")!;
+  const raw = [
+    { ...controlRaw()[0], visualAction: "Gudini puts his phone on the table", keyMoment: "the phone reaches the table", eventIds: ["intro"], objects: [{ id: "phone", before: "in his pocket", after: "resting on the table" }], purpose: "hook", priority: "high" },
+    { ...controlRaw()[4], purpose: "resolution", priority: "high" },
+  ];
+  const beats = beatsFromRaw(raw as any, phrasesFromWords(words), duration, words);
+  const plan = buildFilmPlan({ character, bible: bibleWith([intro, review]), beats, duration, cfg: cfg({ budgetUsd: 0.64 }) });
+  assert.equal(plan.shots.length, 1, JSON.stringify(plan.shots.map((s) => s.eventIds)));
+  assert.ok(plan.shots[0].eventIds.includes("review"), `защита вступления вытеснила обязательное событие: ${JSON.stringify(plan.shots[0].eventIds)}`);
+  assert.deepEqual(plan.issues.filter((i) => i.severity === "block"), [], JSON.stringify(plan.issues));
+});
+
+test("контрольная история: у каждого события в запросе стоит именно его переход", () => {
+  const { plan, bible } = controlPlan();
+  assert.deepEqual(plan.issues.filter((i) => i.severity === "block"), [], JSON.stringify(plan.issues));
+
+  // что именно просят показать для каждого обязательного события
+  const wanted: Record<string, { action: RegExp; change: RegExp; after: RegExp }> = {
+    order: { action: /taps buy/i, change: /the order goes through/i, after: /order placed/i },
+    delivery: { action: /tears open the delivered parcel/i, change: /the parcel opens/i, after: /open and empty/i },
+    tear: { action: /tears apart/i, change: /the canopy tears/i, after: /torn into strips/i },
+    reserve: { action: /reserve canopy opens/i, change: /the reserve opens/i, after: /fully open/i },
+    review: { action: /types a review/i, change: /sends the review/i, after: /review typed/i },
+  };
+  for (const [id, want] of Object.entries(wanted)) {
+    const shot = plan.shots.find((s) => s.eventIds.includes(id));
+    assert.ok(shot, `событие ${id} не попало ни в один запрос`);
+    assert.match(shot!.prompt, want.action, `${id}: в запросе не то действие`);
+    assert.match(shot!.prompt, want.change, `${id}: в запросе не названо нужное изменение`);
+    assert.match(shot!.prompt, want.after, `${id}: в запросе нет обещанного результата`);
+    // и событие действительно закрывается по контракту, а не по совпадению слов
+    const event = (bible.events ?? []).find((e) => e.id === id)!;
+    assert.ok(eventCovered(event, plan.beats, plan.shots), `${id}: переход не подтверждён конечными запросами`);
+  }
+
+  // приземление отзывом не становится: в запросе отзыва нет посадки
+  const review = plan.shots.find((s) => s.eventIds.includes("review"))!;
+  assert.doesNotMatch(review.prompt, /lands on the grass/i);
+  // каждый запрос просит своё, а не один и тот же кадр
+  assert.equal(new Set(plan.shots.map((s) => s.prompt)).size, plan.shots.length);
+});

@@ -14,7 +14,7 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
 /** 9 — общая процедура режиссуры: причинность, доказательство сцены, состояние, механика, камера. */
-export const STORY_VERSION = 9;
+export const STORY_VERSION = 10;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -171,7 +171,8 @@ anchorPhrase: слово или короткая фраза ИЗ РЕЧИ это
 motion (английский) — что происходит внутри клипа по порядку: что делает тело, что происходит с предметами, куда идёт камера. Пиши столько отрезков, сколько нужно действию, не больше трёх. Жёсткой разбивки 0-3/3-6/6-8 нет.
 
 ═══ 8. СОСТОЯНИЕ СЦЕНЫ: ОДНО СОГЛАСОВАННОЕ ОПИСАНИЕ ═══
-objects (у бита) — только то, что в этой сцене МЕНЯЕТСЯ, с состоянием до и после. Идентификаторы те же, что в событиях. Состояние предмета описывает предмет: «packed and closed», «torn open», «in the second man's hand». Положение человека в состояние предмета не пишется — для этого есть scene.who.
+objects.role — «change», если это обязательство сцены (состояние обязано перейти из до в после), и «keep», если условие сохраняется и показывать в нём нечего («основной купол остаётся порванным», «лампа продолжает гореть»). Ставь role всегда: по нему проверяется, что именно сцена обязана показать.
+objects (у бита) — то, что в этой сцене меняется, плюс сохраняемые условия с role «keep», если они важны для непрерывности. Состояние до и после. Идентификаторы те же, что в событиях. Состояние предмета описывает предмет: «packed and closed», «torn open», «in the second man's hand». Положение человека в состояние предмета не пишется — для этого есть scene.who.
 Если бит показывает событие из eventIds, состояние после пишется теми же словами, что и after у события: проверка сверяет их. Сцена, где после совпадает с до, события не показывает.
 scene — существенные условия кадра, заполняй по необходимости, пустые поля пропускай:
 - scene.who (английский) — кто где находится, куда обращён, что держит;
@@ -267,8 +268,8 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."],
-  "events": [{"id": "order", "observable": "english: what the viewer sees change", "required": true, "fromPhrase": 1, "toPhrase": 2, "objects": [{"id": "phone", "before": "english", "after": "english"}]}]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
+  "events": [{"id": "order", "observable": "english: what the viewer sees change", "required": true, "fromPhrase": 1, "toPhrase": 2, "objects": [{"id": "phone", "before": "english", "after": "english", "role": "change"}]}]},
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english", "role": "change"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
 Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state/objects/scene оставляй пустыми, eventIds пустым списком, gudiniVisible=false.`;
 }
 
@@ -353,7 +354,16 @@ export function objectStates(v: unknown): ObjectState[] {
     const id = slugId((raw as any)?.id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, before: str((raw as any)?.before), after: str((raw as any)?.after) });
+    // Роль сохраняется как есть: модель прямо говорит, что условие сохраняется, а не
+    // меняется. Прежде поле выбрасывалось здесь, и неизменная лампа снова становилась
+    // обязательным переходом — правильный план блокировался.
+    const role = (raw as any)?.role;
+    out.push({
+      id,
+      before: str((raw as any)?.before),
+      after: str((raw as any)?.after),
+      ...(role === "change" || role === "keep" ? { role } : {}),
+    });
   }
   return out.slice(0, 8);
 }

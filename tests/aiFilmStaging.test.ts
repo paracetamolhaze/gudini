@@ -135,7 +135,8 @@ test("объединённое окно несёт постановку обои
   assert.match(merged!.prompt, /Appears with the later action in this clip: a clear protective visor; a splash guard beside the valve/);
   // расстановка обоих битов на месте, и оба человека считаются участниками
   assert.match(merged!.prompt, /Gudini faces the workbench Then: Ada stands at the right of the bench/);
-  assert.match(merged!.prompt, /People taking part in the action: exactly 2 — Gudini, Ada/);
+  // участники берутся из согласованного списка, а число не выдумывается по словам расстановки
+  assert.match(merged!.prompt, /only those named above in Positions \(Gudini, Ada among them\), and nobody else/);
 });
 
 test("цепочка после раннего изменения не возвращает состояние назад", () => {
@@ -156,7 +157,7 @@ test("цепочка после раннего изменения не возв�
   const [head, ...rest] = plan.shots;
   assert.ok(head.prompt.includes("After: case — open"), head.prompt.slice(0, 400));
   for (const tail of rest) {
-    assert.ok(tail.prompt.includes("The change has already happened"), tail.prompt.slice(0, 300));
+    assert.ok(tail.prompt.includes("Already done in the previous clip"), tail.prompt.slice(0, 300));
     assert.ok(!tail.prompt.includes("the action is still under way"), "окно последствий не может быть началом действия");
     assert.ok(!tail.prompt.includes("Do not show the case opens in this clip"), "два взаимоисключающих указания в одном запросе");
     assert.ok(!tail.prompt.includes("break the seal"), "механика открывания не повторяется в последствиях");
@@ -179,4 +180,104 @@ test("сводка сцены не исчезает из-за имени пре�
   for (const id of ["case", "prop-17"]) {
     assert.ok(build(id).includes("on his knees while seated in a narrow chair"), `постановка потеряна при id ${id}`);
   }
+});
+
+test("смешанное окно: завершённое действие не повторяется, новое сохраняет своё", () => {
+  const events: StoryEvent[] = [
+    { id: "open", observable: "the case opens", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "case", before: "sealed", after: "open" }] },
+    { id: "take", observable: "the instrument comes out of the case", required: true, fromPhrase: 2, toPhrase: 2, objects: [{ id: "instrument", before: "in its foam slot", after: "raised above the workbench" }] },
+  ];
+  const chain = { location: "a workshop", continuityGroup: "c", continuityRequired: true };
+  const plan = planOf(
+    ["Он открыл запечатанный футляр почти сразу и потом очень долго разглядывал его содержимое при свете лампы.", "Затем он достал инструмент из открытого футляра и поднял его над верстаком."],
+    [
+      scene({ ...chain, fromPhrase: 1, toPhrase: 1, visualAction: "Gudini opens the sealed case", keyMoment: "the case opens", anchorPhrase: "открыл", eventIds: ["open"], objects: [{ id: "case", before: "sealed", after: "open" }], motion: "Gudini lifts the lid", scene: { mechanics: "his fingers break the seal and lift the lid off the case" } }),
+      scene({ ...chain, fromPhrase: 2, toPhrase: 2, visualAction: "Gudini takes the instrument out of the open case", keyMoment: "the instrument comes out of the case", anchorPhrase: "достал", eventIds: ["take"], objects: [{ id: "instrument", before: "in its foam slot", after: "raised above the workbench" }], motion: "Gudini lifts the instrument above the workbench", scene: { mechanics: "his hand lifts the instrument out of its foam slot" } }),
+    ],
+    events,
+  );
+  assert.deepEqual(gateIssues(plan), [], JSON.stringify(plan.issues));
+  // у каждого бита окна своя фаза, а не одна на весь клип
+  assert.ok(plan.shots.every((s) => (s.phases ?? []).length === s.beatIds.length), JSON.stringify(plan.shots.map((s) => s.phases)));
+  for (const shot of plan.shots) {
+    const doneHere = (shot.phases ?? []).filter((p) => p.phase === "aftermath").map((p) => p.beatId);
+    for (const id of doneHere) {
+      const beat = plan.beats.find((b) => b.id === id)!;
+      assert.ok(!shot.prompt.includes(`Action: ${beat.visualAction}`), `завершённое действие повторяется в ${shot.id}`);
+      assert.ok(!shot.prompt.includes(beat.motion), `движение завершённого действия повторяется в ${shot.id}`);
+      assert.ok(!shot.prompt.includes(beat.scene!.mechanics!), `механика завершённого действия повторяется в ${shot.id}`);
+      assert.ok(shot.prompt.includes("Already done in the previous clip"), shot.prompt.slice(0, 200));
+    }
+    // новое действие окна на месте вместе со своим сроком
+    const fresh = (shot.phases ?? []).filter((p) => p.phase !== "aftermath").map((p) => p.beatId);
+    for (const id of fresh) {
+      const beat = plan.beats.find((b) => b.id === id)!;
+      assert.ok(shot.prompt.includes(beat.visualAction), `действие ${id} потеряно в ${shot.id}`);
+    }
+  }
+});
+
+test("расстановка не превращает заглавные слова в участников", () => {
+  const line = (who: string) => {
+    const plan = planOf(
+      ["Курьер передал ему посылку прямо у стойки и сразу ушёл обратно на улицу."],
+      [
+        scene({
+          fromPhrase: 1, toPhrase: 1, visualAction: "The courier hands the parcel over the counter",
+          keyMoment: "the parcel changes hands", eventIds: ["give"],
+          objects: [{ id: "parcel", before: "in the courier's hands", after: "in his own hands" }],
+          motion: "the parcel crosses the counter", scene: { who },
+        }),
+      ],
+      [{ id: "give", observable: "the parcel changes hands", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "parcel", before: "in the courier's hands", after: "in his own hands" }] }],
+    );
+    return plan.shots[0].prompt.split("\n").find((l) => l.startsWith("People taking part")) ?? "";
+  };
+  for (const who of [
+    "The courier stands on the left; Gudini waits at the counter",
+    "On the left, Gudini faces the courier standing on the right",
+    "Gudini stands on the left; Alice Smith stands on the right",
+  ]) {
+    const l = line(who);
+    assert.ok(l.includes("only those named above in Positions"), l);
+    for (const ghost of [" The,", " On,", "— The", "— On", "Smith,"]) {
+      assert.ok(!l.includes(ghost), `в участниках появилось лишнее из «${who}»: ${l}`);
+    }
+    assert.ok(!/exactly \d/.test(l), `число участников выдумано по словам: ${l}`);
+  }
+});
+
+test("явная роль состояния переживает нормализацию", async () => {
+  const { objectStates } = await import("../lib/aiFilm/story");
+  const kept = objectStates([
+    { id: "keys", before: "held by Gudini", after: "held by Ada", role: "change" },
+    { id: "lamp", before: "lit at the table", after: "casting a warm pool of light", role: "keep" },
+  ]);
+  assert.deepEqual(kept.map((o) => o.role), ["change", "keep"], "роль потеряна при разборе ответа модели");
+
+  // и тот же контракт после полного пути нормализации не превращает условие в обязательство
+  const ev: StoryEvent = {
+    id: "handover", observable: "the keys change owner", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [
+      { id: "keys", before: "held by Gudini", after: "held by Ada", role: "change" },
+      { id: "lamp", before: "lit at the table", after: "casting a warm pool of light", role: "keep" },
+    ],
+  };
+  const plan = planOf(
+    ["Он передал ключи соседке прямо за столом под горящей настольной лампой."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, visualAction: "Gudini puts the keys into Ada's hand", keyMoment: "the keys reach Ada's hand",
+        eventIds: ["handover"],
+        objects: [
+          { id: "keys", before: "held by Gudini", after: "held by Ada", role: "change" },
+          { id: "lamp", before: "lit at the table", after: "still lit at the table", role: "keep" },
+        ],
+        scene: { who: "Gudini at the left of the table; Ada at the right" },
+      }),
+    ],
+    [ev],
+    { supportingCharacters: [{ name: "Ada", function: "partner", appearance: "an adult woman in a green wool coat" }] },
+  );
+  assert.deepEqual(gateIssues(plan), [], JSON.stringify(plan.issues));
 });

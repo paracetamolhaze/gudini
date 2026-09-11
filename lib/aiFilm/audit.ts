@@ -53,6 +53,14 @@ const MOTION_REFERENCE = /\b(?:background|backdrop|trees|wall|walls|ground|horiz
  */
 const PROCESS = /\b(?:as|while|until|when|then|during|becomes?|turns? into|being|starts? to|begins? to)\b/i;
 
+/**
+ * Прямое заявление о ПЕРВОМ кадре. Только такие куски описания камеры считаются заявлением
+ * начального состояния: «уже вскрытый конверт лежит в кадре с первого момента». Остальной
+ * текст камеры говорит, где стоит камера, и словами сцены — «beside the workbench» не
+ * означает, что предмет уже поднят над верстаком.
+ */
+const INITIAL_CLAIM = /\balready\b|\bfrom the (?:first|very first|opening) (?:moment|frame|second)\b|\bat the start of the (?:clip|shot)\b|\bfrom the outset\b/i;
+
 /** Слова продолжения: состояние не меняется, а сохраняется. */
 const CONTINUES = /\b(?:still|remains?|unchanged|same|again|as before|intact)\b/i;
 
@@ -448,13 +456,18 @@ export function auditPlan(
       // Смотрим только на то, чем кадр НАЧИНАЕТСЯ: сводку состояния и позицию камеры.
       // Предложения о ходе действия из проверки исключаются — наблюдение за вскрытием
       // не означает, что конверт вскрыт с первого кадра.
-      const initial = [b.stateBefore, b.camera]
-        .flatMap((t) => (t ?? "").split(/[;,]/))
+      const declared = (b.stateBefore ?? "").split(/[;,]/);
+      // Из описания камеры берутся только прямые заявления о первом кадре.
+      const claimed = (b.camera ?? "").split(/[;,]/).filter((c) => INITIAL_CLAIM.test(c));
+      const initial = [...declared, ...claimed]
         .map((c) => c.trim())
         .filter((c) => c && !PROCESS.test(c))
         .join("; ");
       if (!initial) continue;
-      if (stateReached(o.after, initial, o.before, [o.id]) && !stateReached(o.before, initial, o.after, [o.id])) {
+      // Слова места и реквизита в счёт не идут: «beside the workbench» в описании камеры
+      // говорит, где стоит камера, а не что предмет уже поднят над верстаком.
+      const scenery = [o.id, b.location, ...(b.scene?.props ?? []), ...(b.scene?.worn ?? []), b.scene?.who ?? ""];
+      if (stateReached(o.after, initial, o.before, scenery) && !stateReached(o.before, initial, o.after, scenery)) {
         mixed.push(`${b.id}/${o.id}`);
       }
     }

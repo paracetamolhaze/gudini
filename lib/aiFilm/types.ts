@@ -290,6 +290,8 @@ export type FilmShot = {
   changeBySec: number | null;
   /** сроки всех событий клипа по отдельности: раньше все изменения получали срок первого */
   deadlines: EventDeadline[];
+  /** фаза каждого бита в этом окне: совершение, начало или последствия */
+  phases?: { beatId: string; phase: "whole" | "start" | "aftermath" }[];
   prompt: string;
   /** предыдущий shot цепочки — только для extend */
   dependsOn: string | null;

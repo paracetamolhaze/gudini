@@ -196,9 +196,22 @@ export function withoutObjectClauses(summary: string, objects: ObjectState[] | u
  * двух битов теряло реквизит второго, в кадре оказывался «ровно один участник» при двух
  * названных людях, а продолжение одновременно объявляло изменение сделанным и несделанным.
  */
+export type BeatPhase = "whole" | "start" | "aftermath";
+
 export type WindowStaging = {
-  /** что это за окно: целое действие, только его начало или уже последствия */
-  phase: "whole" | "start" | "aftermath";
+  /**
+   * Фаза окна целиком: «aftermath», только если ВСЕ его биты — последствия. Одно окно
+   * может нести последствия одного события и совершение другого, и это разные фазы.
+   */
+  phase: BeatPhase;
+  /** фаза каждого бита окна: из неё собираются действие, движение, механика и состояния */
+  beatPhases: { beatId: string; phase: BeatPhase }[];
+  /** действия, которые в этом окне действительно совершаются */
+  actions: { beatId: string; text: string }[];
+  /** действия, завершённые раньше: их повторять нельзя */
+  done: { beatId: string; text: string; keyMoment: string }[];
+  /** движение тех битов, действие которых здесь совершается */
+  motions: string[];
   /** условия, которые держатся весь клип */
   throughout: string[];
   /** условия, появляющиеся со второй фазы окна */
@@ -207,11 +220,16 @@ export type WindowStaging = {
   who: string[];
   /** механика той фазы, которую показывает это окно */
   mechanics: string[];
-  /** имена людей, названных в постановке окна */
-  named: string[];
 };
 
-export function composeWindow(beats: StoryBeat[], phase: WindowStaging["phase"]): WindowStaging {
+export function composeWindow(beats: StoryBeat[], phases: BeatPhase[] | BeatPhase): WindowStaging {
+  const list: BeatPhase[] = Array.isArray(phases) ? phases : beats.map(() => phases);
+  const beatPhases = beats.map((b, i) => ({ beatId: b.id, phase: list[i] ?? "whole" }));
+  const phase: BeatPhase = beatPhases.every((p) => p.phase === "aftermath")
+    ? "aftermath"
+    : beatPhases.some((p) => p.phase === "start")
+      ? "start"
+      : "whole";
   const clean = (v: string[] | undefined) => (v ?? []).map((x) => x.trim()).filter(Boolean);
   const first = beats[0];
   const throughout = [...new Set([...clean(first.scene?.worn), ...clean(first.scene?.props)])];
@@ -222,11 +240,17 @@ export function composeWindow(beats: StoryBeat[], phase: WindowStaging["phase"])
     }
   }
   const who = [...new Set(beats.map((b) => b.scene?.who?.trim()).filter(Boolean) as string[])];
-  // Последствия чужой механики не повторяют: «сломать печать и снять крышку» в клипе,
-  // где футляр уже открыт, — это второе открывание.
-  const mechanics = phase === "aftermath" ? [] : [...new Set(beats.map((b) => b.scene?.mechanics?.trim()).filter(Boolean) as string[])];
-  const named = [...new Set(who.join(" ").match(/\p{Lu}\p{L}+/gu) ?? [])];
-  return { phase, throughout, later, who, mechanics, named };
+  // Завершённое действие не повторяется ни в действии, ни в движении, ни в механике —
+  // и решается это ПО КАЖДОМУ БИТУ. Прежде фаза бралась у последнего бита окна, и клип
+  // с последствием первого действия и совершением второго снова требовал сломать печать.
+  const isDone = (i: number) => beatPhases[i].phase === "aftermath";
+  const actions = beats.map((b, i) => ({ beatId: b.id, text: b.visualAction })).filter((_, i) => !isDone(i) && beats[i].visualAction);
+  const done = beats
+    .map((b, i) => ({ beatId: b.id, text: b.visualAction, keyMoment: b.keyMoment }))
+    .filter((_, i) => isDone(i));
+  const motions = beats.map((b, i) => (isDone(i) ? "" : b.motion)).filter(Boolean);
+  const mechanics = [...new Set(beats.map((b, i) => (isDone(i) ? "" : b.scene?.mechanics?.trim() ?? "")).filter(Boolean))];
+  return { phase, beatPhases, actions, done, motions, throughout, later, who, mechanics };
 }
 
 /** Состояния предметов сцены одной строкой: «main-canopy — packed and intact; parcel — sealed». */
@@ -348,17 +372,24 @@ export function shotPrompt(args: {
   if (staging.who.length) lines.push(`Positions: ${staging.who.join(" Then: ")}.`);
   // Все действия клипа по порядку. Отсюда брался один «главный» бит, и второе действие
   // объединённой сцены исчезало из запроса, оставаясь только в списке идентификаторов.
-  if (beats.length === 1 && changeDone) {
-    // Завершённое событие в продолжении не повторяется: иначе коробку открывают дважды.
+  // Завершённые действия и действия этого окна разделены по битам. Прежде фаза бралась
+  // у последнего бита: окно с последствием первого действия и совершением второго снова
+  // требовало сломать печать, которая была сломана в предыдущем клипе.
+  for (const d of staging.done) {
     lines.push(
-      `The change has already happened in the previous clip. Do not repeat it${beat.keyMoment ? `: do not show ${beat.keyMoment} again` : ""}. ` +
-        `This clip shows what follows from it: ${stateLine(beat.objects, "after") || beat.stateAfter || beat.visualAction}.`,
+      `Already done in the previous clip, do not repeat it${d.keyMoment ? `: do not show ${d.keyMoment} again` : ""}. ` +
+        `That action stays finished: ${d.text}.`,
     );
-  } else if (beats.length === 1) {
-    lines.push(unfinished ? `Action, of which only the beginning fits in this clip: ${beat.visualAction}` : `Action: ${beat.visualAction}`);
+  }
+  if (!staging.actions.length) {
+    const rest = stateLine(beat.objects, "after") || beat.stateAfter || beat.visualAction;
+    lines.push(`This clip shows only what follows from it: ${rest}.`);
+  } else if (staging.actions.length === 1) {
+    const only = staging.actions[0].text;
+    lines.push(unfinished ? `Action, of which only the beginning fits in this clip: ${only}` : `Action: ${only}`);
   } else {
     lines.push(`Action, in this order and all of it inside one continuous take:`);
-    beats.forEach((b, i) => lines.push(`${i + 1}. ${b.visualAction}`));
+    staging.actions.forEach((a, i) => lines.push(`${i + 1}. ${a.text}`));
   }
   // Одно изменение ради которого снимается сцена — сразу после действия и до всего
   // остального: у генератора должна быть одна цель, а не список равноправных задач.
@@ -386,22 +417,22 @@ export function shotPrompt(args: {
   if (shownSeconds != null && shownSeconds > 0) {
     lines.push(`Only the first ${shownSeconds.toFixed(1)} seconds of this clip are used in the edit; everything above must happen inside them.`);
   }
-  // Движение завершённого действия в продолжении не повторяется: «he lifts the lid» после
-  // уже открытой коробки — это второе открывание.
-  const motions = changeDone ? [] : beats.map((b) => b.motion).filter(Boolean);
-  if (motions.length) lines.push(`Motion in order: ${motions.join(" Then: ")}`);
+  // Движение завершённого действия не повторяется: «he lifts the lid» после уже открытой
+  // коробки — это второе открывание. Движение берётся по тем же битам, что и действие.
+  if (staging.motions.length) lines.push(`Motion in order: ${staging.motions.join(" Then: ")}`);
   if (beat.location) lines.push(`Location: ${beat.location}.`);
   // Незавершённый кадр: изменение приходится на следующий клип цепочки, поэтому здесь
   // действие только начинается, а состояние к концу клипа остаётся исходным. Прежде сюда
   // уходило конечное состояние бита, и первый клип требовал того же, что и продолжение.
   const tail = beats[beats.length - 1];
-  const after = unfinished
+  const tailPhase = staging.beatPhases[staging.beatPhases.length - 1]?.phase ?? "whole";
+  const after = tailPhase === "start"
     ? stateLine(tail.objects, "before") || tail.stateBefore
     : stateLine(tail.objects, "after") || tail.stateAfter;
   if (after) {
-    lines.push(unfinished ? `At the end of this clip: ${after} — the action is still under way.` : `After: ${after}.`);
+    lines.push(tailPhase === "start" ? `At the end of this clip: ${after} — the action is still under way.` : `After: ${after}.`);
   }
-  if (unfinished) {
+  if (tailPhase === "start") {
     lines.push(
       `This clip is the beginning of a longer take: the action starts here and is NOT finished inside it. ` +
         `${tail.keyMoment ? `Do not show ${tail.keyMoment} in this clip — it happens in the continuation.` : "The change happens in the continuation."}`,
@@ -452,16 +483,21 @@ export function shotPrompt(args: {
   const cast: string[] = [];
   if (beats.some((b) => b.gudiniVisible)) cast.push(character.name);
   for (const c of inScene) cast.push(c.name);
-  // Люди, названные в расстановке окна, тоже участники: иначе запрос описывал передачу
-  // ключей между двумя людьми и тут же требовал «ровно один участник».
-  for (const name of staging.named) {
-    if (!cast.some((c) => c.toLowerCase() === name.toLowerCase())) cast.push(name);
-  }
+  // Участники берутся из СОГЛАСОВАННОГО списка: постоянный персонаж и объявленные
+  // персонажи истории, найденные в тексте окна (включая расстановку). Имена из свободного
+  // текста больше не добываются: заглавная буква человека не доказывает, и «The», «On»
+  // становились участниками, а «Alice Smith» — тремя людьми сразу.
+  // Если расстановка называет кого-то ещё, точное число не заявляется: считать людей по
+  // словам нельзя, а спорить с собственной строкой Positions — тем более.
+  const byPositions = staging.who.length > 0;
+  const who = byPositions
+    ? `People taking part in the action: only those named above in Positions${cast.length ? ` (${cast.join(", ")} among them)` : ""}, and nobody else.`
+    : `People taking part in the action: exactly ${cast.length || "as described above"}${cast.length ? ` — ${cast.join(", ")}` : ""}.`;
   // Запрет был абсолютным — «никаких людей на фоне вообще», — и спорил с разрешением
   // планировщика на естественный фон: улица и аэропорт выходили вымершими. Запрещаем
   // добавлять УЧАСТНИКОВ, а не всякое присутствие людей в общественном месте.
   lines.push(
-    `People taking part in the action: exactly ${cast.length || "as described above"}${cast.length ? ` — ${cast.join(", ")}` : ""}. ` +
+    `${who} ` +
       "No other participants: nobody else acts, reacts, helps or watches the action. " +
       "Incidental passers-by are allowed only where the place would naturally have them, out of focus, never interacting with him and never looking at the camera.",
   );
@@ -775,14 +811,15 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       // Фаза окна решается ОДИН раз, и остальное следует из неё. Раньше «начало действия»
       // и «последствия» считались двумя независимыми флагами: в цепочке 8+7+7 второй клип
       // одновременно говорил «изменение уже произошло» и «футляр остаётся закрытым».
-      const phase: WindowStaging["phase"] =
-        doneBeats.has(tailId) && !changeHere
-          ? "aftermath"
-          : !changeHere && merged[merged.length - 1].end > from + shownSeconds + 0.05
-            ? "start"
-            : "whole";
-      const staging = composeWindow(merged, phase);
-      const unfinished = phase === "start";
+      // Фаза считается для КАЖДОГО бита окна: последствия одного события и совершение
+      // другого спокойно живут в одном клипе, и различать их должен компилятор.
+      const phases: BeatPhase[] = merged.map((b) => {
+        const changeOfThisBeat = deadlines.some((d) => d.beatId === b.id && d.bySec != null);
+        if (doneBeats.has(b.id) && !changeOfThisBeat) return "aftermath";
+        return !changeOfThisBeat && b.end > from + shownSeconds + 0.05 ? "start" : "whole";
+      });
+      const staging = composeWindow(merged, phases);
+      const unfinished = phases[phases.length - 1] === "start";
       if (mode === "text") {
         // конец отрезка — конец реально вошедших битов, а не длина генерации: клип на 8 с,
         // из которого в монтаж идут 4, занимает в ролике четыре секунды
@@ -808,6 +845,7 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
         eventIds,
         changeBySec: deadlines.find((d) => d.bySec != null)?.bySec ?? null,
         deadlines,
+        phases: staging.beatPhases,
         prompt: shotPrompt({
           character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, deadlines, shownSeconds,
           staging, previousMoment: mode === "extend" ? prevShotEnd ?? undefined : undefined,
@@ -823,7 +861,8 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       const reached = stateLine(tail.objects, "after") || tail.stateAfter || tail.visualAction;
       const midway = `${stateLine(tail.objects, "before") || tail.stateBefore || tail.visualAction} — the action is under way and ${tail.keyMoment || "the change"} has not happened yet`;
       prevShotEnd = unfinished ? midway : reached;
-      if (!unfinished) for (const b of merged) doneBeats.add(b.id);
+      // Завершённым считается тот бит, чьё изменение в этом окне действительно показано.
+      staging.beatPhases.forEach((p) => { if (p.phase === "whole") doneBeats.add(p.beatId); });
       prevShotTail = tail;
       owner.end = Math.max(owner.end, Math.min(tail.end, from + shownSeconds));
       const advanced = Math.max(Math.min(tail.end - from, shownSeconds), 0.5);

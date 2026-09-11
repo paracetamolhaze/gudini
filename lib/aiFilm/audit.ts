@@ -60,22 +60,50 @@ function stateTokens(s: string): { words: Set<string>; negated: boolean } {
 }
 
 /**
- * Достигнуто ли обещанное состояние. Требуется КАЖДОЕ значимое слово обещания и тот же знак:
- * одного общего слова мало — «phone» есть и в «review submitted», и в «phone on the table»,
- * но предмет разговора не доказывает выполненного действия. Лишние подробности разрешены:
- * «review typed and sent» закрывает «review typed».
+ * Слова, которыми результат ОТЛИЧАЕТСЯ от исходного состояния. Именно они доказывают, что
+ * событие произошло: «phone», «review», «canopy» называют предмет разговора и есть по обе
+ * стороны перехода, поэтому из проверки убираются вместе с идентификаторами.
  */
-function stateReached(promised: string, got: string): boolean {
+function decisiveWords(before: string, after: string, ignore: string[]): Set<string> {
+  const from = stateTokens(before).words;
+  const skip = new Set(ignore.flatMap((s) => [...stateTokens(s).words]));
+  const out = new Set<string>();
+  for (const w of stateTokens(after).words) {
+    if (!from.has(w) && !skip.has(w)) out.add(w);
+  }
+  return out;
+}
+
+/**
+ * Достигнуто ли обещанное состояние: тот же знак и хотя бы одно решающее слово результата.
+ * Требовать ВСЕ слова обещания нельзя — живой английский планировщика описывает то же самое
+ * другими словами, и «screen showing a typed review» переставало закрывать «screen showing
+ * a typed review text being entered». Одного общего слова тоже мало, поэтому слова, общие
+ * с исходным состоянием, и названия предметов в счёт не идут.
+ */
+function stateReached(promised: string, got: string, from = "", ignore: string[] = []): boolean {
   const want = stateTokens(promised);
   if (!want.words.size) return false;
   const have = stateTokens(got);
   if (want.negated !== have.negated) return false;
-  for (const w of want.words) {
-    if (!have.words.has(w)) return false;
+  const decisive = from || ignore.length ? decisiveWords(from, promised, ignore) : want.words;
+  const check = decisive.size ? decisive : want.words;
+  for (const w of check) {
     // «unsubmitted» — это не «submitted»: приставка отрицания тоже переворачивает смысл
-    if (have.words.has(`un${w}`)) return false;
+    if (have.words.has(w) && !have.words.has(`un${w}`)) return true;
   }
-  return true;
+  return false;
+}
+
+/**
+ * Назван ли предмет в самом событии: «reserve-deploys / the reserve canopy opens» говорит
+ * про запасной купол, а основной упомянут там лишь как обстановка.
+ */
+function mentionsObject(event: StoryEvent, objectId: string): boolean {
+  const phrase = objectId.replace(/[-_]+/g, " ").trim().toLowerCase();
+  if (!phrase) return false;
+  const text = `${event.id.replace(/[-_]+/g, " ")} ${event.observable}`.toLowerCase();
+  return text.includes(phrase);
 }
 
 /** Одно и то же состояние: те же значимые слова и тот же знак. */
@@ -114,8 +142,18 @@ export function eventCovered(event: StoryEvent, beats: StoryBeat[], shots?: Film
     claiming = claiming.filter((b) => inShots.has(b.id));
   }
   if (!claiming.length) return false;
+  // Доказательство события — предмет, о котором событие и говорит. Остальные предметы в
+  // записи события описывают обстановку и непрерывность: «основной купол остаётся порванным»
+  // показать как изменение невозможно, а требовать его объявления от сцены — значит
+  // блокировать исправную постановку.
+  const ignore = [event.id, ...event.objects.map((o) => o.id)];
+  const changing = event.objects.filter((o) => o.after.trim() && decisiveWords(o.before, o.after, [event.id, o.id]).size > 0);
+  const pool = changing.length ? changing : event.objects.filter((o) => o.after.trim());
+  if (!pool.length) return false;
+  const named = pool.filter((o) => mentionsObject(event, o.id));
+  const must = named.length ? named : [pool[0]];
   return claiming.some((b) =>
-    event.objects.every((want) => {
+    must.every((want) => {
       const got = (b.objects ?? []).find((o) => o.id === want.id);
       if (!got) return false;
       const after = got.after.trim();
@@ -127,13 +165,10 @@ export function eventCovered(event: StoryEvent, beats: StoryBeat[], shots?: Film
       // Результат уже достигнут ДО действия: «уже порванный купол колышется на ветру»
       // показывает последствие, а не сам разрыв. Добавленные слова про ветер меняют строку,
       // но не делают событие показанным.
-      if (before && stateReached(want.after, before)) return false;
+      if (before && stateReached(want.after, before, want.before, ignore)) return false;
       // Результат сцены — именно обещанный результат, со знаком: «review not submitted»
       // не закрывает «review submitted».
-      if (!stateReached(want.after, after)) return false;
-      // И это не осталось обещанным исходным состоянием: «sealed → sealed and dusty»
-      // повторяет начало, а не приводит к результату.
-      if (want.before.trim() && !sameState(want.before, want.after) && stateReached(want.before, after)) return false;
+      if (!stateReached(want.after, after, want.before, ignore)) return false;
       return true;
     }),
   );

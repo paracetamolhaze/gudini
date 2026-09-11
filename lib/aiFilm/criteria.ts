@@ -51,6 +51,13 @@ export function missingRequired(plan: Pick<AiFilmPlan, "beats" | "shots">, requi
 export function preserveRequired(original: StoryEvent[] | undefined, next: StoryEvent[] | undefined): StoryEvent[] {
   const out = [...(next ?? [])];
   for (const was of requiredEvents(original)) {
+    // То же обязательство под другим именем возвращать нельзя: переименованное событие
+    // добавлялось вторым, и одно из двух оставалось непоказанным навсегда. Совпадением
+    // считается тот же предмет с тем же обещанным результатом.
+    const renamed = out.some(
+      (e) => e.id !== was.id && e.objects.some((o) => was.objects.some((w) => o.id === w.id && sameGoal(o.after, w.after))),
+    );
+    if (renamed) continue;
     const at = out.findIndex((e) => e.id === was.id);
     // Возвращается всё обязательство целиком, а не только идентификатор и флаг.
     // Сохранение одного id ничего не давало: второй заход оставлял «review» обязательным,
@@ -71,12 +78,30 @@ export function preserveRequired(original: StoryEvent[] | undefined, next: Story
  */
 export function planRank(plan: AiFilmPlan, required: StoryEvent[]): number[] {
   return [
-    gateIssues(plan).length,
+    // Потерянные обязательства идут ПЕРВЫМИ и считаются по событиям, а не по строкам:
+    // одно сообщение «не показаны» может нести и два события, и пять. Второй заход
+    // выигрывал у первого, потеряв ещё три обязательных события, потому что число
+    // сообщений уменьшилось на одно.
     missingRequired(plan, required).length,
+    blockingWeight(plan),
     retryIssues(plan).length,
     (plan.issues ?? []).length,
     -Math.round((plan.stats?.coverage ?? 0) * 1000),
   ];
+}
+
+/** Вес запретов: сообщение о пяти непоказанных событиях тяжелее сообщения об одном. */
+export function blockingWeight(plan: Pick<AiFilmPlan, "issues">): number {
+  return gateIssues(plan).reduce((a, i) => a + Math.max(1, (i.eventIds ?? []).length), 0);
+}
+
+/** Одна ли это цель: результат описан теми же словами, хотя бы отчасти. */
+function sameGoal(a: string, b: string): boolean {
+  const words = (s: string) => new Set(s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4));
+  const x = words(a);
+  const y = words(b);
+  for (const w of x) if (y.has(w)) return true;
+  return false;
 }
 
 /** Лучше ли `candidate`, чем `current`. При равенстве остаётся текущий план. */

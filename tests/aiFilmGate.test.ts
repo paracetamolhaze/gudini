@@ -7,7 +7,7 @@ import { GoogleAuth } from "google-auth-library";
 import { beatsFromRaw, phrasesFromWords, normalizeBible } from "../lib/aiFilm/story";
 import { buildFilmPlan, compilerFingerprint } from "../lib/aiFilm/plan";
 import { planKey, runAiFilmStage } from "../lib/aiFilm/run";
-import { betterPlan, gateIssues, missingRequired, planRank, preserveRequired, requiredEvents, retryIssues } from "../lib/aiFilm/criteria";
+import { betterPlan, blockingWeight, gateIssues, missingRequired, planRank, preserveRequired, requiredEvents, retryIssues } from "../lib/aiFilm/criteria";
 import { loadCharacterProfile } from "../lib/aiFilm/character";
 import { loadUniverseProfile } from "../lib/aiFilm/universe";
 import { resetLedger } from "../lib/costLedger";
@@ -127,9 +127,18 @@ test("кандидат выбирается по тяжести, а не по ч
   assert.ok(!betterPlan(twoWarnings, { ...twoWarnings }, required));
   // потерянное обязательное событие тяжелее любого числа предупреждений
   const lost: AiFilmPlan = { ...base, issues: [], shots: [], beats: base.beats.map((b) => ({ ...b, eventIds: [] })) };
-  assert.deepEqual(planRank(lost, required).slice(0, 2), [0, 2]);
+  // потерянные обязательства идут первыми, запреты считаются по событиям, а не по строкам
+  assert.deepEqual(planRank(lost, required).slice(0, 2), [2, 0]);
   assert.ok(betterPlan(twoWarnings, lost, required));
   assert.equal(missingRequired(base, required).length, 0);
+
+  // один запрет о пяти непоказанных событиях тяжелее запрета об одном
+  const five: AiFilmPlan = {
+    ...base,
+    issues: [{ code: "event-not-covered", severity: "block", beatIds: [], eventIds: ["a", "b", "c", "d", "e"], message: "не показаны" }],
+  };
+  assert.ok(blockingWeight(five) > blockingWeight(oneBlock), "вес запрета считается по событиям");
+  assert.ok(betterPlan(oneBlock, five, required), "план, потерявший меньше событий, обязан выигрывать");
 });
 
 test("второй заход не может снять обязательность события", () => {

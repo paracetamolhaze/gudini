@@ -619,3 +619,69 @@ test("контрольная история: у каждого события в
   // каждый запрос просит своё, а не один и тот же кадр
   assert.equal(new Set(plan.shots.map((s) => s.prompt)).size, plan.shots.length);
 });
+
+// ─────────────────────────────── 11. проверка на настоящем ответе планировщика
+
+test("живое описание результата засчитывается, подмена — нет", () => {
+  // формулировки из настоящего плана: контракт и сцена говорят об одном разными словами
+  const review: StoryEvent = {
+    id: "review", observable: "Gudini taps on his phone screen typing out a product review", required: true,
+    fromPhrase: 5, toPhrase: 5,
+    objects: [{ id: "phone", before: "dark screen, held loosely in hand", after: "screen showing a typed review text being entered" }],
+  };
+  const beat = (before: string, after: string): StoryBeat => ({
+    ...controlPlan().beats.find((b) => b.eventIds.includes("review"))!,
+    objects: [{ id: "phone", before, after }],
+  });
+  assert.ok(
+    eventCovered(review, [beat("in his hand, screen off", "in his hand, showing a typed review on screen")]),
+    "то же самое другими словами обязано засчитываться",
+  );
+  assert.ok(
+    !eventCovered(review, [beat("in his pocket", "resting on the table")]),
+    "перекладывание телефона по-прежнему не закрывает отзыв",
+  );
+  assert.ok(
+    !eventCovered(review, [beat("dark screen, held loosely in hand", "dark screen, held loosely in his other hand")]),
+    "смена руки — не отправленный отзыв",
+  );
+});
+
+test("предмет обстановки в записи события не требуется от сцены", () => {
+  // из настоящего плана: событие про запасной купол упоминает и основной — как обстановку
+  const deploy: StoryEvent = {
+    id: "reserve-deploys", observable: "Gudini pulls the reserve handle and the grey reserve canopy opens fully above him",
+    required: true, fromPhrase: 4, toPhrase: 4,
+    objects: [
+      { id: "reserve-canopy", before: "packed flat inside a harness pouch, unopened", after: "fully open grey canopy billowing above him" },
+      { id: "main-canopy", before: "torn into shredded orange strips", after: "still torn into shredded orange strips, flapping uselessly alongside" },
+    ],
+  };
+  const base = controlPlan().beats.find((b) => b.eventIds.includes("reserve"))!;
+  const beat: StoryBeat = {
+    ...base, eventIds: ["reserve-deploys"],
+    objects: [{ id: "reserve-canopy", before: "packed tightly in a harness pouch on his chest", after: "fully open grey canopy overhead, slowing his fall" }],
+  };
+  assert.ok(eventCovered(deploy, [beat]), "показанный запасной купол закрывает событие про запасной купол");
+  // но подменить его основным куполом нельзя
+  const wrong: StoryBeat = { ...beat, objects: [{ id: "main-canopy", before: "torn", after: "still torn and flapping" }] };
+  assert.ok(!eventCovered(deploy, [wrong]));
+});
+
+test("переименованное обязательство не превращается в два", () => {
+  const first: StoryEvent = {
+    id: "canopy-opens-and-tears", observable: "the orange main canopy inflates then rips apart", required: true,
+    fromPhrase: 3, toPhrase: 3,
+    objects: [{ id: "main-canopy", before: "packed inside the harness", after: "torn into flapping shredded orange strips" }],
+  };
+  const renamed: StoryEvent = {
+    ...first, id: "canopy-tears", observable: "the orange main canopy opens briefly then rips apart in mid-air",
+    objects: [{ id: "main-canopy", before: "opening fully overhead, intact orange nylon", after: "torn into ragged flapping pieces" }],
+  };
+  const kept = preserveRequired([first], [renamed]);
+  assert.equal(kept.length, 1, `обязательство задвоилось: ${JSON.stringify(kept.map((e) => e.id))}`);
+  assert.equal(kept[0].id, "canopy-tears");
+  // а настоящая потеря события по-прежнему возвращается
+  const other: StoryEvent = { ...first, id: "landing", observable: "his feet hit the ground", objects: [{ id: "boots", before: "in the air", after: "on the grass" }] };
+  assert.equal(preserveRequired([first], [other]).length, 2);
+});

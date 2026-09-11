@@ -7,7 +7,7 @@ import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
 import { planStory, STORY_VERSION } from "./story";
 import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
-import { betterPlan, gateIssues, issueLines, missingRequired, preserveRequired, requiredEvents, retryIssues } from "./criteria";
+import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, requiredEvents, retryIssues } from "./criteria";
 import { generateGroups } from "./generate";
 import { loadCharacterProfile } from "./character";
 import { loadUniverseProfile } from "./universe";
@@ -110,18 +110,28 @@ export async function runAiFilmStage(args: {
     if (first.length) {
       console.warn(`AI-фильм: план нарушил требования (${issueLines(first).join("; ")}) — второй заход`);
       args.setStep("AI-фильм: правка плана", 29);
-      const retry = await ask(issueLines(first).map((w) => `- ${w}`).join("\n"));
+      // Во второй заход уходит и сам контракт: те же идентификаторы, те же состояния.
+      // Иначе модель переименовывает событие, прежнее возвращается принудительно, и в плане
+      // оказываются два обязательства об одном и том же — одно из них навсегда непоказанное.
+      const contract = required.length
+        ? `\nОбязательные события остаются теми же, с теми же id и состояниями. Покажи каждое:\n` +
+          required
+            .map((e) => `- ${e.id}: ${e.observable} (${e.objects.map((o) => `${o.id}: ${o.before} → ${o.after}`).join("; ")})`)
+            .join("\n") +
+          `\nСостояние предмета после сцены пиши теми же словами, что и after у события.`
+        : "";
+      const retry = await ask(issueLines(first).map((w) => `- ${w}`).join("\n") + contract);
       // Обязательный набор первого захода возвращается силой: снять обязательность вместо
       // постановки сцены модель не может — это делало проверку зелёной, не показав события.
       const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events) };
       const retryPlan = buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg });
       // Выбор по тяжести и сохранённым событиям, а не по числу строк.
-      const was = { blocks: gateIssues(plan).length, lost: missingRequired(plan, required).length };
+      const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };
       if (betterPlan(retryPlan, plan, required)) {
         story = { ...retry, bible: retryBible };
         plan = retryPlan;
         console.log(
-          `AI-фильм: второй заход принят — запретов ${gateIssues(retryPlan).length} (было ${was.blocks}), ` +
+          `AI-фильм: второй заход принят — запретов ${blockingWeight(retryPlan)} (было ${was.blocks}), ` +
             `потеряно обязательных ${missingRequired(retryPlan, required).length} (было ${was.lost})`,
         );
       } else {

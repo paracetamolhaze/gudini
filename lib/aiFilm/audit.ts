@@ -26,6 +26,9 @@ const UNREADABLE = /\bunreadable\b|\billegible\b|\bblurred\b|\bout of focus\b|\b
 /** Движение камеры. Вместе со словом static — противоречие. */
 const CAMERA_MOVES = /\b(?:pans?|tilts?|tracks?|dollies|dolly|pushes in|pulls back|moves? (?:with|toward|away)|follows?|orbits?|circles?|cranes?|zooms?)\b/i;
 
+/** Сцена объявляет себя происходящей раньше: флешбэк в коротком ролике читается как ошибка. */
+const EARLIER = /\bbefore the (?:jump|flight|fall|launch|flare|drop)\b|\bbefore he (?:jump|jumps|jumped|left|leaps|leapt|steps|stepped)\b|\bearlier that (?:day|morning|evening|week)\b|\bflashback\b|\bback (?:at home|in the room) before\b/i;
+
 /** Что-то важное находится НАД человеком. */
 const OBJECT_ABOVE = /\babove (?:him|his head|gudini)\b|\boverhead\b/i;
 
@@ -370,6 +373,15 @@ export function auditPlan(
       "В одной сцене несколько событий: у них будет общий срок, показать их по отдельности нельзя — разложите на две сцены",
     );
   }
+
+  // Сцена, которая сама объявляет себя происходящей раньше предыдущих. В ролике на сорок
+  // секунд флешбэк читается как ошибка монтажа, а не как приём: после порванного купола
+  // зритель видит, как герой только надевает запасной ранец «перед прыжком».
+  add(
+    "scene-out-of-order",
+    shown.filter((b, i) => i > 0 && EARLIER.test(`${b.visualAction} ${b.keyMoment} ${b.motion}`)).map((b) => b.id),
+    "Сцена объявлена происходящей раньше предыдущих — в коротком ролике это читается как ошибка порядка",
+  );
 
   // Сцена с героем без эталонов: лицо будет случайным.
   if (!character.referenceFiles.length) {

@@ -709,3 +709,15 @@ test("короткая сцена с событием занимает врем�
   }
   assert.ok(Math.abs(beats[beats.length - 1].end - duration) < 0.5, "речь покрыта целиком");
 });
+
+test("сцена «перед прыжком» после прыжка получает замечание порядка", () => {
+  const raw = controlRaw().map((r, i) => (i === 3
+    ? { ...r, visualAction: "Before the jump, Gudini straps the grey reserve pack onto his chest in a room", keyMoment: "the reserve pack goes from the floor onto his chest", location: "a room" }
+    : r));
+  const { plan } = controlPlan(raw as any);
+  const out = plan.issues.find((i) => i.code === "scene-out-of-order");
+  assert.ok(out, `флешбэк после прыжка обязан быть виден: ${JSON.stringify(plan.issues.map((i) => i.code))}`);
+  assert.equal(out!.severity, "warn");
+  // обычная сцена такого замечания не получает
+  assert.ok(!controlPlan().plan.issues.some((i) => i.code === "scene-out-of-order"));
+});

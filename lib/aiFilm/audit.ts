@@ -19,7 +19,17 @@ const DAMAGED = /\b(?:torn|shredded|ripped|broken|smashed|cracked|burnt|burned|s
 const INTACT = /\b(?:intact|whole|unopened|sealed|new|full|folded|packed|closed)\b/i;
 
 /** Просьбы к генератору показать читаемый текст — он их не выполняет. */
-const READABLE = /\b(?:screen (?:showing|displaying)|reads? "|text (?:on|saying)|label saying|the words?|caption|subtitle|legible|readable|clearly shows the (?:price|number|name))\b/i;
+/**
+ * Прямая просьба показать РАЗБОРЧИВЫЙ текст: это Veo не выполняет, и кадр выходит с кашей
+ * вместо букв. Запрет.
+ */
+const READABLE_HARD = /\b(?:reads? "|legible|readable|the words?|caption|subtitle|text (?:on|saying)|label saying|clearly shows the (?:price|number|name))\b/i;
+/**
+ * Экран или бумага в кадре с содержимым. Снять это можно — подпись выйдет нечитаемой, и
+ * обычно это не мешает. Прежде сюда попадало и «screen showing a product photo», и такой
+ * кадр запрещался целиком; теперь это замечание, а не запрет.
+ */
+const READABLE_SOFT = /\bscreen (?:showing|displaying)\b|\bproduct page\b|\blisting\b/i;
 /** Предмет сам по себе не запрещён: квитанцию можно скомкать, если её не просят прочитать. */
 const UNREADABLE = /\bunreadable\b|\billegible\b|\bblurred\b|\bout of focus\b|\bnot readable\b/i;
 
@@ -301,11 +311,14 @@ export function auditPlan(
   );
 
   // Просьба показать читаемый текст.
+  const readable = (re: RegExp) =>
+    shown.filter((b) => { const t = `${b.visualAction} ${b.keyMoment}`; return re.test(t) && !UNREADABLE.test(t); }).map((b) => b.id);
+  const hard = readable(READABLE_HARD);
+  add("readable-text", hard, "Сцена требует читаемый текст на экране или бумаге — Veo его не выводит", "block");
   add(
-    "readable-text",
-    shown.filter((b) => { const t = `${b.visualAction} ${b.keyMoment}`; return READABLE.test(t) && !UNREADABLE.test(t); }).map((b) => b.id),
-    "Сцена требует читаемый текст на экране или бумаге — Veo его не выводит",
-    "block",
+    "screen-content",
+    readable(READABLE_SOFT).filter((id) => !hard.includes(id)),
+    "В кадре экран с содержимым: надписи на нём выйдут нечитаемыми, событие должно читаться по действию",
   );
 
   // Состояние отыгрывается назад — но у КОНКРЕТНОГО предмета. Сравнение по словам без

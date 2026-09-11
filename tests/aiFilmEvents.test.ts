@@ -721,3 +721,17 @@ test("сцена «перед прыжком» после прыжка полу�
   // обычная сцена такого замечания не получает
   assert.ok(!controlPlan().plan.issues.some((i) => i.code === "scene-out-of-order"));
 });
+
+test("экран с картинкой — замечание, требование разборчивых букв — запрет", () => {
+  const withAction = (visualAction: string, keyMoment: string) => {
+    const raw = controlRaw().map((r, i) => (i === 0 ? { ...r, visualAction, keyMoment } : r));
+    return controlPlan(raw as any).plan.issues;
+  };
+  // экран с товаром снять можно: подпись выйдет нечитаемой, но событие читается по действию
+  const soft = withAction("Gudini sits at a desk and looks at a laptop screen showing a product photo of a parachute, then taps buy", "the screen changes to an order confirmation");
+  assert.ok(!soft.some((i) => i.code === "readable-text"), JSON.stringify(soft.map((i) => i.code)));
+  assert.ok(soft.some((i) => i.code === "screen-content" && i.severity === "warn"), JSON.stringify(soft.map((i) => i.code)));
+  // а вот разборчивые буквы Veo не выводит вовсе
+  const hard = withAction("Gudini holds a receipt and the text on it says five dollars", "the price is clearly shows the price on paper");
+  assert.ok(hard.some((i) => i.code === "readable-text" && i.severity === "block"), JSON.stringify(hard.map((i) => i.code)));
+});

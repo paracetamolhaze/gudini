@@ -161,19 +161,72 @@ export function changeDeadline(beats: StoryBeat[], shotStart: number, shownSecon
 }
 
 /**
- * Сводка сцены без тех её кусков, которые уже сказаны про конкретные предметы. Нужна, чтобы
- * сводку можно было оставить рядом со списком предметов, не повторяя одно дважды и не склеивая
- * два описания одного предмета: склейка противоречивых строк — тоже не исправление.
+ * Сводка сцены без тех её кусков, которые УЖЕ сказаны про конкретные предметы. Убирается
+ * только настоящий повтор: кусок выбрасывается, если всё значимое в нём есть в состоянии
+ * этого предмета. Прежняя версия удаляла любое предложение, где встретилось имя предмета,
+ * и «держит футляр на коленях, сидя в узком кресле» исчезало целиком вместе с позой и креслом.
  */
 export function withoutObjectClauses(summary: string, objects: ObjectState[] | undefined): string {
   const text = (summary ?? "").trim();
   if (!text || !objects?.length) return text;
-  const names = objects.map((o) => o.id.replace(/[-_]+/g, " ").toLowerCase()).filter(Boolean);
+  const words = (v: string) => new Set(v.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3));
+  const covered = objects.map((o) => ({
+    name: o.id.replace(/[-_]+/g, " ").toLowerCase(),
+    said: new Set([...words(o.before), ...words(o.after), ...words(o.id.replace(/[-_]+/g, " "))]),
+  }));
   return text
     .split(/[;,]/)
     .map((part) => part.trim())
-    .filter((part) => part && !names.some((n) => part.toLowerCase().includes(n)))
+    .filter((part) => {
+      if (!part) return false;
+      const hit = covered.find((c) => c.name && part.toLowerCase().includes(c.name));
+      if (!hit) return true;
+      // остаётся, если несёт хоть что-то, чего в состоянии предмета не сказано
+      return [...words(part)].some((w) => !hit.said.has(w));
+    })
     .join(", ");
+}
+
+/**
+ * Постановка ОДНОГО монтажного окна: единственная фаза, расстановка людей, реквизит,
+ * механика и состояния. Всё, что уходит в запрос и в проверки, берётся отсюда.
+ *
+ * Появилось после того, как новые поля сцены читались у первого бита, участники считались
+ * по старым текстовым полям, а фаза окна выводилась двумя независимыми флагами: объединение
+ * двух битов теряло реквизит второго, в кадре оказывался «ровно один участник» при двух
+ * названных людях, а продолжение одновременно объявляло изменение сделанным и несделанным.
+ */
+export type WindowStaging = {
+  /** что это за окно: целое действие, только его начало или уже последствия */
+  phase: "whole" | "start" | "aftermath";
+  /** условия, которые держатся весь клип */
+  throughout: string[];
+  /** условия, появляющиеся со второй фазы окна */
+  later: string[];
+  /** расстановка людей, по порядку битов окна */
+  who: string[];
+  /** механика той фазы, которую показывает это окно */
+  mechanics: string[];
+  /** имена людей, названных в постановке окна */
+  named: string[];
+};
+
+export function composeWindow(beats: StoryBeat[], phase: WindowStaging["phase"]): WindowStaging {
+  const clean = (v: string[] | undefined) => (v ?? []).map((x) => x.trim()).filter(Boolean);
+  const first = beats[0];
+  const throughout = [...new Set([...clean(first.scene?.worn), ...clean(first.scene?.props)])];
+  const later: string[] = [];
+  for (const b of beats.slice(1)) {
+    for (const item of [...clean(b.scene?.worn), ...clean(b.scene?.props)]) {
+      if (!throughout.includes(item) && !later.includes(item)) later.push(item);
+    }
+  }
+  const who = [...new Set(beats.map((b) => b.scene?.who?.trim()).filter(Boolean) as string[])];
+  // Последствия чужой механики не повторяют: «сломать печать и снять крышку» в клипе,
+  // где футляр уже открыт, — это второе открывание.
+  const mechanics = phase === "aftermath" ? [] : [...new Set(beats.map((b) => b.scene?.mechanics?.trim()).filter(Boolean) as string[])];
+  const named = [...new Set(who.join(" ").match(/\p{Lu}\p{L}+/gu) ?? [])];
+  return { phase, throughout, later, who, mechanics, named };
 }
 
 /** Состояния предметов сцены одной строкой: «main-canopy — packed and intact; parcel — sealed». */
@@ -254,10 +307,17 @@ export function shotPrompt(args: {
   unfinished?: boolean;
   /** изменение уже произошло в предыдущем клипе цепочки: здесь идут его последствия */
   changeDone?: boolean;
+  /** постановка этого окна: реквизит, расстановка, механика, фаза */
+  staging?: WindowStaging;
   /** чем закончился предыдущий клип этой же цепочки */
   previousMoment?: string;
 }): string {
-  const { character, universe, bible, beats, prev, mode, aspectRatio, deadlines, shownSeconds, unfinished, previousMoment, changeDone } = args;
+  const { character, universe, bible, beats, prev, mode, aspectRatio, deadlines, shownSeconds, previousMoment } = args;
+  // Фаза окна одна, и из неё следует всё остальное. Прежде «начало действия» и «последствия»
+  // считались двумя независимыми флагами и могли оказаться истинными одновременно.
+  const staging = args.staging ?? composeWindow(beats, args.changeDone ? "aftermath" : args.unfinished ? "start" : "whole");
+  const unfinished = staging.phase === "start";
+  const changeDone = staging.phase === "aftermath";
   const beat = beats[0];
   const lines: string[] = [];
   // Порядок важен: Veo сильнее слушает начало промпта, поэтому сперва действие и движение,
@@ -282,9 +342,10 @@ export function shotPrompt(args: {
   }
   // Снаряжение и реквизит сцены: то, что обязано быть в кадре, даже если само не меняется.
   // Предмет, нужный действию, исчезал из запроса ровно потому, что у него не было перехода.
-  const inFrame = [...(beat.scene?.worn ?? []), ...(beat.scene?.props ?? [])].map((s) => s.trim()).filter(Boolean);
-  if (inFrame.length) lines.push(`Present in frame throughout: ${[...new Set(inFrame)].join("; ")}.`);
-  if (beat.scene?.who?.trim()) lines.push(`Positions: ${beat.scene.who.trim()}.`);
+  if (staging.throughout.length) lines.push(`Present in frame throughout: ${staging.throughout.join("; ")}.`);
+  // Условие, которое появляется только во второй части окна, не выдаётся за условие всего клипа.
+  if (staging.later.length) lines.push(`Appears with the later action in this clip: ${staging.later.join("; ")}.`);
+  if (staging.who.length) lines.push(`Positions: ${staging.who.join(" Then: ")}.`);
   // Все действия клипа по порядку. Отсюда брался один «главный» бит, и второе действие
   // объединённой сцены исчезало из запроса, оставаясь только в списке идентификаторов.
   if (beats.length === 1 && changeDone) {
@@ -366,8 +427,7 @@ export function shotPrompt(args: {
   // опора и нагрузка. Общие слова «real physics» ничего не описывают и не спасают кадр, где
   // тело сохраняет одну позу в несовместимых состояниях, поэтому наблюдаемые указания сцены
   // идут первыми, а общая строка остаётся короткой подстраховкой.
-  const mechanics = [...new Set(beats.map((b) => b.scene?.mechanics?.trim()).filter(Boolean))];
-  if (mechanics.length) lines.push(`How it physically happens: ${mechanics.join(" Then: ")}`);
+  if (staging.mechanics.length) lines.push(`How it physically happens: ${staging.mechanics.join(" Then: ")}`);
   lines.push(
     "Bodies and materials behave as themselves: weight and inertia, contact where things touch, " +
       "nothing hovers or drifts in place, and the body posture changes with what supports it.",
@@ -379,7 +439,10 @@ export function shotPrompt(args: {
 
   // Люди в кадре: только те, кого назвала речь. Наблюдателей и прохожих быть не должно —
   // в прошлом ролике рядом с героем истории каждый раз вырастал лишний зритель.
-  const text = beats.map((b) => `${b.visualAction} ${b.motion} ${b.stateBefore} ${b.stateAfter}`).join(" ").toLowerCase();
+  const text = beats
+    .map((b) => `${b.visualAction} ${b.motion} ${b.stateBefore} ${b.stateAfter} ${b.scene?.who ?? ""}`)
+    .join(" ")
+    .toLowerCase();
   const inScene = bible.supportingCharacters.filter((c) =>
     c.name
       .split(/[\s/()]+/)
@@ -389,6 +452,11 @@ export function shotPrompt(args: {
   const cast: string[] = [];
   if (beats.some((b) => b.gudiniVisible)) cast.push(character.name);
   for (const c of inScene) cast.push(c.name);
+  // Люди, названные в расстановке окна, тоже участники: иначе запрос описывал передачу
+  // ключей между двумя людьми и тут же требовал «ровно один участник».
+  for (const name of staging.named) {
+    if (!cast.some((c) => c.toLowerCase() === name.toLowerCase())) cast.push(name);
+  }
   // Запрет был абсолютным — «никаких людей на фоне вообще», — и спорил с разрешением
   // планировщика на естественный фон: улица и аэропорт выходили вымершими. Запрещаем
   // добавлять УЧАСТНИКОВ, а не всякое присутствие людей в общественном месте.
@@ -704,9 +772,17 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       // клип, событие здесь и происходит, а дальше идёт его последствие.
       const tailId = merged[merged.length - 1].id;
       const changeHere = deadlines.some((d) => d.beatId === tailId && d.bySec != null);
-      const unfinished = !changeHere && merged[merged.length - 1].end > from + shownSeconds + 0.05;
-      // Изменение этого бита уже показано в предыдущем клипе цепочки — дальше идут последствия.
-      const changeDone = mode === "extend" && doneBeats.has(tailId) && !changeHere;
+      // Фаза окна решается ОДИН раз, и остальное следует из неё. Раньше «начало действия»
+      // и «последствия» считались двумя независимыми флагами: в цепочке 8+7+7 второй клип
+      // одновременно говорил «изменение уже произошло» и «футляр остаётся закрытым».
+      const phase: WindowStaging["phase"] =
+        doneBeats.has(tailId) && !changeHere
+          ? "aftermath"
+          : !changeHere && merged[merged.length - 1].end > from + shownSeconds + 0.05
+            ? "start"
+            : "whole";
+      const staging = composeWindow(merged, phase);
+      const unfinished = phase === "start";
       if (mode === "text") {
         // конец отрезка — конец реально вошедших битов, а не длина генерации: клип на 8 с,
         // из которого в монтаж идут 4, занимает в ролике четыре секунды
@@ -734,7 +810,7 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
         deadlines,
         prompt: shotPrompt({
           character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, deadlines, shownSeconds,
-          unfinished, changeDone, previousMoment: mode === "extend" ? prevShotEnd ?? undefined : undefined,
+          staging, previousMoment: mode === "extend" ? prevShotEnd ?? undefined : undefined,
         }),
         dependsOn: mode === "extend" ? owner.shotIds[owner.shotIds.length - 1] : null,
         cost: round2(veoSeconds * priceOf(groupModel)),

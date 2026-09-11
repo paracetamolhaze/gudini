@@ -215,3 +215,26 @@ test("смена места ровно на границе окна начина
   assert.ok(!plan.shots[1].prompt.includes("Continue the same shot"), plan.shots[1].prompt.slice(0, 200));
   assert.ok(plan.shots[1].prompt.includes("a garden"), plan.shots[1].prompt.slice(0, 300));
 });
+
+test("контактный лист принадлежит текущему видео, а не прошлому", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-sheet-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { contactSheet } = await import("../lib/aiFilm/generate");
+  const video = path.join(dir, "group.mp4");
+  const sheet = path.join(dir, "contact.jpg");
+
+  clip(video, "red", 4);
+  await contactSheet(video, sheet, 4);
+  const first = sha(sheet);
+
+  // тот же путь, другое видео: превью обязано пересобраться
+  await new Promise((r) => setTimeout(r, 1100));
+  clip(video, "blue", 4);
+  await contactSheet(video, sheet, 4);
+  assert.notEqual(sha(sheet), first, "показывался контактный лист от прошлой генерации");
+
+  // без изменения видео лист не пересобирается
+  const second = sha(sheet);
+  await contactSheet(video, sheet, 4);
+  assert.equal(sha(sheet), second);
+});

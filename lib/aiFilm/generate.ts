@@ -201,7 +201,16 @@ export async function generateShot(args: {
  * перегенерировать. Ошибка сборки листа генерацию не роняет.
  */
 export async function contactSheet(clip: string, out: string, seconds: number): Promise<string | null> {
-  if (fs.existsSync(out)) return out;
+  // Лист принадлежит КОНКРЕТНОМУ видео. Прежде готовый файл возвращался как есть, и после
+  // пересборки плана в том же проекте рядом с новым клипом лежал лист от прошлого.
+  try {
+    const sheet = fs.statSync(out);
+    const video = fs.statSync(clip);
+    if (sheet.mtimeMs >= video.mtimeMs) return out;
+    fs.rmSync(out, { force: true });
+  } catch {
+    // листа ещё нет — соберём ниже
+  }
   const step = Math.max(0.5, Math.round((seconds / 8) * 10) / 10);
   try {
     await runFfmpeg([

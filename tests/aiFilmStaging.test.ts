@@ -1,0 +1,182 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import path from "node:path";
+import { beatsFromRaw, phrasesFromWords, normalizeBible } from "../lib/aiFilm/story";
+import { buildFilmPlan } from "../lib/aiFilm/plan";
+import { gateIssues } from "../lib/aiFilm/criteria";
+import { loadCharacterProfile } from "../lib/aiFilm/character";
+import { loadUniverseProfile } from "../lib/aiFilm/universe";
+import type { AiFilmPlan, CharacterProfile, StoryEvent } from "../lib/aiFilm/types";
+import type { PlanConfig } from "../lib/aiFilm/plan";
+import type { Word } from "../lib/transcribe";
+
+/**
+ * Приёмка единого описания монтажного окна: реквизит, расстановка, участники, фаза события
+ * и состояния берутся из одного согласованного места, и проверки опираются на него же.
+ *
+ * Здесь лежат контрпримеры разбора версии 13: постановка второго бита при объединении,
+ * участники из расстановки сцены, фаза окна в цепочке, независимость от внутренних имён,
+ * наблюдение за процессом против заявления результата, план без обещаний.
+ */
+
+const universe = loadUniverseProfile("gudini-photoreal", path.join(process.cwd(), "assets", "ai-film", "universes"));
+const loaded = loadCharacterProfile("gudini-real", path.join(process.cwd(), "assets", "ai-film", "characters"));
+const character: CharacterProfile = { ...loaded, referenceFiles: ["/tmp/ref.png"] };
+
+const cfg = (over: Partial<PlanConfig> = {}): PlanConfig => ({
+  key: "k", universe, budgetUsd: 12, maxCoverage: 1, concurrency: 3, callMinutes: 2, ...over,
+});
+
+function speech(phrases: string[], per = 0.6): Word[] {
+  const out: Word[] = [];
+  let at = 0;
+  for (const text of phrases) {
+    for (const w of text.split(" ")) {
+      out.push({ word: w, start: at, end: at + per * 0.9 });
+      at += per;
+    }
+    at += 0.6;
+  }
+  return out;
+}
+
+type Raw = Record<string, unknown>;
+
+function planOf(lines: string[], raw: Raw[], events: StoryEvent[], extra: Record<string, unknown> = {}): AiFilmPlan {
+  const words = speech(lines);
+  const duration = words[words.length - 1].end;
+  const beats = beatsFromRaw(raw as any, phrasesFromWords(words), duration, words);
+  const bible = normalizeBible({ bible: { storyType: "explainer", events, ...extra } } as any, character, universe);
+  return buildFilmPlan({ character, bible, beats, duration, cfg: cfg() });
+}
+
+const scene = (over: Raw): Raw => ({
+  fromPhrase: 1, toPhrase: 1, displayMode: "full_ai", priority: "high", purpose: "explain", gudiniVisible: true,
+  cameraAngle: "eye_level", camera: "Camera is at eye level beside the table", motion: "his hands move",
+  location: "a room", eventIds: [], objects: [], ...over,
+});
+
+test("камера, наблюдающая за действием, не считается противоречием фаз", () => {
+  const open: StoryEvent = {
+    id: "open", observable: "the envelope goes from sealed to opened", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "envelope", before: "sealed", after: "opened" }],
+  };
+  const withCamera = (camera: string) =>
+    planOf(
+      ["Он вскрыл конверт прямо у стола и вынул оттуда сложенный вдвое лист.", "Потом он положил лист обратно на стол и вышел."],
+      [
+        scene({ fromPhrase: 1, toPhrase: 1, camera, visualAction: "He opens the sealed envelope at the table", keyMoment: "the envelope is opened", eventIds: ["open"], objects: [{ id: "envelope", before: "sealed", after: "opened" }] }),
+        scene({ fromPhrase: 2, toPhrase: 2, purpose: "resolution", visualAction: "He puts the sheet back and walks out", keyMoment: "he walks out", eventIds: [], objects: [] }),
+      ],
+      [open],
+    ).issues.map((i) => `${i.code}:${i.severity}`);
+
+  const watching = withCamera("Camera stays beside the table and holds the envelope in frame as it is opened");
+  assert.ok(!watching.includes("phase-conflict:block"), JSON.stringify(watching));
+  // заявление, что кадр НАЧИНАЕТСЯ с результата, противоречием остаётся
+  assert.ok(withCamera("Camera is at the table; the opened envelope lies in frame from the first moment").includes("phase-conflict:block"));
+});
+
+test("переименование внутренних имён не меняет полноту обязательства", () => {
+  const deal = (money: string, item: string) => {
+    const ev: StoryEvent = {
+      id: "deal", observable: "the buyer pays and receives the cup", required: true, fromPhrase: 1, toPhrase: 1,
+      objects: [
+        { id: money, before: "in the buyer's hand", after: "in the seller's hand" },
+        { id: item, before: "on the seller's counter", after: "in the buyer's hands" },
+      ],
+    };
+    // сцена показывает только оплату: чашка остаётся у продавца
+    return planOf(
+      ["Покупатель отдал деньги продавцу прямо у прилавка небольшого магазина.", "После этого он отошёл в сторону от прилавка и остановился."],
+      [
+        scene({ fromPhrase: 1, toPhrase: 1, visualAction: "The buyer puts the notes into the seller's hand", keyMoment: "the notes reach the seller's hand", eventIds: ["deal"], objects: [{ id: money, before: "in the buyer's hand", after: "in the seller's hand" }] }),
+        scene({ fromPhrase: 2, toPhrase: 2, purpose: "resolution", visualAction: "The buyer steps away from the counter", keyMoment: "he steps away", eventIds: [], objects: [] }),
+      ],
+      [ev],
+    ).issues.map((i) => i.code).sort();
+  };
+  assert.ok(deal("money", "cup").includes("event-not-covered"), "неполная сделка обязана блокироваться");
+  assert.deepEqual(deal("payment-token", "purchased-item"), deal("money", "cup"), "результат зависит от внутренних имён предметов");
+});
+
+test("план без обещаний показывает обстановку и не блокируется", () => {
+  const plan = planOf(
+    ["Улица в том городе была узкой, кирпичной и очень длинной на вид.", "По ней ходили пешком гораздо чаще, чем ездили на повозках."],
+    [
+      scene({ fromPhrase: 1, toPhrase: 1, purpose: "setup", gudiniVisible: false, visualAction: "A narrow brick street with cobbles runs between low houses", keyMoment: "the whole length of the street is visible", location: "a narrow brick street" }),
+      scene({ fromPhrase: 2, toPhrase: 2, purpose: "explain", gudiniVisible: false, visualAction: "People walk along the cobbles between the houses", keyMoment: "the street is used on foot", location: "a narrow brick street" }),
+    ],
+    [],
+  );
+  assert.deepEqual(gateIssues(plan), [], JSON.stringify(plan.issues));
+  assert.ok(plan.issues.some((i) => i.code === "no-events-declared" && i.severity === "warn"), JSON.stringify(plan.issues));
+});
+
+test("объединённое окно несёт постановку обоих битов и всех участников", () => {
+  const events: StoryEvent[] = [
+    { id: "open", observable: "the case opens", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "case", before: "sealed", after: "open" }] },
+    { id: "valve", observable: "the valve opens", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "valve", before: "closed", after: "open" }] },
+  ];
+  const plan = planOf(
+    ["Он открыл футляр на верстаке и сразу повернул вентиль рядом с ним.", "Дальше он просто ждал, пока давление в трубке упадёт."],
+    [
+      scene({ fromPhrase: 1, toPhrase: 1, location: "a workshop", visualAction: "Gudini opens the sealed case", keyMoment: "the case opens", anchorPhrase: "открыл", eventIds: ["open"], objects: [{ id: "case", before: "sealed", after: "open" }], scene: { props: ["a round brass clock on the workbench"], who: "Gudini faces the workbench" }, continuityGroup: "c", continuityRequired: true }),
+      scene({ fromPhrase: 1, toPhrase: 1, location: "a workshop", visualAction: "Gudini turns the valve", keyMoment: "the valve opens", eventIds: ["valve"], objects: [{ id: "valve", before: "closed", after: "open" }], scene: { worn: ["a clear protective visor"], props: ["a splash guard beside the valve"], who: "Ada stands at the right of the bench" }, continuityGroup: "c", continuityRequired: true }),
+      scene({ fromPhrase: 2, toPhrase: 2, purpose: "resolution", location: "a workshop", visualAction: "Gudini waits at the bench", keyMoment: "the needle drops" }),
+    ],
+    events,
+    { supportingCharacters: [{ name: "Ada", function: "partner", appearance: "an adult woman in a green wool coat" }] },
+  );
+  const merged = plan.shots.find((s) => s.beatIds.length > 1);
+  assert.ok(merged, `биты не объединились: ${JSON.stringify(plan.shots.map((s) => s.beatIds))}`);
+  // реквизит первого бита держится весь клип, реквизит второго появляется со вторым действием
+  assert.match(merged!.prompt, /Present in frame throughout: a round brass clock on the workbench/);
+  assert.match(merged!.prompt, /Appears with the later action in this clip: a clear protective visor; a splash guard beside the valve/);
+  // расстановка обоих битов на месте, и оба человека считаются участниками
+  assert.match(merged!.prompt, /Gudini faces the workbench Then: Ada stands at the right of the bench/);
+  assert.match(merged!.prompt, /People taking part in the action: exactly 2 — Gudini, Ada/);
+});
+
+test("цепочка после раннего изменения не возвращает состояние назад", () => {
+  const open: StoryEvent = { id: "open", observable: "the case opens", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "case", before: "sealed", after: "open" }] };
+  const plan = planOf(
+    ["Он открыл футляр почти сразу и потом очень долго разбирал его содержимое на верстаке до самого позднего вечера того дня."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, location: "a workshop", continuityGroup: "c", continuityRequired: true,
+        visualAction: "Gudini opens the sealed case", keyMoment: "the case opens", anchorPhrase: "открыл", eventIds: ["open"],
+        objects: [{ id: "case", before: "sealed", after: "open" }],
+        scene: { props: ["the same red case"], mechanics: "his fingers break the seal and lift the lid off the case" },
+      }),
+    ],
+    [open],
+  );
+  assert.ok(plan.shots.length > 1, `длинный бит должен стать цепочкой: ${plan.shots.length}`);
+  const [head, ...rest] = plan.shots;
+  assert.ok(head.prompt.includes("After: case — open"), head.prompt.slice(0, 400));
+  for (const tail of rest) {
+    assert.ok(tail.prompt.includes("The change has already happened"), tail.prompt.slice(0, 300));
+    assert.ok(!tail.prompt.includes("the action is still under way"), "окно последствий не может быть началом действия");
+    assert.ok(!tail.prompt.includes("Do not show the case opens in this clip"), "два взаимоисключающих указания в одном запросе");
+    assert.ok(!tail.prompt.includes("break the seal"), "механика открывания не повторяется в последствиях");
+  }
+});
+
+test("сводка сцены не исчезает из-за имени предмета", () => {
+  const build = (id: string) =>
+    planOf(
+      ["Он держал футляр на коленях и открыл его прямо в узком кресле у самого окна."],
+      [
+        scene({
+          fromPhrase: 1, toPhrase: 1, visualAction: "Gudini opens the sealed case on his knees",
+          keyMoment: "the case opens", eventIds: ["open"], objects: [{ id, before: "sealed", after: "open" }],
+          stateBefore: "Gudini holds the case on his knees while seated in a narrow chair",
+        }),
+      ],
+      [{ id: "open", observable: "the case opens", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id, before: "sealed", after: "open" }] }],
+    ).shots[0].prompt;
+  for (const id of ["case", "prop-17"]) {
+    assert.ok(build(id).includes("on his knees while seated in a narrow chair"), `постановка потеряна при id ${id}`);
+  }
+});

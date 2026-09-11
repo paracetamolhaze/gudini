@@ -1,4 +1,4 @@
-import type { CharacterProfile, FilmShot, PlanIssue, StoryBeat, StoryBible, StoryEvent } from "./types";
+import type { CharacterProfile, FilmShot, ObjectState, PlanIssue, StoryBeat, StoryBible, StoryEvent } from "./types";
 
 /**
  * Разбор готового плана на противоречия — все известные классы разом, до генерации.
@@ -45,6 +45,16 @@ const PERSON_POSE = /\b(?:standing|stands|sitting|sits|kneeling|kneels|lying|lie
 const CAMERA_FOLLOWS = /\b(?:follows?|following|tracks?|tracking|stays? (?:with|beside|level with)|keeps? pace)\b/i;
 /** Видимый ориентир, по которому читается движение. */
 const MOTION_REFERENCE = /\b(?:background|backdrop|trees|wall|walls|ground|horizon|rock face|cliff face|road|kerb|curb|water|shore|buildings|fence|rails?|sliding past|slides past|moves? past|passes behind|rushes past)\b/i;
+
+/**
+ * Слова процесса: предложение описывает, КАК действие происходит, а не каким кадр начинается.
+ * «holds the envelope in frame as it is opened» — наблюдение за вскрытием, а не заявление,
+ * что конверт уже вскрыт.
+ */
+const PROCESS = /\b(?:as|while|until|when|then|during|becomes?|turns? into|being|starts? to|begins? to)\b/i;
+
+/** Слова продолжения: состояние не меняется, а сохраняется. */
+const CONTINUES = /\b(?:still|remains?|unchanged|same|again|as before|intact)\b/i;
 
 /** Что-то важное находится НАД человеком. */
 const OBJECT_ABOVE = /\babove (?:him|his head|gudini)\b|\boverhead\b/i;
@@ -116,14 +126,26 @@ function stateReached(promised: string, got: string, from = "", ignore: string[]
 }
 
 /**
- * Назван ли предмет в самом событии: «reserve-deploys / the reserve canopy opens» говорит
- * про запасной купол, а основной упомянут там лишь как обстановка.
+ * Обязательство это или сохраняемое условие. Явное поле контракта сильнее догадки; без него
+ * смотрим на сам переход: если состояние после по-прежнему содержит исходное («torn» →
+ * «still torn and flapping»), предмет сохраняется, и показывать в нём нечего. Имена предметов
+ * в проверке не участвуют вовсе — от них результат зависеть не должен.
  */
-function mentionsObject(event: StoryEvent, objectId: string): boolean {
-  const phrase = objectId.replace(/[-_]+/g, " ").trim().toLowerCase();
-  if (!phrase) return false;
-  const text = `${event.id.replace(/[-_]+/g, " ")} ${event.observable}`.toLowerCase();
-  return text.includes(phrase);
+export function objectRole(o: ObjectState): "change" | "keep" {
+  if (o.role === "change" || o.role === "keep") return o.role;
+  const before = o.before.trim();
+  const after = o.after.trim();
+  if (!after) return "keep";
+  if (!before) return "change";
+  if (sameState(before, after)) return "keep";
+  // «Остаётся тем же»: состояние после повторяет исходное целиком и лишь помечено словом
+  // продолжения. «torn into strips» → «still torn into strips, flapping» — условие;
+  // «in the courier's hand, sealed» → «in the merchant's hand, still sealed» — переход,
+  // потому что исходное состояние повторено НЕ полностью.
+  const from = stateTokens(before).words;
+  const to = stateTokens(after).words;
+  const repeatsAll = [...from].every((w) => to.has(w));
+  return repeatsAll && CONTINUES.test(after) ? "keep" : "change";
 }
 
 /** Одно и то же состояние: те же значимые слова и тот же знак. */
@@ -162,16 +184,14 @@ export function eventCovered(event: StoryEvent, beats: StoryBeat[], shots?: Film
     claiming = claiming.filter((b) => inShots.has(b.id));
   }
   if (!claiming.length) return false;
-  // Доказательство события — предмет, о котором событие и говорит. Остальные предметы в
-  // записи события описывают обстановку и непрерывность: «основной купол остаётся порванным»
-  // показать как изменение невозможно, а требовать его объявления от сцены — значит
-  // блокировать исправную постановку.
+  // Обязательства события — ВСЕ его переходы, а не тот предмет, чьё имя случайно попало
+  // в английское описание. Прежний выбор «названный, иначе первый» зависел от внутренних
+  // имён: сделка «деньги за чашку» под именами money/cup проверялась целиком, а под
+  // payment-token/purchased-item — наполовину. Сохраняемые условия («остаётся порванным»)
+  // обязательством не являются: показывать в них нечего.
   const ignore = [event.id, ...event.objects.map((o) => o.id)];
-  const changing = event.objects.filter((o) => o.after.trim() && decisiveWords(o.before, o.after, [event.id, o.id]).size > 0);
-  const pool = changing.length ? changing : event.objects.filter((o) => o.after.trim());
-  if (!pool.length) return false;
-  const named = pool.filter((o) => mentionsObject(event, o.id));
-  const must = named.length ? named : [pool[0]];
+  const must = event.objects.filter((o) => objectRole(o) === "change");
+  if (!must.length) return false;
   return claiming.some((b) =>
     must.every((want) => {
       const got = (b.objects ?? []).find((o) => o.id === want.id);
@@ -231,13 +251,26 @@ export function auditPlan(
       message: `Записей контракта не разобрано: ${bible.eventsDropped}. Нужны идентификатор, наблюдаемое изменение и предметы с состоянием до и после`,
     });
   }
+  // Пустой контракт — ошибка там, где сцены обещают совершение: заявленный переход предмета
+  // или ссылка на событие. План, который осознанно показывает обстановку и результат
+  // (панорама улицы, вид мастерской), обещания не даёт, и запрещать его нечем.
+  const claimsChange = shown.some((b) => (b.eventIds ?? []).length > 0 || (b.objects ?? []).some((o) => objectRole(o) === "change"));
   if (!events.length && shown.length) {
-    out.push({
-      code: "event-contract-empty",
-      severity: "block",
-      beatIds: [],
-      message: "В плане есть сцены, но контракт событий пуст: проверить нечего, а значит нечего и показывать",
-    });
+    if (claimsChange) {
+      out.push({
+        code: "event-contract-empty",
+        severity: "block",
+        beatIds: [],
+        message: "Сцены обещают показать изменение, но контракт событий пуст: проверить нечего",
+      });
+    } else {
+      out.push({
+        code: "no-events-declared",
+        severity: "warn",
+        beatIds: [],
+        message: "План не обещает ни одного события: сцены показывают обстановку и результат — убедитесь, что этого достаточно",
+      });
+    }
   }
   // Ссылка на несуществующее событие — тоже дефект контракта, а не мелочь: сцена считает
   // себя показывающей то, чего в контракте нет.
@@ -412,8 +445,16 @@ export function auditPlan(
   for (const b of shown) {
     for (const o of b.objects ?? []) {
       if (!o.before.trim() || !o.after.trim() || sameState(o.before, o.after)) continue;
-      const context = `${b.camera} ${b.stateBefore}`;
-      if (stateReached(o.after, context, o.before, [o.id]) && !stateReached(o.before, context, o.after, [o.id])) {
+      // Смотрим только на то, чем кадр НАЧИНАЕТСЯ: сводку состояния и позицию камеры.
+      // Предложения о ходе действия из проверки исключаются — наблюдение за вскрытием
+      // не означает, что конверт вскрыт с первого кадра.
+      const initial = [b.stateBefore, b.camera]
+        .flatMap((t) => (t ?? "").split(/[;,]/))
+        .map((c) => c.trim())
+        .filter((c) => c && !PROCESS.test(c))
+        .join("; ");
+      if (!initial) continue;
+      if (stateReached(o.after, initial, o.before, [o.id]) && !stateReached(o.before, initial, o.after, [o.id])) {
         mixed.push(`${b.id}/${o.id}`);
       }
     }

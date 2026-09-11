@@ -158,6 +158,8 @@ export type StoryBible = {
   storyArc: StoryArc;
   /** обязательные события истории; проверяются на покрытие после всех преобразований плана */
   events: StoryEvent[];
+  /** сколько записей контракта нормализатор не смог разобрать вовсе: разбор считает это ошибкой */
+  eventsDropped?: number;
 };
 
 /** Смысловой блок речи. Покрывают всю речь встык; AI есть только у full_ai/hybrid. */
@@ -229,7 +231,7 @@ export type StoryBeat = {
  * Срок одного события внутри клипа: что показать и к какой секунде клипа. Живёт в контракте,
  * а не в сборщике, потому что по нему проверяет и разбор готового плана.
  */
-export type EventDeadline = { beatId: string; eventIds: string[]; keyMoment: string; bySec: number | null };
+export type EventDeadline = { beatId: string; eventIds: string[]; keyMoment: string; bySec: number | null; beyond?: boolean };
 
 export type FilmShot = {
   id: string;

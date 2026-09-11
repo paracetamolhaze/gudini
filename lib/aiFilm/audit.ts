@@ -42,24 +42,54 @@ export type PlanAudit = PlanIssue;
  * тот же предмет и то же состояние после, которое обещает событие. Приземление не может
  * закрыть событие «отзыв», потому что предметы у них разные.
  */
-/** Значимые слова состояния: по ним сверяется обещанный переход, а не любое отличие строк. */
-function stateWords(s: string): Set<string> {
-  return new Set(
-    s
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter((w) => w.length >= 3 && !STATE_STOP.has(w)),
-  );
-}
-const STATE_STOP = new Set(["the", "and", "his", "her", "its", "with", "into", "onto", "from", "that", "this", "for", "not"]);
+const STATE_STOP = new Set(["the", "and", "his", "her", "its", "with", "into", "onto", "from", "that", "this", "for", "are", "was", "has", "have", "been"]);
+/** Слова отрицания: они переворачивают смысл состояния и не могут молча выпадать. */
+const STATE_NEG = new Set(["not", "no", "never", "without", "none", "nothing", "cannot"]);
 
-/** Совпадает ли достигнутое состояние с обещанным: хотя бы одно значимое слово общее. */
+/**
+ * Состояние как проверяемое значение: значимые слова и знак. Раньше отрицание попадало
+ * в список игнорируемых слов, поэтому «review not submitted» и «review submitted»
+ * выглядели одинаково.
+ */
+function stateTokens(s: string): { words: Set<string>; negated: boolean } {
+  const all = s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return {
+    words: new Set(all.filter((w) => w.length >= 3 && !STATE_STOP.has(w) && !STATE_NEG.has(w))),
+    negated: all.some((w) => STATE_NEG.has(w)),
+  };
+}
+
+/**
+ * Достигнуто ли обещанное состояние. Требуется КАЖДОЕ значимое слово обещания и тот же знак:
+ * одного общего слова мало — «phone» есть и в «review submitted», и в «phone on the table»,
+ * но предмет разговора не доказывает выполненного действия. Лишние подробности разрешены:
+ * «review typed and sent» закрывает «review typed».
+ */
+function stateReached(promised: string, got: string): boolean {
+  const want = stateTokens(promised);
+  if (!want.words.size) return false;
+  const have = stateTokens(got);
+  if (want.negated !== have.negated) return false;
+  for (const w of want.words) {
+    if (!have.words.has(w)) return false;
+    // «unsubmitted» — это не «submitted»: приставка отрицания тоже переворачивает смысл
+    if (have.words.has(`un${w}`)) return false;
+  }
+  return true;
+}
+
+/** Одно и то же состояние: те же значимые слова и тот же знак. */
+function sameState(a: string, b: string): boolean {
+  const x = stateTokens(a);
+  const y = stateTokens(b);
+  if (x.negated !== y.negated || x.words.size !== y.words.size) return false;
+  for (const w of x.words) if (!y.words.has(w)) return false;
+  return true;
+}
+
+/** Прежнее имя: совпадение по обещанному результату. */
 function stateMatches(promised: string, got: string): boolean {
-  const want = stateWords(promised);
-  if (!want.size) return false;
-  const have = stateWords(got);
-  for (const w of want) if (have.has(w)) return true;
-  return false;
+  return stateReached(promised, got);
 }
 
 /**
@@ -88,11 +118,19 @@ export function eventCovered(event: StoryEvent, beats: StoryBeat[], shots?: Film
     event.objects.every((want) => {
       const got = (b.objects ?? []).find((o) => o.id === want.id);
       if (!got) return false;
-      const afterOk = stateMatches(want.after, got.after);
-      // «до» проверяется мягче: сцена могла начаться с промежуточного состояния,
-      // но противоречить обещанному началу она не должна
-      const beforeOk = !want.before.trim() || !got.before.trim() || stateMatches(want.before, got.before) || stateMatches(want.after, got.before) === false;
-      return afterOk && beforeOk;
+      const after = got.after.trim();
+      const before = got.before.trim();
+      if (!after) return false;
+      // Сцена обязана что-то изменить. Неизменное состояние — это не показанное событие,
+      // сколько бы слов из обещания в нём ни повторялось.
+      if (before && sameState(before, after)) return false;
+      // Результат сцены — именно обещанный результат, со знаком: «review not submitted»
+      // не закрывает «review submitted».
+      if (!stateReached(want.after, after)) return false;
+      // И это не осталось обещанным исходным состоянием: «sealed → sealed and dusty»
+      // повторяет начало, а не приводит к результату.
+      if (want.before.trim() && !sameState(want.before, want.after) && stateReached(want.before, after)) return false;
+      return true;
     }),
   );
 }
@@ -122,6 +160,16 @@ export function auditPlan(
       message:
         "Событие без проверяемого доказательства: нужны идентификатор, наблюдаемое изменение и хотя бы один предмет " +
         `с состоянием до и после (${broken.map((e) => e.id || "(без id)").join(", ")})`,
+    });
+  }
+  // Запись, которую нормализатор не смог разобрать вовсе, раньше исчезала без следа:
+  // рядом с одним исправным событием контракт выглядел целым.
+  if (bible.eventsDropped) {
+    out.push({
+      code: "event-contract-broken",
+      severity: "block",
+      beatIds: [],
+      message: `Записей контракта не разобрано: ${bible.eventsDropped}. Нужны идентификатор, наблюдаемое изменение и предметы с состоянием до и после`,
     });
   }
   if (!events.length && shown.length) {
@@ -258,15 +306,29 @@ export function auditPlan(
     );
     // Якорь вне используемого отрезка клипа: срок отброшен, событие осталось без времени.
     // Это не повод требовать невозможного в промпте, но и молчать нельзя — сцену надо переставить.
-    const outside = shots.flatMap((sh) =>
-      (sh.deadlines ?? [])
-        .filter((d) => d.bySec == null && beats.some((b) => b.id === d.beatId && b.anchorAtSec != null))
-        .map((d) => d.beatId),
-    );
+    const outside = [...new Set(shots.flatMap((sh) => (sh.deadlines ?? []).filter((d) => d.beyond).map((d) => d.beatId)))];
+    // Обязательное событие без выполнимого срока — это не замечание: оно должно прозвучать
+    // в свою реплику, а показать его в этом клипе уже нельзя. Такую сцену надо переставить,
+    // поэтому план не идёт к оплате. Для остальных достаточно предупреждения.
+    const requiredIds = new Set(events.filter((e) => e.required).map((e) => e.id));
+    const hard = outside.filter((id) => (beats.find((b) => b.id === id)?.eventIds ?? []).some((e) => requiredIds.has(e)));
     add(
       "anchor-outside-shot",
-      [...new Set(outside)],
+      outside.filter((id) => !hard.includes(id)),
       "Момент в речи приходится на отрезок, которого нет в клипе — событие останется без срока, сцену нужно переставить",
+    );
+    add(
+      "required-anchor-outside-shot",
+      hard,
+      "Обязательное событие звучит позже, чем заканчивается его клип — сцену нужно переставить под свою реплику",
+      "block",
+    );
+    // Один бит с двумя событиями получает один срок на оба: разделить их нечем, пока
+    // якорь один на бит. Такую сцену планировщик должен разложить на две.
+    add(
+      "beat-multiple-events",
+      shown.filter((b) => (b.eventIds ?? []).length > 1).map((b) => b.id),
+      "В одной сцене несколько событий: у них будет общий срок, показать их по отдельности нельзя — разложите на две сцены",
     );
   }
 

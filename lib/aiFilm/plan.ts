@@ -126,13 +126,33 @@ export type { EventDeadline } from "./types";
  * на десятой секунде восьмисекундного клипа бессмысленно, и это отдельная проблема плана.
  */
 export function eventDeadlines(beats: StoryBeat[], shotStart: number, shownSeconds: number): EventDeadline[] {
-  return beats
-    .filter((b) => b.keyMoment)
-    .map((b) => {
-      const rel = b.anchorAtSec == null ? null : Math.round((b.start + b.anchorAtSec - shotStart) * 10) / 10;
-      const inside = rel != null && rel >= 0 && rel <= shownSeconds + 1e-6;
-      return { beatId: b.id, eventIds: b.eventIds ?? [], keyMoment: b.keyMoment, bySec: inside ? rel : null };
+  const shotEnd = shotStart + shownSeconds;
+  // Целая секунда внутри показанного отрезка. Раньше округление шло вверх, и клип, от которого
+  // в монтаж идут 3.6 с, получал требование «к 4-й секунде» — за собственным краем.
+  const limit = Math.floor(shownSeconds + 1e-6);
+  const out: EventDeadline[] = [];
+  for (const b of beats) {
+    if (!b.keyMoment) continue;
+    const rel = b.anchorAtSec == null ? null : Math.round((b.start + b.anchorAtSec - shotStart) * 10) / 10;
+    // Изменение уже произошло в предыдущем клипе цепочки — требовать его снова незачем.
+    if (rel != null && rel < -1e-6) continue;
+    const continues = b.end > shotEnd + 0.05;
+    // Бит продолжается в следующем клипе, а его изменение приходится туда же: в этом клипе
+    // оно не «рано», его здесь просто нет. Прежде тот же keyMoment требовался и «рано»
+    // в первом клипе, и на второй секунде продолжения.
+    if (continues && (rel == null || rel > shownSeconds + 1e-6)) continue;
+    const inside = rel != null && rel <= shownSeconds + 1e-6;
+    const bySec = inside && limit >= 1 ? Math.max(1, Math.min(Math.round(rel!), limit)) : null;
+    out.push({
+      beatId: b.id,
+      eventIds: b.eventIds ?? [],
+      keyMoment: b.keyMoment,
+      bySec,
+      // якорь есть, но приходится за пределы показанного отрезка: сцену нужно переставить
+      beyond: rel != null && rel > shownSeconds + 1e-6,
     });
+  }
+  return out;
 }
 
 /** Прежнее имя: срок первого события клипа. */
@@ -239,17 +259,21 @@ export function shotPrompt(args: {
   // остального: у генератора должна быть одна цель, а не список равноправных задач.
   // Срок у КАЖДОГО изменения свой. Раньше все ключевые моменты клипа склеивались в одну
   // строку с общим сроком первого якоря: коробка и отзыв требовались к одной секунде.
-  const marks = deadlines?.length ? deadlines : beats.filter((b) => b.keyMoment).map((b) => ({ beatId: b.id, eventIds: b.eventIds ?? [], keyMoment: b.keyMoment, bySec: null as number | null }));
+  // Пустой список сроков — это не «сроков не передали», а «в этом клипе ничего не должно
+  // завершиться»: так бывает у первого клипа цепочки, изменение которого приходится на
+  // продолжение. Прежний запасной путь подставлял туда keyMoment бита, и одно и то же
+  // изменение требовалось дважды: «рано» в первом клипе и к своей секунде во втором.
+  const marks = deadlines ?? beats.filter((b) => b.keyMoment).map((b) => ({ beatId: b.id, eventIds: b.eventIds ?? [], keyMoment: b.keyMoment, bySec: null as number | null }));
   if (marks.length === 1) {
     const d = marks[0];
     lines.push(
       `The one thing that must be visible: ${d.keyMoment}.` +
-        (d.bySec != null ? ` It has to be visible by second ${Math.max(1, Math.round(d.bySec))} of the clip.` : " It happens early in the shot, not at the very end."),
+        (d.bySec != null ? ` It has to be visible by second ${d.bySec} of the clip.` : " It happens early in the shot, not at the very end."),
     );
   } else if (marks.length > 1) {
     lines.push("What must be visible, each at its own time:");
     marks.forEach((d, i) =>
-      lines.push(`${i + 1}. ${d.keyMoment}${d.bySec != null ? ` — by second ${Math.max(1, Math.round(d.bySec))} of the clip` : " — early in the shot"}`),
+      lines.push(`${i + 1}. ${d.keyMoment}${d.bySec != null ? ` — by second ${d.bySec} of the clip` : " — early in the shot"}`),
     );
   }
   // Показанная длина входит в текст: один и тот же кадр на три и на восемь секунд — разные
@@ -556,10 +580,14 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
     const gudiniVisible = gBeats.some((b) => b.gudiniVisible);
     const useReferences = gudiniVisible && hasRefs;
     const groupModel = gudiniVisible ? model : envModel;
-    const id = `G${gi + 1}`;
-    const shotIds: string[] = [];
     const prevBeat = beats[beats.indexOf(first) - 1] ?? null;
     const continuity = gBeats.some((b) => b.continuityRequired);
+    // Каждый независимый запрос по тексту — своя группа со своим отрезком таймлайна.
+    // Сборщик видео умеет склеивать только цепочку text → extend: второй text внутри
+    // одной группы подменял собой исходник, и в ролик попадало только последнее видео,
+    // а первая сцена исчезала молча — длина группы сходилась, содержимое нет.
+    const segments: { id: string; shotIds: string[]; start: number; end: number }[] = [];
+    let seg: { id: string; shotIds: string[]; start: number; end: number } | null = null;
     let covered = 0;
     let idx = 0;
     // true, когда прошлый клип оборвался на несовместимом бите: остаток группы — отдельная
@@ -593,10 +621,17 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
       // вошедшего бита, но не больше длины самого клипа.
       const shownSeconds = Math.round(Math.min(veoSeconds, Math.max(merged[merged.length - 1].end - from, 0)) * 100) / 100;
       const deadlines = eventDeadlines(merged, from, shownSeconds);
+      if (mode === "text") {
+        // конец отрезка — конец реально вошедших битов, а не длина генерации: клип на 8 с,
+        // из которого в монтаж идут 4, занимает в ролике четыре секунды
+        seg = { id: segments.length ? `G${gi + 1}s${segments.length + 1}` : `G${gi + 1}`, shotIds: [], start: from, end: from };
+        segments.push(seg);
+      }
+      const owner = seg!;
       const shot: FilmShot = {
-        id: `${id}-${idx + 1}`,
-        groupId: id,
-        index: idx,
+        id: `${owner.id}-${owner.shotIds.length + 1}`,
+        groupId: owner.id,
+        index: owner.shotIds.length,
         beatIds: merged.map((b) => b.id),
         displayMode,
         gudiniVisible: merged.some((b) => b.gudiniVisible),
@@ -612,16 +647,21 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
         changeBySec: deadlines.find((d) => d.bySec != null)?.bySec ?? null,
         deadlines,
         prompt: shotPrompt({ character, universe: cfg.universe, bible, beats: merged, prev, mode, aspectRatio, deadlines, shownSeconds }),
-        dependsOn: mode === "extend" ? `${id}-${idx}` : null,
+        dependsOn: mode === "extend" ? owner.shotIds[owner.shotIds.length - 1] : null,
         cost: round2(veoSeconds * priceOf(groupModel)),
       };
       shots.push(shot);
-      shotIds.push(shot.id);
+      owner.shotIds.push(shot.id);
+      owner.end = Math.max(owner.end, merged[merged.length - 1].end);
       const advanced = Math.max(merged[merged.length - 1].end - from, 0.5);
       covered += Math.min(advanced, veoSeconds);
       idx++;
     }
-    groups.push({ id, displayMode, start: first.start, end: last.end, shotIds, chain: shotIds.length > 1, aspectRatio });
+    // последний отрезок дотягивается до конца группы битов, иначе в таймлайне останется щель
+    if (segments.length) segments[segments.length - 1].end = Math.max(segments[segments.length - 1].end, last.end);
+    for (const s of segments) {
+      groups.push({ id: s.id, displayMode, start: s.start, end: s.end, shotIds: s.shotIds, chain: s.shotIds.length > 1, aspectRatio });
+    }
   });
 
   if (!hasRefs && shots.some((s) => s.gudiniVisible)) {
@@ -802,13 +842,29 @@ export function reduceToBudget(beats: StoryBeat[], character: CharacterProfile, 
     // аккуратно оставлял кульминацию и развязку и вырезал ровно то, что держит начало
     // ролика: план с первой картинкой на двадцатой секунде — это план без зрителя.
     const earliest = work.find(isAi);
+    // Сцена, показывающая обязательное событие, снимается в последнюю очередь. Прежде
+    // редьюсер смотрел только на приоритет и порядок: при бюджете на одну сцену он
+    // оставлял необязательную вставку в начале и снимал обязательный отзыв, после чего
+    // план блокировался как непокрытый — хотя за те же деньги он собирался целым.
+    const requiredIds = new Set((bible.events ?? []).filter((e) => e.required && e.objects.length).map((e) => e.id));
+    const carriesRequired = (b: StoryBeat) => (b.eventIds ?? []).some((id) => requiredIds.has(id));
+    // Очередь жертв: сначала всё необязательное, потом открывающая сцена, и только потом
+    // то, что несёт обязательное событие. Внутри каждой очереди порядок прежний:
+    // low → medium → high, с конца ролика к началу.
+    const tiers: Array<(b: StoryBeat) => boolean> = [
+      (b) => !carriesRequired(b) && b !== earliest && !protectedBeat(b),
+      (b) => !carriesRequired(b) && !protectedBeat(b),
+      (b) => b !== earliest && !protectedBeat(b),
+      (b) => !protectedBeat(b),
+    ];
     let victim: StoryBeat | undefined;
-    for (const p of order) {
-      const candidates = work.filter((b) => isAi(b) && b.priority === p && !protectedBeat(b) && b !== earliest);
-      if (candidates.length) { victim = candidates[candidates.length - 1]; break; }
+    for (const allowed of tiers) {
+      for (const p of order) {
+        const candidates = work.filter((b) => isAi(b) && b.priority === p && allowed(b));
+        if (candidates.length) { victim = candidates[candidates.length - 1]; break; }
+      }
+      if (victim) break;
     }
-    // остались только защищённые и открывающая — снимаем и её, но последней
-    if (!victim && earliest && !protectedBeat(earliest)) victim = earliest;
     if (!victim) {
       throw new Error(
         `AI-фильм: план не помещается в ${overBudget ? `бюджет $${cfg.budgetUsd} (оценка $${stats.estimatedCost})` : `покрытие ${Math.round(cfg.maxCoverage * 100)}% (сейчас ${Math.round(stats.coverage * 100)}%)`} ` +

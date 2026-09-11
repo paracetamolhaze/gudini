@@ -17,7 +17,7 @@ import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
  * генерации: ролик с поздним началом смотрибелен, а вот кадра с невыполнимым указанием
  * не существует вовсе.
  */
-export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot"]);
+export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events"]);
 
 /** Нарушения, запрещающие оплату. */
 export function gateIssues(plan: Pick<AiFilmPlan, "issues">): PlanIssue[] {
@@ -51,9 +51,13 @@ export function missingRequired(plan: Pick<AiFilmPlan, "beats" | "shots">, requi
 export function preserveRequired(original: StoryEvent[] | undefined, next: StoryEvent[] | undefined): StoryEvent[] {
   const out = [...(next ?? [])];
   for (const was of requiredEvents(original)) {
-    const now = out.find((e) => e.id === was.id);
-    if (!now) out.push({ ...was });
-    else if (!now.required) now.required = true;
+    const at = out.findIndex((e) => e.id === was.id);
+    // Возвращается всё обязательство целиком, а не только идентификатор и флаг.
+    // Сохранение одного id ничего не давало: второй заход оставлял «review» обязательным,
+    // подменяя «отправить отзыв» на «положить телефон на стол», и такой план проходил
+    // проверку — обещанного перехода в контракте уже не было.
+    if (at < 0) out.push({ ...was });
+    else out[at] = { ...was, fromPhrase: out[at].fromPhrase, toPhrase: out[at].toPhrase };
   }
   return out;
 }

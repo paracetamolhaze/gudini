@@ -175,6 +175,7 @@ motion (английский) — что происходит внутри кл�
 
 ═══ 8. НЕПРЕРЫВНОСТЬ ПО ПРЕДМЕТАМ ═══
 objects (у бита) — список предметов сцены с их состоянием до и после. Идентификаторы те же, что в событиях: main-canopy, reserve-canopy, parcel, phone. Пиши только те предметы, которые в этой сцене есть или меняются, чужие не тащи.
+Если бит показывает событие из eventIds, состояние этого предмета после сцены пишется теми же словами, что и after у события: проверка сверяет их дословно. Сцена, где состояние после совпадает с состоянием до, события не показывает.
 Повреждённое не появляется до повреждения и не становится целым после. Основной и запасной купол — разные предметы: разрыв основного не делает запасной порванным, а упакованный запасной не отменяет разрыв основного.
 stateBefore / stateAfter (английский, одна строка) — короткая человеческая сводка того же для промпта: свет, положение, что надето, куда направлен взгляд.
 
@@ -472,7 +473,8 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
   const storyType: StoryType = (STORY_TYPES as readonly string[]).includes(b.storyType) ? (b.storyType as StoryType) : "explainer";
   // События — контракт содержания. Без id и наблюдаемого изменения событие ничего не проверяет,
   // такие записи не сохраняем: пустой контракт хуже отсутствующего, он создаёт ложную уверенность.
-  const events: StoryEvent[] = (Array.isArray(b.events) ? b.events : [])
+  const rawEvents: unknown[] = Array.isArray(b.events) ? b.events : [];
+  const events: StoryEvent[] = rawEvents
     .map((e: any) => ({
       id: slugId(e?.id),
       observable: str(e?.observable),
@@ -483,7 +485,9 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     }))
     // Битые записи НЕ выбрасываются: молча удалённое обязательное событие превращало
     // непокрытый план в «зелёный». Они доезжают до разбора и там становятся ошибкой контракта.
-    .filter((e: StoryEvent) => e.id || e.observable)
+    // Полностью пустая запись тоже остаётся: прежний фильтр по «id или observable» убирал
+    // её без следа, и рядом с одним исправным событием контракт выглядел целым.
+    .filter((e: StoryEvent) => e.id || e.observable || e.objects.length)
     .slice(0, 12);
   // Тот, кого играет постоянный персонаж, — это он сам, а не второй человек в кадре.
   // Без этого планировщик писал «Гудини играет Каспера» и одновременно заводил Каспера
@@ -501,6 +505,7 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     characterId: character.id,
     universeId: universe.id,
     storyType,
+    eventsDropped: Math.max(0, Math.min(rawEvents.length, 12) - events.length),
     staging: STAGING_FOR[storyType],
     // кадры новости — реконструкция; происхождение хранится в плане, а не подразумевается
     reconstruction: storyType === "news" || storyType === "history",

@@ -5,6 +5,7 @@ import { beatsFromRaw, phrasesFromWords, anchorOffset, reconcileFraming, normali
 import { buildFilmPlan, compatiblePrefix, compatibleInOneShot, changeDeadline, compilerFingerprint, applicableContinuity } from "../lib/aiFilm/plan";
 import { auditPlan, eventCovered } from "../lib/aiFilm/audit";
 import { planKey, planKeyDiff } from "../lib/aiFilm/run";
+import { preserveRequired } from "../lib/aiFilm/criteria";
 import { loadUniverseProfile } from "../lib/aiFilm/universe";
 import { loadCharacterProfile } from "../lib/aiFilm/character";
 import type { CharacterProfile, StoryBeat, StoryBible, StoryEvent } from "../lib/aiFilm/types";
@@ -188,10 +189,12 @@ test("якорь и длительность показа меняют врем�
   const outside = buildFilmPlan({ character, bible, beats: [{ ...tear, anchorAtSec: 10 }], duration, cfg: cfg() });
   assert.equal(outside.shots[0].changeBySec, null);
   assert.doesNotMatch(outside.shots[0].prompt, /visible by second 10/);
-  assert.ok(
-    outside.issues.some((i) => i.code === "anchor-outside-shot"),
-    `невозможный якорь обязан быть виден в плане: ${JSON.stringify(outside.issues)}`,
-  );
+  // событие обязательное, поэтому невыполнимое время — не замечание, а запрет оплаты:
+  // сцену нужно переставить под свою реплику
+  const hard = outside.issues.find((i) => i.code === "required-anchor-outside-shot");
+  assert.ok(hard, `невозможный якорь обязан быть виден в плане: ${JSON.stringify(outside.issues)}`);
+  assert.equal(hard!.severity, "block");
+  assert.deepEqual(hard!.beatIds, [tear.id]);
 });
 
 test("якорь ищется по словам, а не по номеру фразы", () => {
@@ -406,4 +409,97 @@ test("возвращение в прежнее место и нечитаема�
     bible, character,
   );
   assert.ok(!receipt.some((i) => i.code === "readable-text"), JSON.stringify(receipt));
+});
+
+// ─────────────────────────────── 9. контрпримеры разбора версии 10
+
+test("неизменное состояние и отрицание не закрывают событие", () => {
+  const submit: StoryEvent = {
+    id: "review", observable: "Gudini types and submits his review", required: true, fromPhrase: 5, toPhrase: 5,
+    objects: [{ id: "phone", before: "empty review form", after: "review submitted" }],
+  };
+  const withState = (before: string, after: string) => {
+    const raw = controlRaw().map((r) => (r.eventIds[0] === "review" ? { ...r, objects: [{ id: "phone", before, after }] } : r));
+    const words = controlSpeech();
+    const duration = words[words.length - 1].end;
+    const beats = beatsFromRaw(raw as any, phrasesFromWords(words), duration, words);
+    const bible = bibleWith([...EVENTS.filter((e) => e.id !== "review"), submit]);
+    return buildFilmPlan({ character, bible, beats, duration, cfg: cfg() });
+  };
+  const notCovered = (p: ReturnType<typeof withState>) =>
+    p.issues.some((i) => i.code === "event-not-covered" && (i.eventIds ?? []).includes("review"));
+
+  // ничего не изменилось: то же состояние до и после
+  assert.ok(notCovered(withState("empty review form", "empty review form")), "неизменное состояние не показывает событие");
+  // прямо противоположный результат
+  assert.ok(notCovered(withState("empty review form", "review not submitted")), "отрицание переворачивает смысл состояния");
+  // одно общее слово про предмет разговора — тоже не доказательство
+  assert.ok(notCovered(withState("in his pocket", "the review screen is open")), "открытый экран — ещё не отправленный отзыв");
+  // а настоящий переход засчитывается
+  assert.ok(!notCovered(withState("empty review form", "review submitted")), "обещанный переход обязан закрывать событие");
+  // лишние подробности разрешены
+  assert.ok(!notCovered(withState("empty review form", "review submitted and five stars given")));
+});
+
+test("второй заход не может подменить содержание обязательного события", () => {
+  const original: StoryEvent = {
+    id: "review", observable: "Gudini types and submits his review", required: true, fromPhrase: 5, toPhrase: 5,
+    objects: [{ id: "phone", before: "empty review form", after: "review submitted" }],
+  };
+  // тот же id и та же обязательность, но обещание уже другое
+  const rewritten: StoryEvent = {
+    ...original, observable: "Gudini places his phone on the table",
+    objects: [{ id: "phone", before: "in his pocket", after: "resting on the table" }],
+  };
+  const kept = preserveRequired([original], [rewritten]);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].observable, original.observable, "подменённое обещание обязано вернуться");
+  assert.deepEqual(kept[0].objects, original.objects);
+
+  // и план, собранный по подменённому обещанию, не проходит ворота
+  const raw = controlRaw().map((r) => (r.eventIds[0] === "review"
+    ? { ...r, visualAction: "Gudini places his phone on the table", keyMoment: "the phone reaches the table", objects: [{ id: "phone", before: "in his pocket", after: "resting on the table" }] }
+    : r));
+  const words = controlSpeech();
+  const duration = words[words.length - 1].end;
+  const beats = beatsFromRaw(raw as any, phrasesFromWords(words), duration, words);
+  const plan = buildFilmPlan({ character, bible: bibleWith([...EVENTS.filter((e) => e.id !== "review"), ...kept]), beats, duration, cfg: cfg() });
+  assert.ok(plan.issues.some((i) => i.code === "event-not-covered" && (i.eventIds ?? []).includes("review")), JSON.stringify(plan.issues));
+});
+
+test("полностью испорченная запись контракта остаётся ошибкой рядом с исправной", () => {
+  const bible = bibleWith([EVENTS[0], { id: "", observable: "", required: true, fromPhrase: 1, toPhrase: 1, objects: [] } as StoryEvent]);
+  assert.equal(bible.eventsDropped, 1, "потерянная запись обязана быть посчитана");
+  const issues = auditPlan(controlPlan().beats, bible, character);
+  assert.ok(issues.some((i) => i.code === "event-contract-broken" && i.severity === "block"), JSON.stringify(issues));
+});
+
+test("срок события не выходит за использованный отрезок клипа", () => {
+  const words = controlSpeech();
+  const duration = words[words.length - 1].end;
+  const tear = controlPlan().beats.find((b) => b.eventIds.includes("tear"))!;
+  // якорь у самого конца бита: округление вверх выносило срок за край окна
+  const late = { ...tear, anchorAtSec: Math.max(0, tear.end - tear.start - 0.05) };
+  const shot = buildFilmPlan({ character, bible: bibleWith(EVENTS), beats: [late], duration, cfg: cfg() }).shots[0];
+  assert.ok(shot.changeBySec != null);
+  assert.ok(shot.changeBySec! <= shot.usedSeconds, `срок ${shot.changeBySec} за пределами окна ${shot.usedSeconds}`);
+  assert.ok(shot.prompt.includes(`by second ${shot.changeBySec} of the clip`), shot.prompt.slice(0, 400));
+});
+
+test("бюджет снимает необязательную вставку раньше обязательного события", () => {
+  const words = controlSpeech();
+  const duration = words[words.length - 1].end;
+  // необязательное открывание занавески в начале и обязательный отзыв позже
+  const curtain: StoryEvent = { id: "curtain", observable: "the curtain opens", required: false, fromPhrase: 1, toPhrase: 1, objects: [{ id: "curtain", before: "closed", after: "open" }] };
+  const review = EVENTS.find((e) => e.id === "review")!;
+  const raw = [
+    { ...controlRaw()[0], visualAction: "A hand opens the curtain", keyMoment: "the curtain opens", eventIds: ["curtain"], objects: [{ id: "curtain", before: "closed", after: "open" }], priority: "medium" },
+    controlRaw()[4],
+  ];
+  const beats = beatsFromRaw(raw as any, phrasesFromWords(words), duration, words);
+  // денег ровно на один запрос
+  const plan = buildFilmPlan({ character, bible: bibleWith([curtain, review]), beats, duration, cfg: cfg({ budgetUsd: 0.64 }) });
+  assert.equal(plan.shots.length, 1, JSON.stringify(plan.shots.map((s) => s.beatIds)));
+  assert.ok(plan.shots[0].eventIds.includes("review"), `сняли не ту сцену: ${JSON.stringify(plan.shots[0].eventIds)}`);
+  assert.deepEqual(plan.issues.filter((i) => i.severity === "block"), [], JSON.stringify(plan.issues));
 });

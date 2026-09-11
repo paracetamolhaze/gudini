@@ -685,3 +685,27 @@ test("переименованное обязательство не превр�
   const other: StoryEvent = { ...first, id: "landing", observable: "his feet hit the ground", objects: [{ id: "boots", before: "in the air", after: "on the grass" }] };
   assert.equal(preserveRequired([first], [other]).length, 2);
 });
+
+test("короткая сцена с событием занимает время у соседа, а не уходит автору", () => {
+  // из настоящего плана: раскрытию запасного купола досталось 1.2 с между двумя сценами
+  const words = controlSpeech();
+  const duration = words[words.length - 1].end;
+  const phrases = phrasesFromWords(words);
+  const raw = [
+    { ...controlRaw()[0] },
+    { ...controlRaw()[2], fromPhrase: 3, toPhrase: 3 },
+    { ...controlRaw()[3], fromPhrase: 4, toPhrase: 4 },
+    { ...controlRaw()[4], fromPhrase: 5, toPhrase: 5 },
+  ];
+  const beats = beatsFromRaw(raw as any, phrases, duration, words);
+  const reserve = beats.find((b) => (b.eventIds ?? []).includes("reserve"));
+  assert.ok(reserve, "сцена запасного купола пропала из плана");
+  assert.notEqual(reserve!.displayMode, "author", `сцена с событием ушла автору: ${reserve!.reduced ?? ""}`);
+  assert.ok(reserve!.end - reserve!.start >= MIN_SHOWN_AI_SEC - 1e-6, `сцена короче порога показа: ${reserve!.end - reserve!.start}`);
+
+  // биты остаются встык: время у соседа занято, а не выдумано
+  for (let i = 1; i < beats.length; i++) {
+    assert.ok(Math.abs(beats[i].start - beats[i - 1].end) < 1e-6, `разрыв между ${beats[i - 1].id} и ${beats[i].id}`);
+  }
+  assert.ok(Math.abs(beats[beats.length - 1].end - duration) < 0.5, "речь покрыта целиком");
+});

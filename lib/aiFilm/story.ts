@@ -643,6 +643,43 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
   // соберут промпт: иначе Veo получает «камера сверху» и «камера снизу» в одном тексте.
   for (const b of beats) if (b.displayMode !== "author") reconcileFraming(b);
 
+/**
+ * Дотянуть короткую сцену до минимума за счёт соседа. Отдаёт время тот, кто может себе это
+ * позволить: авторский бит остаётся не короче секунды, AI-сосед с событием — не короче
+ * порога показа, AI-сосед без события — не короче минимального бита.
+ *
+ * Появилось после настоящего плана, где раскрытию запасного купола досталось 1.2 секунды:
+ * правило «короче порога — автору» молча уносило вместе со сценой обязательное событие.
+ */
+function borrowTime(beats: StoryBeat[], index: number, need: number): boolean {
+  const b = beats[index];
+  const spare = (n: StoryBeat): number => {
+    const len = n.end - n.start;
+    if (n.displayMode === "author") return Math.max(0, len - 1.0);
+    const floor = (n.eventIds ?? []).length ? MIN_SHOWN_AI_SEC : MIN_AI_BEAT_SEC;
+    return Math.max(0, len - floor);
+  };
+  const prev = beats[index - 1];
+  const next = beats[index + 1];
+  // Сначала у предыдущего: сцена растёт назад, и момент события остаётся внутри неё.
+  for (const donor of [prev, next]) {
+    if (!donor) continue;
+    const can = Math.min(spare(donor), need);
+    if (can < need - 1e-6) continue;
+    if (donor === prev) {
+      prev.end = Math.round((prev.end - can) * 1000) / 1000;
+      b.start = prev.end;
+    } else {
+      next.start = Math.round((next.start + can) * 1000) / 1000;
+      b.end = next.start;
+    }
+    donor.suggestedDuration = Math.round((donor.end - donor.start) * 10) / 10;
+    b.suggestedDuration = Math.round((b.end - b.start) * 10) / 10;
+    return true;
+  }
+  return false;
+}
+
   // Длительность генерации и длительность показа — разные вещи. Клип Veo короче четырёх
   // секунд не заказывается, но ПОКАЗАТЬ его можно и три секунды: распаковка коробки или
   // набранный отзыв читаются за это время. Раньше здесь всё короче четырёх секунд уходило
@@ -656,6 +693,10 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
     const dur = b.end - b.start;
     if (dur >= MIN_AI_BEAT_SEC - 1e-6) continue;
     if (dur >= MIN_SHOWN_AI_SEC - 1e-6 && (b.eventIds ?? []).length) continue;
+    // Сцена с событием сначала пробует дотянуться до минимума за счёт соседа, и только
+    // потом уходит автору. Настоящий план отдал раскрытию запасного купола 1.2 секунды,
+    // и обязательное событие исчезало из ролика вместе с этой сценой.
+    if ((b.eventIds ?? []).length && borrowTime(beats, i, MIN_SHOWN_AI_SEC - dur)) continue;
     b.displayMode = "author";
     b.requiresGeneration = false;
     b.gudiniVisible = false;
@@ -664,6 +705,8 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       ? `показ короче ${MIN_SHOWN_AI_SEC} с — событие не прочитать`
       : `AI-бит короче ${MIN_AI_BEAT_SEC} с и без события`;
   }
+
+  // Сначала все короткие сцены, потом открывающая: сосед мог сам стать автором.
 
   // Открывающая сцена короче минимума не выбрасывается, а дотягивается за счёт следующего
   // авторского бита. Хук в речи часто занимает три секунды («парень заказал парашют за

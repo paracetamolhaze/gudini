@@ -826,3 +826,13 @@ test("удержание, упёршееся в край отрезка, не п
   assert.match(holdClause({ bySec: 4, holdSec: 2, untilSec: 6 }), /at least until second 6/);
   assert.equal(holdClause({ bySec: 4, holdSec: 0, untilSec: null }), "");
 });
+
+
+test("субъект кадра укорачивается по слову, а не посреди него", async () => {
+  const { shortPhrase } = await import("../lib/aiFilm/story");
+  const long = "the document lying flat on the desk with the wide fairway visible through the window behind it";
+  const short = shortPhrase(long, 90);
+  assert.ok(short.length <= 90, short);
+  assert.ok(long.startsWith(short) && /\bwindow$/.test(short), short);
+  assert.equal(shortPhrase("his face", 90), "his face");
+});

@@ -714,7 +714,7 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       cameraAngle: (ANGLES as string[]).includes(String(e.cameraAngle)) ? (e.cameraAngle as CameraAngle) : "eye_level",
       // Именная группа, а не предложение: она подставляется внутрь строк кадра и ракурса.
       // Пустая строка допустима — тогда кадр описывается вокруг самого действия.
-      frameSubject: mode !== "author" ? str(e.frameSubject).replace(/[.;]+$/, "").slice(0, 90) : "",
+      frameSubject: mode !== "author" ? shortPhrase(str(e.frameSubject).replace(/[.;]+$/, ""), 90) : "",
       composition: (COMPOSITIONS as string[]).includes(String(e.composition)) ? (e.composition as Composition) : "center",
       suggestedDuration: Math.round((end - start) * 10) / 10,
       ...(reduced ? { reduced } : {}),
@@ -849,6 +849,18 @@ function borrowTime(beats: StoryBeat[], index: number, need: number): boolean {
     }
   }
   return beats;
+}
+
+/**
+ * Короткая фраза без обрыва слова: субъект кадра подставляется в запрос дважды, и срез по
+ * символам давал «the wide fairway visible through the window behin».
+ */
+export function shortPhrase(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max + 1);
+  const at = cut.lastIndexOf(" ");
+  return (at > max * 0.5 ? cut.slice(0, at) : t.slice(0, max)).replace(/[\s,;:—-]+$/, "");
 }
 
 export async function planStory(args: {

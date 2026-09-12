@@ -524,6 +524,47 @@ export function auditPlan(
     "Объект движется в объектив, а камера неподвижна и обязана удержать масштаб — задайте отход камеры или движение мимо неё",
   );
 
+  // Реквизит заявляет конечное состояние: «the folding phone, now fully open and flat» в
+  // строке присутствия спорит с началом кадра, где телефон ещё раскрывается.
+  const phaseProps: string[] = [];
+  for (const b of shown) {
+    const items = [...(b.scene?.props ?? []), ...(b.scene?.worn ?? [])];
+    for (const item of items) {
+      const said = stateTokens(item).words;
+      for (const o of b.objects ?? []) {
+        if (objectRole(o) !== "change") continue;
+        const decisive = decisiveWords(o.before, o.after, [o.id]);
+        if (decisive.size && [...decisive].every((w) => said.has(w))) phaseProps.push(`${b.id}/${o.id}`);
+      }
+    }
+  }
+  add(
+    "prop-asserts-end-state",
+    [...new Set(phaseProps)],
+    "Реквизит сцены назван уже в конечном состоянии — строка присутствия спорит с началом кадра",
+  );
+
+  // Состояние меняется, а причины в кадре нет. Если предмет не назван ни в действии, ни в
+  // движении, ни в механике, то изменение просто «появляется»: сено было нескошенным и стало
+  // скошенным, экран сам сменился на галочку. Зритель не увидит, отчего это произошло.
+  const uncaused: string[] = [];
+  for (const b of shown) {
+    const doing = `${b.visualAction} ${b.motion} ${b.scene?.mechanics ?? ""}`.toLowerCase();
+    for (const o of b.objects ?? []) {
+      if (objectRole(o) !== "change") continue;
+      const name = o.id.replace(/[-_]+/g, " ").toLowerCase().split(" ").filter((w) => w.length >= 3);
+      const named = name.length > 0 && name.some((w) => doing.includes(w));
+      // предмет может быть назван и своими словами состояния: «the hay is cut»
+      const byState = [...decisiveWords(o.before, o.after, [o.id])].some((w) => doing.includes(w));
+      if (!named && !byState) uncaused.push(`${b.id}/${o.id}`);
+    }
+  }
+  add(
+    "change-without-cause",
+    uncaused,
+    "Состояние предмета меняется, но в действии, движении и механике этого предмета нет: изменение появится само собой",
+  );
+
   // Сцена, которая сама объявляет себя происходящей раньше предыдущих. В ролике на сорок
   // секунд флешбэк читается как ошибка монтажа, а не как приём: после порванного купола
   // зритель видит, как герой только надевает запасной ранец «перед прыжком».

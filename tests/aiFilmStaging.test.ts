@@ -518,3 +518,60 @@ test("отказ от читаемости не считается требов�
   );
   assert.ok(demanded.includes("readable-text:block"), JSON.stringify(demanded));
 });
+
+test("реквизит не заявляет конечное состояние, а изменение имеет причину", () => {
+  const fold: StoryEvent = {
+    id: "fold", observable: "the phone opens flat", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "phone", before: "half-open at an angle", after: "fully open and flat", role: "change" }],
+  };
+  const plan = planOf(
+    ["Он раскрывает телефон до конца, и внутренний экран становится виден целиком."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, visualAction: "Gudini finishes opening the folding phone flat with both hands",
+        keyMoment: "the phone reaches fully flat", eventIds: ["fold"],
+        objects: [{ id: "phone", before: "half-open at an angle", after: "fully open and flat", role: "change" }],
+        motion: "both hands straighten the hinge until the phone lies flat",
+        scene: { props: ["the black folding phone, now fully open and flat"] },
+      }),
+    ],
+    [fold],
+  );
+  const shot = plan.shots[0];
+  // строка присутствия называет предмет без его фазы
+  assert.ok(shot.prompt.includes("Present in frame throughout: the black folding phone"), shot.prompt.slice(0, 300));
+  assert.ok(!shot.prompt.includes("now fully open and flat.\n") && !/throughout: [^\n]*fully open and flat/.test(shot.prompt), shot.prompt.slice(0, 300));
+  assert.ok(plan.issues.some((i) => i.code === "prop-asserts-end-state"), JSON.stringify(plan.issues.map((i) => i.code)));
+
+  // изменение без причины в действии — отдельное замечание
+  const uncaused = planOf(
+    ["Он идёт вдоль изгороди, а сено на поле уже скошено ровными рядами."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, visualAction: "Gudini walks along the fence past the field",
+        keyMoment: "the mowed rows are visible behind the fence", eventIds: ["hay"],
+        objects: [{ id: "hay", before: "uncut in the field", after: "mowed into rows", role: "change" }],
+        motion: "he walks along the fence",
+        scene: { props: ["a wooden fence"] },
+      }),
+    ],
+    [{ id: "hay", observable: "the hay is cut into rows", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "hay", before: "uncut in the field", after: "mowed into rows", role: "change" }] }],
+  );
+  assert.ok(uncaused.issues.some((i) => i.code === "change-without-cause"), JSON.stringify(uncaused.issues.map((i) => i.code)));
+
+  // а когда предмет назван в действии, замечания нет
+  const caused = planOf(
+    ["Он проводит косой по траве, и полоса ложится ровным рядом за его спиной."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, visualAction: "Gudini swings the scythe through the standing hay",
+        keyMoment: "the cut hay falls into a row behind him", eventIds: ["hay"],
+        objects: [{ id: "hay", before: "standing uncut", after: "cut and lying in a row", role: "change" }],
+        motion: "the blade sweeps through the stalks and they fall",
+        scene: { mechanics: "the blade cuts the hay stalks at the base and they drop into a row" },
+      }),
+    ],
+    [{ id: "hay", observable: "the hay is cut into a row", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "hay", before: "standing uncut", after: "cut and lying in a row", role: "change" }] }],
+  );
+  assert.ok(!caused.issues.some((i) => i.code === "change-without-cause"), JSON.stringify(caused.issues.map((i) => i.code)));
+});

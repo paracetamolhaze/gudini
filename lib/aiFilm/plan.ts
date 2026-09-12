@@ -222,6 +222,29 @@ export type WindowStaging = {
   mechanics: string[];
 };
 
+/**
+ * Реквизит без фазы: если в тексте предмета названо состояние, которое в этой сцене меняется,
+ * остаётся только сам предмет. «the folding phone, now fully open and flat» → «the folding
+ * phone»: раскрытие покажет действие, а строка присутствия не обязана спорить с началом кадра.
+ */
+export function neutralProp(text: string, changing: ObjectState[]): string {
+  const raw = (text ?? "").trim();
+  if (!raw) return "";
+  const words = (v: string) => new Set(v.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3));
+  const head = raw.split(/,| now | already | already,|; /)[0].trim();
+  const tail = raw.slice(head.length);
+  if (!tail.trim()) return raw;
+  const tailWords = words(tail);
+  const assertsPhase = changing.some((o) => {
+    const after = words(o.after);
+    const before = words(o.before);
+    // хвост говорит о конечном состоянии и не повторяет исходное — это фаза, а не примета
+    const saysAfter = [...after].some((w) => tailWords.has(w) && !before.has(w));
+    return saysAfter;
+  });
+  return assertsPhase ? head : raw;
+}
+
 export function composeWindow(beats: StoryBeat[], phases: BeatPhase[] | BeatPhase): WindowStaging {
   const list: BeatPhase[] = Array.isArray(phases) ? phases : beats.map(() => phases);
   const beatPhases = beats.map((b, i) => ({ beatId: b.id, phase: list[i] ?? "whole" }));
@@ -230,7 +253,12 @@ export function composeWindow(beats: StoryBeat[], phases: BeatPhase[] | BeatPhas
     : beatPhases.some((p) => p.phase === "start")
       ? "start"
       : "whole";
-  const clean = (v: string[] | undefined) => (v ?? []).map((x) => x.trim()).filter(Boolean);
+  // Реквизит называет ПРЕДМЕТ, а не его фазу. Модель писала «the black folding phone, now
+  // fully open and flat» в строку «присутствует весь кадр», и запрос одновременно требовал
+  // начинать с полураскрытого телефона и держать раскрытый на протяжении всего клипа.
+  // Состояние предмета приходит из objects и из действия, поэтому фаза здесь отрезается.
+  const changing = beats.flatMap((b) => (b.objects ?? []).filter((o) => o.after.trim() && o.before.trim() && o.before.trim() !== o.after.trim()));
+  const clean = (v: string[] | undefined) => (v ?? []).map((x) => neutralProp(x, changing)).filter(Boolean);
   const first = beats[0];
   const throughout = [...new Set([...clean(first.scene?.worn), ...clean(first.scene?.props)])];
   const later: string[] = [];

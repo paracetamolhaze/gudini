@@ -74,6 +74,82 @@ export type FilmStageResult =
   | { kind: "plan"; plan: AiFilmPlan }
   | { kind: "film"; plan: AiFilmPlan; clips: GroupClip[]; spent: number; generated: number; cached: number };
 
+/**
+ * Фаза плана целиком: разбор истории Claude → биты → запросы → второй заход по типизированным
+ * нарушениям → выбор лучшего кандидата. Вынесена из стадии, чтобы тем же кодом можно было
+ * прогнать план вне конвейера — например, при разборе качества планировщика на новых темах,
+ * без видео и без Veo. Конвейер вызывает её же.
+ */
+export async function planFilm(args: {
+  words: Word[];
+  script: string;
+  topic?: string;
+  researchSummary?: string;
+  character: ReturnType<typeof loadCharacterProfile>;
+  universe: ReturnType<typeof loadUniverseProfile>;
+  duration: number;
+  coverage: { target: number; max: number };
+  cfg: Parameters<typeof buildFilmPlan>[0]["cfg"];
+  onStep?: (step: string, progress: number) => void;
+  /** запрос и ответ модели на каждом заходе: нужен разбору, на выбор плана не влияет */
+  onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
+}): Promise<{ plan: AiFilmPlan; story: Awaited<ReturnType<typeof planStory>>; retried: boolean; accepted: boolean }> {
+  const { character, universe, duration, cfg } = args;
+  const ask = (retryNote?: string) =>
+    planStory({
+      words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary,
+      character, universe, duration, coverage: args.coverage, retryNote, onCall: args.onCall,
+    });
+  let story = await ask();
+  args.onStep?.("AI-фильм: план сцен", 30);
+  let plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
+  // Второй заход даётся по тем же типизированным нарушениям, по которым план потом
+  // не пускается к оплате: раньше исправление искало строки предупреждений регулярными
+  // выражениями, а ворота смотрели только на issues, и известная склейка внутри кадра
+  // проходила мимо ворот. Теперь набор один — criteria.ts.
+  const required = requiredEvents(story.bible.events);
+  const first = retryIssues(plan);
+  let retried = false;
+  let accepted = false;
+  if (first.length) {
+    console.warn(`AI-фильм: план нарушил требования (${issueLines(first).join("; ")}) — второй заход`);
+    args.onStep?.("AI-фильм: правка плана", 29);
+    retried = true;
+    // Во второй заход уходит и сам контракт: те же идентификаторы, те же состояния.
+    // Иначе модель переименовывает событие, прежнее возвращается принудительно, и в плане
+    // оказываются два обязательства об одном и том же — одно из них навсегда непоказанное.
+    const contract = required.length
+      ? `\nОбязательные события остаются теми же, с теми же id и состояниями. Покажи каждое:\n` +
+        required
+          .map((e) => `- ${e.id}: ${e.observable} (${e.objects.map((o) => `${o.id}: ${o.before} → ${o.after}`).join("; ")})`)
+          .join("\n") +
+        `\nСостояние предмета после сцены пиши теми же словами, что и after у события.`
+      : "";
+    const retry = await ask(issueLines(first).map((w) => `- ${w}`).join("\n") + contract);
+    // Обязательный набор первого захода возвращается силой: снять обязательность вместо
+    // постановки сцены модель не может — это делало проверку зелёной, не показав события.
+    const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events) };
+    // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
+    // событие в сцене и забывает переписать его в bible.events.
+    reconcileEventRefs(retryBible, retry.beats);
+    const retryPlan = buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg });
+    // Выбор по тяжести и сохранённым событиям, а не по числу строк.
+    const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };
+    if (betterPlan(retryPlan, plan, required)) {
+      story = { ...retry, bible: retryBible };
+      plan = retryPlan;
+      accepted = true;
+      console.log(
+        `AI-фильм: второй заход принят — запретов ${blockingWeight(retryPlan)} (было ${was.blocks}), ` +
+          `потеряно обязательных ${missingRequired(retryPlan, required).length} (было ${was.lost})`,
+      );
+    } else {
+      console.warn("AI-фильм: второй заход не лучше первого, остаётся первый план");
+    }
+  }
+  return { plan, story, retried, accepted };
+}
+
 export async function runAiFilmStage(args: {
   id: string;
   dir: string;
@@ -96,51 +172,11 @@ export async function runAiFilmStage(args: {
     args.setStep("AI-фильм: разбор истории", 26);
     const research = await args.research.catch(() => null);
     const summary = research ? research.facts.slice(0, 8).map((f) => f.text).filter(Boolean).join("; ") : "";
-    const ask = (retryNote?: string) =>
-      planStory({ words, script: project.script ?? "", topic: project.topic, researchSummary: summary, character, universe, duration, coverage, retryNote });
-    let story = await ask();
-    args.setStep("AI-фильм: план сцен", 30);
-    let plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
-    // Второй заход даётся по тем же типизированным нарушениям, по которым план потом
-    // не пускается к оплате: раньше исправление искало строки предупреждений регулярными
-    // выражениями, а ворота смотрели только на issues, и известная склейка внутри кадра
-    // проходила мимо ворот. Теперь набор один — criteria.ts.
-    const required = requiredEvents(story.bible.events);
-    const first = retryIssues(plan);
-    if (first.length) {
-      console.warn(`AI-фильм: план нарушил требования (${issueLines(first).join("; ")}) — второй заход`);
-      args.setStep("AI-фильм: правка плана", 29);
-      // Во второй заход уходит и сам контракт: те же идентификаторы, те же состояния.
-      // Иначе модель переименовывает событие, прежнее возвращается принудительно, и в плане
-      // оказываются два обязательства об одном и том же — одно из них навсегда непоказанное.
-      const contract = required.length
-        ? `\nОбязательные события остаются теми же, с теми же id и состояниями. Покажи каждое:\n` +
-          required
-            .map((e) => `- ${e.id}: ${e.observable} (${e.objects.map((o) => `${o.id}: ${o.before} → ${o.after}`).join("; ")})`)
-            .join("\n") +
-          `\nСостояние предмета после сцены пиши теми же словами, что и after у события.`
-        : "";
-      const retry = await ask(issueLines(first).map((w) => `- ${w}`).join("\n") + contract);
-      // Обязательный набор первого захода возвращается силой: снять обязательность вместо
-      // постановки сцены модель не может — это делало проверку зелёной, не показав события.
-      const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events) };
-      // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
-      // событие в сцене и забывает переписать его в bible.events.
-      reconcileEventRefs(retryBible, retry.beats);
-      const retryPlan = buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg });
-      // Выбор по тяжести и сохранённым событиям, а не по числу строк.
-      const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };
-      if (betterPlan(retryPlan, plan, required)) {
-        story = { ...retry, bible: retryBible };
-        plan = retryPlan;
-        console.log(
-          `AI-фильм: второй заход принят — запретов ${blockingWeight(retryPlan)} (было ${was.blocks}), ` +
-            `потеряно обязательных ${missingRequired(retryPlan, required).length} (было ${was.lost})`,
-        );
-      } else {
-        console.warn("AI-фильм: второй заход не лучше первого, остаётся первый план");
-      }
-    }
+    const { plan } = await planFilm({
+      words, script: project.script ?? "", topic: project.topic, researchSummary: summary,
+      character, universe, duration, coverage, cfg,
+      onStep: (step, progress) => args.setStep(step, progress),
+    });
     fs.writeFileSync(path.join(dir, PLAN_FILE), JSON.stringify(plan, null, 2), "utf8");
     const s = plan.stats;
     console.log(

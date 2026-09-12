@@ -467,7 +467,14 @@ export function auditPlan(
       // Слова места и реквизита в счёт не идут: «beside the workbench» в описании камеры
       // говорит, где стоит камера, а не что предмет уже поднят над верстаком.
       const scenery = [o.id, b.location, ...(b.scene?.props ?? []), ...(b.scene?.worn ?? []), b.scene?.who ?? ""];
-      if (stateReached(o.after, initial, o.before, scenery) && !stateReached(o.before, initial, o.after, scenery)) {
+      // Противоречием считается только ПОЛНОЕ заявление конечного состояния. Одно общее
+      // слово ловило исправные сцены: «phone closed, cover screen lit» в начале кадра
+      // совпадало с «visible lit cover display» лишь словом «lit», и раскрытие складного
+      // телефона запрещалось к оплате.
+      const decisive = decisiveWords(o.before, o.after, scenery);
+      const said = stateTokens(initial).words;
+      const claimsAfter = decisive.size > 0 && [...decisive].every((w) => said.has(w));
+      if (claimsAfter && !stateReached(o.before, initial, o.after, scenery)) {
         mixed.push(`${b.id}/${o.id}`);
       }
     }

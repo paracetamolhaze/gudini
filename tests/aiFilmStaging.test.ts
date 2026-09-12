@@ -386,3 +386,40 @@ test("имя ищется целиком, а не как часть обычно
   assert.ok(!prompt.includes("Ben"), "скамья привела в кадр персонажа Ben");
   assert.ok(!prompt.includes("striped shirt"), "в запрос попала внешность постороннего персонажа");
 });
+
+test("одно общее слово в сводке не считается заявлением конечного состояния", () => {
+  const open: StoryEvent = {
+    id: "screens", observable: "the cover screen gives way to the larger inner screen", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "cover-screen", before: "not shown", after: "visible lit 5.4-inch cover display", role: "change" }],
+  };
+  // из настоящего плана: кадр начинается со сложенного телефона, у которого внешний экран горит
+  const plan = planOf(
+    ["Он держит телефон закрытым, а потом раскрывает его и показывает большой внутренний экран."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, visualAction: "Gudini holds the phone closed with the small cover screen lit, then unfolds it",
+        keyMoment: "the small lit cover screen gives way to the larger inner screen", eventIds: ["screens"],
+        objects: [{ id: "cover-screen", before: "not shown", after: "visible lit 5.4-inch cover display", role: "change" }],
+        stateBefore: "phone closed, cover screen lit",
+        camera: "Camera is in front at chest height; hands unfold the phone toward the camera, both screens staying in frame in sequence",
+      }),
+    ],
+    [open],
+  );
+  assert.ok(!plan.issues.some((i) => i.code === "phase-conflict"), JSON.stringify(plan.issues.map((i) => i.code)));
+
+  // а полное заявление конечного состояния в первом кадре по-прежнему запрет
+  const conflict = planOf(
+    ["Он держит телефон закрытым, а потом раскрывает его и показывает большой внутренний экран."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, visualAction: "Gudini unfolds the phone", keyMoment: "the inner screen opens", eventIds: ["screens"],
+        objects: [{ id: "cover-screen", before: "not shown", after: "visible lit cover display", role: "change" }],
+        stateBefore: "the visible lit cover display fills the frame from the first moment",
+        camera: "Camera is in front at chest height",
+      }),
+    ],
+    [open],
+  );
+  assert.ok(conflict.issues.some((i) => i.code === "phase-conflict" && i.severity === "block"), JSON.stringify(conflict.issues.map((i) => i.code)));
+});

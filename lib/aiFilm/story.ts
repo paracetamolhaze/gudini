@@ -819,6 +819,8 @@ export async function planStory(args: {
   coverage: { target: number; max: number };
   /** что было нарушено в прошлой попытке — второй заход с названными ошибками */
   retryNote?: string;
+  /** наблюдатель запроса и ответа модели: нужен разбору качества, на конвейер не влияет */
+  onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
 }): Promise<{ bible: StoryBible; beats: StoryBeat[]; phrases: Phrase[] }> {
   const phrases = phrasesFromWords(args.words);
   if (phrases.length < 2) throw new Error("AI-фильм: в речи меньше двух фраз — не из чего строить историю");
@@ -838,7 +840,11 @@ export async function planStory(args: {
         `Составь план заново и исправь именно это. Остальное можно оставить прежним.`
       : "");
   // без скрытых размышлений: на речи в 124 с модель потратила на них все 16 000 токенов и не выдала текст
-  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", reasoning: "off", system: storySystemPrompt(args.character, args.universe, args.coverage), user });
+  const system = storySystemPrompt(args.character, args.universe, args.coverage);
+  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", reasoning: "off", system, user });
+  // Крючок для разбора качества планировщика: сохранить ровно то, что ушло в модель и что
+  // она ответила, не подменяя это пересказом. На работу конвейера не влияет.
+  args.onCall?.({ system, user, raw, retry: Boolean(args.retryNote) });
   const parsed = parseJson<RawStory>(raw, "AI Film Story");
   const bible = normalizeBible(parsed, args.character, args.universe);
   const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration, args.words);

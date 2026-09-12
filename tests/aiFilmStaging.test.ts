@@ -699,3 +699,24 @@ test("неразобранный ответ планировщика попад�
   );
   assert.equal(seen.length, 1, "ответ модели обязан дойти до наблюдателя до разбора");
 });
+
+
+test("требование прочитать бумагу ловится и в механике сцены", () => {
+  const stamp: StoryEvent = {
+    id: "reject", observable: "the exemption form is rejected", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "form", before: "blank", after: "stamped rejected", role: "change" }],
+  };
+  const plan = planOf(
+    ["Он ставит на заявление красный отказ и кладёт рядом папку с документами клуба."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, shotType: "close", visualAction: "Gudini stamps the exemption form on the desk",
+        keyMoment: "the red stamp lands across the form", eventIds: ["reject"],
+        objects: [{ id: "form", before: "blank", after: "stamped rejected", role: "change" }],
+        scene: { who: "Gudini at the desk", props: ["exemption form", "red stamp"], mechanics: "the folder's papers make the LLC ownership status readable at a glance" },
+      }),
+    ],
+    [stamp],
+  );
+  assert.ok(plan.issues.some((i) => i.code === "readable-text"), JSON.stringify(plan.issues.map((i) => i.code)));
+});

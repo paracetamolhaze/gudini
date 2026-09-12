@@ -366,7 +366,10 @@ export function auditPlan(
   const readable = (re: RegExp) =>
     shown
       .filter((b) => {
-        const demand = `${b.visualAction} ${b.keyMoment}`;
+        // Требование читаемости ищется во ВСЁМ, что уходит в запрос как задание: оно попадало
+        // и в механику сцены («the folder makes the LLC status readable at a glance»), и в
+        // движение, а проверка смотрела только действие и ключевой момент и такую сцену пропускала.
+        const demand = `${b.visualAction} ${b.keyMoment} ${b.motion ?? ""} ${b.scene?.mechanics ?? ""}`;
         const found = demand.match(re);
         if (!found) return false;
         // «no readable text», «without legible labels» — это ОТКАЗ от читаемости, а не

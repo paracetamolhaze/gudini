@@ -281,3 +281,68 @@ test("явная роль состояния переживает нормали
   );
   assert.deepEqual(gateIssues(plan), [], JSON.stringify(plan.issues));
 });
+
+test("начатое действие в смешанном окне не требуется завершить", () => {
+  const events: StoryEvent[] = [
+    { id: "open", observable: "the case opens", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "case", before: "sealed", after: "open" }] },
+    { id: "take", observable: "the instrument leaves the case", required: true, fromPhrase: 2, toPhrase: 2, objects: [{ id: "instrument", before: "inside the open case", after: "raised above the workbench" }] },
+  ];
+  const chain = { location: "a workshop", continuityGroup: "c", continuityRequired: true };
+  const plan = planOf(
+    ["Он открыл футляр почти сразу.", "Потом он очень долго доставал оттуда инструмент и наконец поднял его над верстаком к самому концу этой длинной фразы."],
+    [
+      scene({ ...chain, fromPhrase: 1, toPhrase: 1, visualAction: "Gudini opens the sealed case", keyMoment: "the case opens", anchorPhrase: "открыл", eventIds: ["open"], objects: [{ id: "case", before: "sealed", after: "open" }], motion: "Gudini lifts the lid", scene: { mechanics: "his fingers break the seal and lift the lid off the case" } }),
+      scene({ ...chain, fromPhrase: 2, toPhrase: 2, visualAction: "Gudini takes the instrument out of the open case", keyMoment: "the instrument leaves the case", anchorPhrase: "поднял", eventIds: ["take"], objects: [{ id: "instrument", before: "inside the open case", after: "raised above the workbench" }], motion: "Gudini lifts the instrument above the workbench", scene: { mechanics: "his hand lifts the instrument out of its foam slot" } }),
+    ],
+    events,
+  );
+  assert.deepEqual(gateIssues(plan), [], JSON.stringify(plan.issues));
+  for (const shot of plan.shots) {
+    const starting = (shot.phases ?? []).filter((p) => p.phase === "start").map((p) => p.beatId);
+    for (const id of starting) {
+      const beat = plan.beats.find((b) => b.id === id)!;
+      // действие названо началом, а движение и механика завершения в этот клип не уходят
+      assert.ok(shot.prompt.includes("only the beginning"), shot.prompt.slice(0, 400));
+      assert.ok(!shot.prompt.includes(beat.motion), `движение завершения попало в окно начала (${shot.id})`);
+      assert.ok(!shot.prompt.includes(beat.scene!.mechanics!), `механика завершения попала в окно начала (${shot.id})`);
+      assert.ok(!shot.prompt.includes("all of it inside one continuous take"), "заголовок требует завершить всё в этом клипе");
+    }
+    // а завершающее окно получает и движение, и механику, и срок
+    const whole = (shot.phases ?? []).filter((p) => p.phase === "whole").map((p) => p.beatId);
+    for (const id of whole) {
+      const beat = plan.beats.find((b) => b.id === id)!;
+      if (beat.motion) assert.ok(shot.prompt.includes(beat.motion), `движение ${id} потеряно в ${shot.id}`);
+    }
+  }
+});
+
+test("общая часть имени не приводит в кадр другого персонажа", async () => {
+  const { mentionsPerson } = await import("../lib/aiFilm/plan");
+  const cast = ["Alice Smith", "Robert Smith", "Alice Jones", "Ada"];
+  const text = "gudini stands on the left; alice smith stands on the right".toLowerCase();
+  assert.equal(mentionsPerson("Alice Smith", text, cast), true);
+  assert.equal(mentionsPerson("Robert Smith", text, cast), false, "общая фамилия привела второго человека");
+  assert.equal(mentionsPerson("Alice Jones", text, cast), false, "общее имя привело второго человека");
+  assert.equal(mentionsPerson("Ada", "ada waits by the door", cast), true, "однословное имя должно находиться");
+
+  // и то же самое на конечном запросе
+  const plan = planOf(
+    ["Он передал письмо соседке прямо за столом у окна и сразу отошёл в сторону."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, visualAction: "Gudini passes the letter to Alice Smith", keyMoment: "the letter reaches her hand",
+        eventIds: ["pass"], objects: [{ id: "letter", before: "in Gudini's hand", after: "in her hand" }],
+        scene: { who: "Gudini stands on the left; Alice Smith stands on the right" },
+      }),
+    ],
+    [{ id: "pass", observable: "the letter changes hands", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "letter", before: "in Gudini's hand", after: "in her hand" }] }],
+    { supportingCharacters: [
+      { name: "Alice Smith", function: "partner", appearance: "an adult in a plain green coat" },
+      { name: "Robert Smith", function: "witness", appearance: "an adult in a grey jacket" },
+    ] },
+  );
+  const prompt = plan.shots[0].prompt;
+  assert.ok(prompt.includes("Alice Smith"), prompt.slice(0, 300));
+  assert.ok(!prompt.includes("Robert Smith"), "в запрос попал персонаж, которого в сцене нет");
+  assert.ok(!prompt.includes("grey jacket"), "в запрос попала внешность постороннего персонажа");
+});

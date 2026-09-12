@@ -206,8 +206,8 @@ export type WindowStaging = {
   phase: BeatPhase;
   /** фаза каждого бита окна: из неё собираются действие, движение, механика и состояния */
   beatPhases: { beatId: string; phase: BeatPhase }[];
-  /** действия, которые в этом окне действительно совершаются */
-  actions: { beatId: string; text: string }[];
+  /** действия окна; starts — действие только начинается и завершится в продолжении */
+  actions: { beatId: string; text: string; starts: boolean }[];
   /** действия, завершённые раньше: их повторять нельзя */
   done: { beatId: string; text: string; keyMoment: string }[];
   /** движение тех битов, действие которых здесь совершается */
@@ -244,12 +244,18 @@ export function composeWindow(beats: StoryBeat[], phases: BeatPhase[] | BeatPhas
   // и решается это ПО КАЖДОМУ БИТУ. Прежде фаза бралась у последнего бита окна, и клип
   // с последствием первого действия и совершением второго снова требовал сломать печать.
   const isDone = (i: number) => beatPhases[i].phase === "aftermath";
-  const actions = beats.map((b, i) => ({ beatId: b.id, text: b.visualAction })).filter((_, i) => !isDone(i) && beats[i].visualAction);
+  const isStart = (i: number) => beatPhases[i].phase === "start";
+  const actions = beats
+    .map((b, i) => ({ beatId: b.id, text: b.visualAction, starts: isStart(i) }))
+    .filter((_, i) => !isDone(i) && beats[i].visualAction);
   const done = beats
     .map((b, i) => ({ beatId: b.id, text: b.visualAction, keyMoment: b.keyMoment }))
     .filter((_, i) => isDone(i));
-  const motions = beats.map((b, i) => (isDone(i) ? "" : b.motion)).filter(Boolean);
-  const mechanics = [...new Set(beats.map((b, i) => (isDone(i) ? "" : b.scene?.mechanics?.trim() ?? "")).filter(Boolean))];
+  // Движение и механика описывают ЗАВЕРШЁННЫЙ переход, поэтому берутся только у битов,
+  // которые в этом окне действительно завершаются. Прежде окно с фазой «начало» просило
+  // вынуть инструмент движением и механикой и тут же запрещало это до продолжения.
+  const motions = beats.map((b, i) => (isDone(i) || isStart(i) ? "" : b.motion)).filter(Boolean);
+  const mechanics = [...new Set(beats.map((b, i) => (isDone(i) || isStart(i) ? "" : b.scene?.mechanics?.trim() ?? "")).filter(Boolean))];
   return { phase, beatPhases, actions, done, motions, throughout, later, who, mechanics };
 }
 
@@ -385,11 +391,20 @@ export function shotPrompt(args: {
     const rest = stateLine(beat.objects, "after") || beat.stateAfter || beat.visualAction;
     lines.push(`This clip shows only what follows from it: ${rest}.`);
   } else if (staging.actions.length === 1) {
-    const only = staging.actions[0].text;
-    lines.push(unfinished ? `Action, of which only the beginning fits in this clip: ${only}` : `Action: ${only}`);
+    const only = staging.actions[0];
+    lines.push(only.starts ? `Action, of which only the beginning fits in this clip: ${only.text}` : `Action: ${only.text}`);
   } else {
-    lines.push(`Action, in this order and all of it inside one continuous take:`);
-    staging.actions.forEach((a, i) => lines.push(`${i + 1}. ${a.text}`));
+    // Действие, которое в этом окне только начинается, помечается отдельно: иначе заголовок
+    // «всё это внутри одного кадра» спорил с концом того же запроса, где оно запрещено.
+    const anyStarts = staging.actions.some((a) => a.starts);
+    lines.push(
+      anyStarts
+        ? `Action, in this order inside one continuous take; the last of them only begins here and finishes in the continuation:`
+        : `Action, in this order and all of it inside one continuous take:`,
+    );
+    staging.actions.forEach((a, i) =>
+      lines.push(`${i + 1}. ${a.text}${a.starts ? " — only the beginning of this, it is not finished inside this clip" : ""}`),
+    );
   }
   // Одно изменение ради которого снимается сцена — сразу после действия и до всего
   // остального: у генератора должна быть одна цель, а не список равноправных задач.
@@ -474,12 +489,7 @@ export function shotPrompt(args: {
     .map((b) => `${b.visualAction} ${b.motion} ${b.stateBefore} ${b.stateAfter} ${b.scene?.who ?? ""}`)
     .join(" ")
     .toLowerCase();
-  const inScene = bible.supportingCharacters.filter((c) =>
-    c.name
-      .split(/[\s/()]+/)
-      .filter((w) => w.length >= 3)
-      .some((w) => text.includes(w.toLowerCase())),
-  );
+  const inScene = bible.supportingCharacters.filter((c) => mentionsPerson(c.name, text, bible.supportingCharacters.map((x) => x.name)));
   const cast: string[] = [];
   if (beats.some((b) => b.gudiniVisible)) cast.push(character.name);
   for (const c of inScene) cast.push(c.name);
@@ -1007,6 +1017,26 @@ export function uncoveredGroupIssues(built: BuiltShots): PlanIssue[] {
     }
   }
   return out;
+}
+
+/**
+ * Назван ли ЭТОТ человек в тексте окна. Полное имя — доказательство; отдельная часть имени
+ * годится, только если она не общая с другим объявленным персонажем.
+ *
+ * Прежде совпадало любое слово имени длиной от трёх букв, и при двух Смитах сцена с Alice
+ * Smith получала ещё и Robert Smith вместе с его внешностью.
+ */
+export function mentionsPerson(name: string, text: string, declared: string[]): boolean {
+  const low = text.toLowerCase();
+  const full = name.trim().toLowerCase();
+  if (!full) return false;
+  if (low.includes(full)) return true;
+  const parts = full.split(/[\s/()-]+/).filter((w) => w.length >= 3);
+  const others = declared.filter((d) => d.trim().toLowerCase() !== full);
+  return parts.some((w) => {
+    const shared = others.some((d) => d.toLowerCase().split(/[\s/()-]+/).includes(w));
+    return !shared && low.includes(w);
+  });
 }
 
 /** Прежнее имя: те же нарушения структуры одними сообщениями. */

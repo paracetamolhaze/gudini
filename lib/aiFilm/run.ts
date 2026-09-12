@@ -93,7 +93,7 @@ export async function planFilm(args: {
   onStep?: (step: string, progress: number) => void;
   /** запрос и ответ модели на каждом заходе: нужен разбору, на выбор плана не влияет */
   onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
-}): Promise<{ plan: AiFilmPlan; story: Awaited<ReturnType<typeof planStory>>; retried: boolean; accepted: boolean }> {
+}): Promise<{ plan: AiFilmPlan; story: Awaited<ReturnType<typeof planStory>>; retried: boolean; accepted: boolean; candidates: { first: AiFilmPlan; retry?: AiFilmPlan } }> {
   const { character, universe, duration, cfg } = args;
   const ask = (retryNote?: string) =>
     planStory({
@@ -103,6 +103,8 @@ export async function planFilm(args: {
   let story = await ask();
   args.onStep?.("AI-фильм: план сцен", 30);
   let plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
+  // Оба кандидата сохраняются: по ним видно, что выбрал планировщик, а что изменила сборка.
+  const candidates: { first: AiFilmPlan; retry?: AiFilmPlan } = { first: plan };
   // Второй заход даётся по тем же типизированным нарушениям, по которым план потом
   // не пускается к оплате: раньше исправление искало строки предупреждений регулярными
   // выражениями, а ворота смотрели только на issues, и известная склейка внутри кадра
@@ -133,6 +135,7 @@ export async function planFilm(args: {
     // событие в сцене и забывает переписать его в bible.events.
     reconcileEventRefs(retryBible, retry.beats);
     const retryPlan = buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg });
+    candidates.retry = retryPlan;
     // Выбор по тяжести и сохранённым событиям, а не по числу строк.
     const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };
     if (betterPlan(retryPlan, plan, required)) {
@@ -147,7 +150,7 @@ export async function planFilm(args: {
       console.warn("AI-фильм: второй заход не лучше первого, остаётся первый план");
     }
   }
-  return { plan, story, retried, accepted };
+  return { plan, story, retried, accepted, candidates };
 }
 
 export async function runAiFilmStage(args: {

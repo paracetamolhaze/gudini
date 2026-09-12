@@ -358,9 +358,27 @@ export function auditPlan(
     `Флаг присутствия ${character.name} в кадре расходится с текстом действия`,
   );
 
-  // Просьба показать читаемый текст.
+  // Просьба показать читаемый текст. Учитывается ВСЯ постановка сцены: если сам предмет
+  // объявлен нечитаемым в реквизите («a row of blurred handwritten words»), требования
+  // разобрать надпись нет. Персонаж, читающий карточку, тоже не обязывает зрителя её читать.
+  // Снятие работает адресно: нечитаемость одного предмета не отменяет требования прочитать
+  // другой — у отмены и требования должно быть общее значимое слово.
   const readable = (re: RegExp) =>
-    shown.filter((b) => { const t = `${b.visualAction} ${b.keyMoment}`; return re.test(t) && !UNREADABLE.test(t); }).map((b) => b.id);
+    shown
+      .filter((b) => {
+        const demand = `${b.visualAction} ${b.keyMoment}`;
+        if (!re.test(demand)) return false;
+        const staging = [...(b.scene?.props ?? []), ...(b.scene?.worn ?? []), b.scene?.mechanics ?? "", b.stateBefore, b.stateAfter, demand];
+        const hit = demand.match(re)?.[0] ?? "";
+        const around = demand.slice(Math.max(0, demand.indexOf(hit) - 60), demand.indexOf(hit) + hit.length + 60);
+        const near = stateTokens(around).words;
+        return !staging.some((part) => {
+          if (!UNREADABLE.test(part)) return false;
+          const words = stateTokens(part).words;
+          return [...words].some((w) => near.has(w));
+        });
+      })
+      .map((b) => b.id);
   const hard = readable(READABLE_HARD);
   add("readable-text", hard, "Сцена требует читаемый текст на экране или бумаге — Veo его не выводит", "block");
   add(

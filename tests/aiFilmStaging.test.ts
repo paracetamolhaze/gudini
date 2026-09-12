@@ -423,3 +423,66 @@ test("одно общее слово в сводке не считается з�
   );
   assert.ok(conflict.issues.some((i) => i.code === "phase-conflict" && i.severity === "block"), JSON.stringify(conflict.issues.map((i) => i.code)));
 });
+
+test("обязательный момент остаётся внутри клипа, когда длинный бит обрезается", () => {
+  const pay: StoryEvent = {
+    id: "pay", observable: "the small tax bill is set beside the large one", required: true, fromPhrase: 1, toPhrase: 2,
+    objects: [{ id: "bills", before: "one bill on the table", after: "two bills side by side, sizes compared", role: "change" }],
+  };
+  // бит длиннее восьми секунд, а его момент звучит в самом конце
+  const plan = planOf(
+    [
+      "Он выложил на стол первую квитанцию.",
+      "Потом достал вторую бумагу и положил рядом.",
+      "На ней стояли уже почти двести тысяч.",
+    ],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 3, visualAction: "Gudini sets the second, larger bill beside the small one",
+        keyMoment: "the larger bill lands beside the small one", anchorPhrase: "двести", eventIds: ["pay"],
+        objects: [{ id: "bills", before: "one bill on the table", after: "two bills side by side, sizes compared", role: "change" }],
+      }),
+    ],
+    [pay],
+  );
+  assert.deepEqual(gateIssues(plan), [], JSON.stringify(plan.issues));
+  const shot = plan.shots.find((s) => s.eventIds.includes("pay"));
+  assert.ok(shot, "сцена с обязательным событием пропала");
+  assert.ok(shot!.changeBySec != null, "момент события остался за пределами клипа");
+  const beat = plan.beats.find((b) => b.id === shot!.beatIds[0])!;
+  assert.ok(beat.anchorAbsSec != null && beat.anchorAbsSec >= beat.start - 1e-6 && beat.anchorAbsSec <= beat.end + 1e-6,
+    `момент ${beat.anchorAbsSec} вне окна ${beat.start}–${beat.end}`);
+});
+
+test("чтение персонажем не требует читаемости для зрителя", () => {
+  const restore: StoryEvent = {
+    id: "restore", observable: "the new device gains access from the backup card", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "device", before: "new and empty", after: "restored and unlocked", role: "change" }],
+  };
+  const build = (props: string[], visualAction: string) =>
+    planOf(
+      ["Он взял карточку с резервной фразой и по ней восстановил доступ на новом устройстве."],
+      [
+        scene({
+          fromPhrase: 1, toPhrase: 1, visualAction, keyMoment: "the new device shows a restored wallet", eventIds: ["restore"],
+          objects: [{ id: "device", before: "new and empty", after: "restored and unlocked", role: "change" }],
+          scene: { props },
+        }),
+      ],
+      [restore],
+    ).issues.map((i) => `${i.code}:${i.severity}`);
+
+  // предмет прямо объявлен нечитаемым — требования разобрать надпись нет
+  const blurred = build(
+    ["a paper card with a row of blurred handwritten words"],
+    "Gudini picks up the card and reads the words while entering them into a new device",
+  );
+  assert.ok(!blurred.includes("readable-text:block"), JSON.stringify(blurred));
+
+  // а требование прочитать ДРУГОЙ предмет размытая карточка не отменяет
+  const other = build(
+    ["a paper card with a row of blurred handwritten words"],
+    "Gudini enters the phrase while the screen clearly shows the price of the transfer",
+  );
+  assert.ok(other.includes("readable-text:block"), JSON.stringify(other));
+});

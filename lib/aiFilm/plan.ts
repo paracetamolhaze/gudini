@@ -643,13 +643,23 @@ export function enforceShotBudget(beats: StoryBeat[]): StoryBeat[] {
   for (const b of beats) {
     const dur = b.end - b.start;
     if (b.displayMode === "author" || b.continuityRequired || dur <= PREFERRED_MAX_AI_SHOT_SECONDS + 1e-6) { out.push(b); continue; }
-    const cut = b.start + PREFERRED_MAX_AI_SHOT_SECONDS;
-    out.push({ ...b, end: cut, suggestedDuration: PREFERRED_MAX_AI_SHOT_SECONDS });
-    out.push({
+    // Оставляемое окно выбирается ВОКРУГ обязательного момента, а не всегда с начала бита.
+    // Прежде длинный бит обрезался по первым восьми секундам, и момент, который планировщик
+    // привязал к своей реплике на 67-й секунде, оказывался в отрезанном хвосте: план получал
+    // запрет за «событие звучит позже, чем заканчивается клип», хотя выбор модели был верным.
+    let from = b.start;
+    if (b.anchorAbsSec != null && b.anchorAbsSec > b.start + PREFERRED_MAX_AI_SHOT_SECONDS - 1) {
+      const wanted = b.anchorAbsSec - (PREFERRED_MAX_AI_SHOT_SECONDS - 2);
+      from = Math.max(b.start, Math.min(wanted, b.end - PREFERRED_MAX_AI_SHOT_SECONDS));
+      from = Math.round(from * 100) / 100;
+    }
+    const cut = Math.round(Math.min(b.end, from + PREFERRED_MAX_AI_SHOT_SECONDS) * 100) / 100;
+    const authorPart = (start: number, end: number, id: string) => ({
       ...b,
-      id: `${b.id}a`,
-      start: cut,
-      displayMode: "author",
+      id,
+      start,
+      end,
+      displayMode: "author" as const,
       requiresGeneration: false,
       gudiniVisible: false,
       continuityGroup: null,
@@ -657,9 +667,21 @@ export function enforceShotBudget(beats: StoryBeat[]): StoryBeat[] {
       universeAdaptation: "",
       visualAction: "",
       location: "",
-      suggestedDuration: Math.round((b.end - cut) * 10) / 10,
-      reduced: `остаток AI-бита после ${PREFERRED_MAX_AI_SHOT_SECONDS} с — автор (без continuityRequired)`,
+      suggestedDuration: Math.round((end - start) * 10) / 10,
+      reduced: `часть AI-бита вне восьмисекундного окна — автор (без continuityRequired)`,
     });
+    if (from > b.start + 0.05) out.push(authorPart(b.start, from, `${b.id}p`));
+    // Момент внутри бита пересчитывается от нового начала окна: абсолютное время события
+    // не изменилось, изменились границы клипа.
+    const rel = b.anchorAbsSec == null ? null : Math.round((b.anchorAbsSec - from) * 10) / 10;
+    out.push({
+      ...b,
+      start: from,
+      end: cut,
+      anchorAtSec: rel != null && rel >= -1e-6 && rel <= cut - from + 1e-6 ? Math.max(0, rel) : null,
+      suggestedDuration: Math.round((cut - from) * 10) / 10,
+    });
+    if (cut < b.end - 0.05) out.push(authorPart(cut, b.end, `${b.id}a`));
   }
   // соседние author-остатки сливаются с последующим author-битом
   const merged: StoryBeat[] = [];

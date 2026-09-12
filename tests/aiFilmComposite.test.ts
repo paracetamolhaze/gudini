@@ -110,7 +110,7 @@ test("цены Veo: политика по модели/звуку/разреше
 });
 
 test("проверка жизни AI-окна: движущиеся кадры проходят, застывшие и чёрные — нет", () => {
-  const size = 16 * 9;
+  const size = 64 * 36;
   const moving = Buffer.alloc(size * 6);
   for (let f = 0; f < 6; f++) for (let i = 0; i < size; i++) moving[f * size + i] = (i * 7 + f * 40) % 256;
   const m = motionStats(moving);
@@ -118,6 +118,23 @@ test("проверка жизни AI-окна: движущиеся кадры �
   assert.equal(m.changed, 5);
   assert.equal(motionStats(Buffer.alloc(size * 6, 120)).changed, 0);
   assert.equal(motionStats(Buffer.alloc(size * 6, 3)).dark, 6);
+});
+
+test("спокойный общий план с маленькой фигурой не застыл, а шум сжатия — не движение", () => {
+  const w = 64;
+  const h = 36;
+  const size = w * h;
+  const frames = 8;
+  // маленький светлый квадрат смещается по неподвижному серому полю
+  const calm = Buffer.alloc(size * frames, 120);
+  for (let f = 0; f < frames; f++) {
+    for (let y = 20; y < 26; y++) for (let x = 10 + f * 6; x < 16 + f * 6; x++) calm[f * size + y * w + x] = 255;
+  }
+  assert.equal(motionStats(calm).changed, frames - 1);
+  // дрожание яркости в пределах шума сжатия сменой кадра не считается
+  const noise = Buffer.alloc(size * frames);
+  for (let f = 0; f < frames; f++) for (let i = 0; i < size; i++) noise[f * size + i] = 120 + (((i * 13 + f * 7) % 11) - 5);
+  assert.equal(motionStats(noise).changed, 0);
 });
 
 test("политика провайдеров: история — Anthropic, генерация — только Google", () => {

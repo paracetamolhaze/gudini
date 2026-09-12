@@ -159,3 +159,22 @@ test("замершее окно отвергается и на коротком 
     );
   }
 });
+
+test("спокойный общий план с маленькой движущейся фигурой не отвергается как застывший", async (t) => {
+  // Настоящий случай: неподвижная камера, широкий план поля, фигура поднимает руку с листком.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-calm-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  execFileSync(ffmpegBin(), [
+    "-hide_banner", "-y",
+    "-f", "lavfi", "-i", "color=c=gray:size=270x480:duration=8:rate=25",
+    "-f", "lavfi", "-i", "color=c=white:size=60x80:duration=8:rate=25",
+    "-filter_complex", "[0:v][1:v]overlay=x='20+t*25':y=300:shortest=1",
+    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path.join(dir, "out.mp4"),
+  ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  execFileSync(ffmpegBin(), [
+    "-hide_banner", "-y", "-f", "lavfi", "-i", "testsrc2=size=270x480:duration=8:rate=25",
+    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path.join(dir, "src.mp4"),
+  ], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const plan = { timeline: [{ start: 0, end: 8, mode: "full_ai", beatIds: ["B1"] }] } as any;
+  await checkAiSegments(dir, plan, "src.mp4", "out.mp4");
+});

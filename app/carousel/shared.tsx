@@ -32,16 +32,9 @@ export async function api<T>(url: string, init: { method?: string; json?: unknow
   return data as T;
 }
 
-export const isAccessError = (e: unknown): boolean => e instanceof ApiError && (e.status === 401 || e.code === "login_disabled");
+export const isAccessError = (e: unknown): boolean => e instanceof ApiError && e.status === 401;
 
-export function AccessNotice({ error }: { error: ApiError }) {
-  if (error.code === "login_disabled") {
-    return (
-      <div className="warn-box" role="alert">
-        <strong>Раздел закрыт.</strong> {error.message}
-      </div>
-    );
-  }
+export function AccessNotice(_: { error: ApiError }) {
   return (
     <div className="warn-box" role="alert">
       Нужен вход на сайт.{" "}

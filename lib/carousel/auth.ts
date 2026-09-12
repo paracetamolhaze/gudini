@@ -5,21 +5,17 @@ import crypto from "crypto";
  * (или Basic Auth для скриптов), как в middleware.ts. Проверка повторяется в каждом
  * маршруте, чтобы раздел оставался закрытым, даже если правило middleware изменят.
  *
- * Отличие одно: при пустом SITE_PASSWORD сайт открыт всем, но генератор с платными
- * вызовами Claude и публикация в Instagram открытыми быть не должны — раздел отказывает.
+ * При пустом SITE_PASSWORD раздел открыт, как и весь сайт (решение владельца 2026-09-13):
+ * генерация тратит деньги на Claude, а публикация уходит в подключённый Instagram, поэтому
+ * включение пароля закрывает раздел сразу, без правок кода.
  */
 
-export type CarouselAccess =
-  | { ok: true }
-  | { ok: false; status: 401 | 403; code: "login_disabled" | "login_required"; error: string };
+export type CarouselAccess = { ok: true } | { ok: false; status: 401; code: "login_required"; error: string };
 
 type RequestLike = {
   headers: { get(name: string): string | null };
   cookies: { get(name: string): { value: string } | undefined };
 };
-
-export const LOGIN_DISABLED_MESSAGE =
-  "Раздел «Карусели» закрыт: на сайте выключен вход по паролю (SITE_PASSWORD пуст), а генерация через Claude и публикация в Instagram не должны быть доступны всем. Включите вход на сайт — раздел заработает.";
 
 function sameText(a: string, b: string): boolean {
   const x = Buffer.from(a);
@@ -32,7 +28,7 @@ export function authCookieValue(password: string): string {
 }
 
 export function checkCarouselAccess(req: RequestLike, password = process.env.SITE_PASSWORD ?? ""): CarouselAccess {
-  if (!password) return { ok: false, status: 403, code: "login_disabled", error: LOGIN_DISABLED_MESSAGE };
+  if (!password) return { ok: true };
 
   const cookie = req.cookies.get("gudini_auth")?.value;
   if (cookie && sameText(cookie, authCookieValue(password))) return { ok: true };

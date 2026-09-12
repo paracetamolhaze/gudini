@@ -103,7 +103,7 @@ function readyCarousel() {
   });
 }
 
-test("без входа раздел отвечает 401, без пароля сайта — 403 «вход выключен»", async () => {
+test("с паролем сайта без входа — 401; без пароля раздел открыт, как весь сайт", async () => {
   const c = readyCarousel();
   const file = c.slides[0].render!.file!;
   assert.equal((await listRoute.GET(req("GET", "/api/carousel", undefined, {}))).status, 401);
@@ -114,10 +114,10 @@ test("без входа раздел отвечает 401, без пароля �
 
   process.env.SITE_PASSWORD = "";
   try {
-    const r = await listRoute.GET(req("GET", "/api/carousel"));
-    assert.equal(r.status, 403);
-    assert.equal((await r.json()).code, "login_disabled");
-    assert.equal((await listRoute.POST(req("POST", "/api/carousel", { idea: "Тема" }))).status, 403);
+    assert.equal((await listRoute.GET(req("GET", "/api/carousel", undefined, {}))).status, 200);
+    assert.equal((await imageRoute.GET(req("GET", "x", undefined, {}), params({ id: c.id, file }))).status, 200);
+    // открытый доступ не отменяет проверки: чужой путь по-прежнему закрыт
+    assert.equal((await imageRoute.GET(req("GET", "x", undefined, {}), params({ id: c.id, file: "../../settings.json" }))).status, 404);
   } finally {
     process.env.SITE_PASSWORD = "pw";
   }

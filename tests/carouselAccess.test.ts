@@ -6,13 +6,8 @@ import { middleware } from "../middleware";
 
 const req = (url: string, headers: Record<string, string> = {}) => new NextRequest(new URL(url, "http://localhost:3000"), { headers });
 
-test("пароль сайта не задан — раздел закрыт, а не открыт всем", () => {
-  const r = checkCarouselAccess(req("/api/carousel"), "");
-  assert.equal(r.ok, false);
-  if (!r.ok) {
-    assert.equal(r.status, 403);
-    assert.equal(r.code, "login_disabled");
-  }
+test("пароль сайта не задан — раздел открыт, как и весь сайт", () => {
+  assert.equal(checkCarouselAccess(req("/api/carousel"), "").ok, true);
 });
 
 test("пароль задан: без входа 401, верная cookie и Basic — доступ, чужая cookie — нет", () => {

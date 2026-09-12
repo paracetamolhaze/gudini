@@ -765,3 +765,64 @@ test("видимый заголовок документа — это требо
   );
   assert.ok(plan.issues.some((i) => i.code === "readable-text"), JSON.stringify(plan.issues.map((i) => i.code)));
 });
+
+
+test("сцена не переодевает постоянного персонажа в костюм роли", () => {
+  const dressed = (worn: string[], visualAction = "Gudini sits at the desk sorting the club papers") =>
+    planOf(
+      ["Он сидит за столом и перекладывает бумаги клуба."],
+      [scene({ fromPhrase: 1, toPhrase: 1, visualAction, keyMoment: "the papers are sorted into two stacks", scene: { who: "Gudini at the desk", worn } })],
+      [],
+    );
+  const suit = dressed(["dark tailored suit"]);
+  assert.ok(gateIssues(suit).some((i) => i.code === "costume-conflict"), JSON.stringify(suit.issues.map((i) => i.code)));
+  // костюм роли, названный прямо в действии, тоже переодевание
+  const inAction = dressed([], "Gudini, playing Donald Trump in a dark suit, sits at the desk sorting the club papers");
+  assert.ok(gateIssues(inAction).some((i) => i.code === "costume-conflict"), JSON.stringify(inAction.issues.map((i) => i.code)));
+  // собственный костюм персонажа не нарушение
+  const own = dressed(["orange and black zip jacket"]);
+  assert.ok(!own.issues.some((i) => i.code === "costume-conflict"), JSON.stringify(own.issues.map((i) => i.code)));
+});
+
+test("предмет, объявленный отсутствующим, но стоящий в расстановке, — это показ, а не появление", () => {
+  const site = (who: string) =>
+    planOf(
+      ["Он стоит на поле рядом с гранитной плитой у самой лунки."],
+      [
+        scene({
+          fromPhrase: 1, toPhrase: 1, visualAction: "Gudini stands on the fairway beside a grey granite marker", keyMoment: "the marker beside the hole",
+          objects: [{ id: "grave-site", before: "ordinary grass near the fairway, no marker", after: "a granite marker in the grass", role: "change" }],
+          scene: { who },
+        }),
+      ],
+      [],
+    );
+  const already = site("Gudini stands beside the grave marker a few meters from the flag");
+  assert.ok(already.issues.some((i) => i.code === "absent-before-but-present"), JSON.stringify(already.issues.map((i) => i.code)));
+  // в расстановке начала предмета нет — это настоящее появление, замечания нет
+  const brought = site("Gudini stands on the fairway holding a small shovel");
+  assert.ok(!brought.issues.some((i) => i.code === "absent-before-but-present"), JSON.stringify(brought.issues.map((i) => i.code)));
+});
+
+test("надпись заглавными словами на штампе — требование читаемого текста", () => {
+  const plan = planOf(
+    ["Чиновник берёт штамп и ставит на верхнюю страницу бумаг клуба красный отказ."],
+    [scene({ fromPhrase: 1, toPhrase: 1, visualAction: "a hand presses a red stamp reading DENIED onto the papers", keyMoment: "a red DENIED stamp lands on the top page" })],
+    [],
+  );
+  assert.ok(plan.issues.some((i) => i.code === "readable-text"), JSON.stringify(plan.issues.map((i) => i.code)));
+  // аббревиатура в названии предмета надписью не является
+  const llc = planOf(
+    ["Он кладёт на стол папку с бумагами компании."],
+    [scene({ fromPhrase: 1, toPhrase: 1, visualAction: "Gudini puts the LLC paperwork down on the desk", keyMoment: "the paperwork lies on the desk" })],
+    [],
+  );
+  assert.ok(!llc.issues.some((i) => i.code === "readable-text"), JSON.stringify(llc.issues.map((i) => i.code)));
+});
+
+test("удержание, упёршееся в край отрезка, не превращается в пустую секунду", async () => {
+  const { holdClause } = await import("../lib/aiFilm/plan");
+  assert.match(holdClause({ bySec: 7, holdSec: 2, untilSec: 7 }), /to the end of the clip/);
+  assert.match(holdClause({ bySec: 4, holdSec: 2, untilSec: 6 }), /at least until second 6/);
+  assert.equal(holdClause({ bySec: 4, holdSec: 0, untilSec: null }), "");
+});

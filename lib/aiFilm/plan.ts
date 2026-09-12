@@ -172,7 +172,9 @@ export function eventDeadlines(beats: StoryBeat[], shotStart: number, shownSecon
  */
 export function holdClause(d: Pick<EventDeadline, "holdSec" | "untilSec" | "bySec">): string {
   if (!d.holdSec) return "";
-  const until = d.untilSec != null ? ` at least until second ${d.untilSec} of the clip` : " to the end of the clip";
+  // Удержание, упёршееся в край отрезка, давало «at least until second 7» при появлении на той
+  // же седьмой секунде — пустое требование. В таком случае честнее «до конца клипа».
+  const until = d.untilSec != null && (d.bySec == null || d.untilSec > d.bySec) ? ` at least until second ${d.untilSec} of the clip` : " to the end of the clip";
   return (
     ` Once it is there it stays:${until} it remains on screen exactly as described` +
     ` and does not go back to the state it had before, inside this clip.`

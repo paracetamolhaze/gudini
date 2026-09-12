@@ -32,6 +32,11 @@ const READABLE_HARD = /\b(?:reads? "|legible|readable|the words?|caption|subtitl
  * кадр запрещался целиком; теперь это замечание, а не запрет.
  */
 const READABLE_SOFT = /\bscreen (?:showing|displaying)\b|\bproduct page\b|\blisting\b/i;
+/**
+ * Слово, которое должно читаться, названо прямо: «a stamp reading DENIED», «a DENIED stamp».
+ * Без флага i: заглавные буквы здесь и есть признак надписи.
+ */
+const READABLE_WORD = /\b(?:reads?|reading|saying|says|marked|stamped)\s+["“]?[A-Z]{3,}\b|\b[A-Z]{4,}\s+(?:stamp|sign|label|banner|mark|seal|notice)\b/;
 /** Предмет сам по себе не запрещён: квитанцию можно скомкать, если её не просят прочитать. */
 const UNREADABLE = /\bunreadable\b|\billegible\b|\bblurred\b|\bout of focus\b|\bnot readable\b/i;
 
@@ -227,7 +232,7 @@ export function eventCovered(event: StoryEvent, beats: StoryBeat[], shots?: Film
 export function auditPlan(
   beats: StoryBeat[],
   bible: StoryBible,
-  character: Pick<CharacterProfile, "name" | "referenceFiles">,
+  character: Pick<CharacterProfile, "name" | "referenceFiles"> & Partial<Pick<CharacterProfile, "clothes">>,
   shots?: FilmShot[],
 ): PlanIssue[] {
   const out: PlanIssue[] = [];
@@ -389,7 +394,7 @@ export function auditPlan(
         });
       })
       .map((b) => b.id);
-  const hard = readable(READABLE_HARD);
+  const hard = [...new Set([...readable(READABLE_HARD), ...readable(READABLE_WORD)])];
   add("readable-text", hard, "Сцена требует читаемый текст на экране или бумаге — Veo его не выводит", "block");
   add(
     "screen-content",
@@ -577,6 +582,57 @@ export function auditPlan(
     "change-without-cause",
     uncaused,
     "Состояние предмета меняется, но в действии, движении и механике этого предмета нет: изменение появится само собой",
+  );
+
+  // Предмет «до» объявлен отсутствующим, а расстановка сцены уже ставит его в кадр: «no marker»
+  // рядом с «stands beside the grave marker», «goats — not present» рядом с «goats stand behind
+  // the fence». Это показ того, что уже есть, а не появление; с таким «до» запрос просит Veo
+  // вырастить предмет из пустоты.
+  const ABSENT = /\b(?:not present|absent|missing|none)\b/i;
+  const presentAtStart: string[] = [];
+  for (const b of shown) {
+    const who = (b.scene?.who ?? "").toLowerCase();
+    if (!who) continue;
+    for (const o of b.objects ?? []) {
+      const before = o.before.toLowerCase();
+      const nouns = new Set<string>();
+      if (ABSENT.test(before)) for (const w of o.id.toLowerCase().split(/[-_\s]+/)) if (w.length >= 4) nouns.add(w);
+      for (const m of before.matchAll(/\b(?:no|without)\s+(?:[a-z]+\s+)?([a-z]{4,})/g)) nouns.add(m[1]);
+      const stem = (w: string) => w.replace(/(?:es|s)$/, "");
+      if ([...nouns].some((n) => new RegExp("(?:^|[^a-z])" + stem(n)).test(who))) presentAtStart.push(`${b.id}/${o.id}`);
+    }
+  }
+  add(
+    "absent-before-but-present",
+    presentAtStart,
+    "Предмет в начале сцены объявлен отсутствующим, но расстановка уже ставит его в кадр — это показ, а не появление",
+  );
+
+  // Постоянный персонаж переодет сценой: блок персонажа требует его костюм в каждом кадре,
+  // а сцена надевает на него костюм роли — «Gudini as Donald Trump in a dark suit». Два
+  // несовместимых требования к одной одежде в одном запросе.
+  const clothes = new Set((character.clothes ?? "").toLowerCase().split(/[^a-z-]+/).filter(Boolean));
+  const CLOTHING = /\b(?:suit|shirt|t-shirt|blouse|dress|uniform|coat|overcoat|blazer|tuxedo|tie|sweater|hoodie|jeans|trousers|pants|jacket|robe|apron|vest|overalls|gown)\b/gi;
+  const recostumed: string[] = [];
+  if (clothes.size) {
+    const name = character.name.toLowerCase();
+    for (const b of shown.filter((x) => x.gudiniVisible)) {
+      const wearing = [...(b.scene?.worn ?? [])];
+      const action = b.visualAction.toLowerCase();
+      const at = action.indexOf(name);
+      if (at >= 0) {
+        const m = /\b(?:in|wearing)\s+(?:a |an |his )?[^.;]{0,30}/.exec(action.slice(at, at + 90));
+        if (m) wearing.push(m[0]);
+      }
+      const foreign = wearing.flatMap((w) => [...w.matchAll(CLOTHING)].map((x) => x[0].toLowerCase())).filter((w) => !clothes.has(w));
+      if (foreign.length) recostumed.push(b.id);
+    }
+  }
+  add(
+    "costume-conflict",
+    recostumed,
+    `Сцена переодевает ${character.name}: блок персонажа требует постоянный костюм в каждом кадре — роль играется в своём костюме`,
+    "block",
   );
 
   // Сцена, которая сама объявляет себя происходящей раньше предыдущих. В ролике на сорок

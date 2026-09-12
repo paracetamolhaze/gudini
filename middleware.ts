@@ -40,6 +40,9 @@ export async function middleware(req: NextRequest) {
   if (!password) return NextResponse.next();
 
   if (PUBLIC_PATHS.has(pathname)) return NextResponse.next();
+  // Слайды карусели для Instagram (он скачивает их без входа): маршрут сам проверяет подпись
+  // ссылки и отдаёт только JPEG из публикации этой карусели, иначе 404
+  if (/^\/api\/carousel\/public\/[^/]+\/[^/]+$/.test(pathname)) return NextResponse.next();
   // Готовый ролик и обложка открыты (их тянут Instagram/TikTok при публикации),
   // исходник (?which=raw) — только со входом: раньше он отдавался всем
   if (/^\/api\/projects\/[^/]+\/video$/.test(pathname) && req.nextUrl.searchParams.get("which") !== "raw") {

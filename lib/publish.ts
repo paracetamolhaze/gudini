@@ -482,7 +482,7 @@ async function publishTikTok(
  * Длинный токен Instagram живёт 60 дней и продлевается ещё на 60 одним запросом.
  * Продлеваем заранее; неудача не должна ломать публикацию — текущий токен ещё жив.
  */
-async function instagramAccessToken(tokens: { access_token: string; via?: "ig" | "fb"; expires_at?: number }): Promise<string> {
+export async function instagramAccessToken(tokens: { access_token: string; via?: "ig" | "fb"; expires_at?: number }): Promise<string> {
   const WEEK = 7 * 24 * 3600 * 1000;
   if (tokens.via === "fb") return tokens.access_token;
   if (tokens.expires_at && tokens.expires_at - Date.now() > WEEK) return tokens.access_token;

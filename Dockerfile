@@ -10,6 +10,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# Карусели: безголовый Chromium для рендера слайдов — той версии, которую ждёт playwright из package-lock
+RUN npx playwright install --with-deps --only-shell chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 RUN npm run build
 

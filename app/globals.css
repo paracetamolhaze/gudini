@@ -1366,6 +1366,22 @@ label.check a {
     padding: 8px 10px;
     font-size: 13px;
   }
+  /* разделы шапки не помещаются в строку телефона: прокручивается навигация, а не вся страница */
+  .wordmark {
+    flex: none;
+  }
+  .topnav {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .topnav::-webkit-scrollbar {
+    display: none;
+  }
+  .topnav .nav-link {
+    flex: none;
+    white-space: nowrap;
+  }
   .page-title {
     font-size: 24px;
   }

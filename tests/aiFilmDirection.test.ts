@@ -137,7 +137,9 @@ test("мяч и стакан: причина и контакт предшест�
   assert.deepEqual(gateIssues(plan), [], JSON.stringify(plan.issues));
   const shot = plan.shots[0];
   assert.match(shot.prompt, /How it physically happens: the ball keeps rolling after contact/);
-  assert.match(shot.prompt, /the same tennis ball; a plain drinking glass/);
+  // мяч в кадре весь клип, стакан меняется — он в отдельной строке, привязанной к действию
+  assert.match(shot.prompt, /Present in frame throughout: the same tennis ball/);
+  assert.match(shot.prompt, /In frame, in the state the action describes at that moment: a plain drinking glass/);
 });
 
 // ─────────────────────────────── A→B→A и сохранение предмета между сценами

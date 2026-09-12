@@ -539,7 +539,8 @@ test("реквизит не заявляет конечное состояние
   );
   const shot = plan.shots[0];
   // строка присутствия называет предмет без его фазы
-  assert.ok(shot.prompt.includes("Present in frame throughout: the black folding phone"), shot.prompt.slice(0, 300));
+  // предмет меняется в этом окне, поэтому он не «весь кадр», а в состоянии из действия
+  assert.ok(shot.prompt.includes("In frame, in the state the action describes at that moment: the black folding phone"), shot.prompt.slice(0, 300));
   assert.ok(!shot.prompt.includes("now fully open and flat.\n") && !/throughout: [^\n]*fully open and flat/.test(shot.prompt), shot.prompt.slice(0, 300));
   assert.ok(plan.issues.some((i) => i.code === "prop-asserts-end-state"), JSON.stringify(plan.issues.map((i) => i.code)));
 

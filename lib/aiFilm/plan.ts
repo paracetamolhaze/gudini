@@ -214,6 +214,8 @@ export type WindowStaging = {
   motions: string[];
   /** условия, которые держатся весь клип */
   throughout: string[];
+  /** предметы, которые меняются в этом окне: они в кадре, но не в одном и том же виде */
+  stateful: string[];
   /** условия, появляющиеся со второй фазы окна */
   later: string[];
   /** расстановка людей, по порядку битов окна */
@@ -260,7 +262,14 @@ export function composeWindow(beats: StoryBeat[], phases: BeatPhase[] | BeatPhas
   const changing = beats.flatMap((b) => (b.objects ?? []).filter((o) => o.after.trim() && o.before.trim() && o.before.trim() !== o.after.trim()));
   const clean = (v: string[] | undefined) => (v ?? []).map((x) => neutralProp(x, changing)).filter(Boolean);
   const first = beats[0];
-  const throughout = [...new Set([...clean(first.scene?.worn), ...clean(first.scene?.props)])];
+  const all = [...new Set([...clean(first.scene?.worn), ...clean(first.scene?.props)])];
+  // Предмет, который в этом окне меняется, не может «держаться весь кадр»: у него есть до
+  // и после. Прежде «burning wooden workbench» стоял в строке присутствия рядом с началом
+  // кадра, где стол ещё цел. Такие предметы уходят в отдельную строку, привязанную к действию.
+  const changingNames = new Set(changing.flatMap((o) => o.id.replace(/[-_]+/g, " ").split(" ").filter((w) => w.length >= 3)));
+  const mentionsChanging = (t: string) => [...changingNames].some((w) => t.toLowerCase().includes(w));
+  const throughout = all.filter((t) => !mentionsChanging(t));
+  const stateful = all.filter((t) => mentionsChanging(t));
   const later: string[] = [];
   for (const b of beats.slice(1)) {
     for (const item of [...clean(b.scene?.worn), ...clean(b.scene?.props)]) {
@@ -284,7 +293,7 @@ export function composeWindow(beats: StoryBeat[], phases: BeatPhase[] | BeatPhas
   // вынуть инструмент движением и механикой и тут же запрещало это до продолжения.
   const motions = beats.map((b, i) => (isDone(i) || isStart(i) ? "" : b.motion)).filter(Boolean);
   const mechanics = [...new Set(beats.map((b, i) => (isDone(i) || isStart(i) ? "" : b.scene?.mechanics?.trim() ?? "")).filter(Boolean))];
-  return { phase, beatPhases, actions, done, motions, throughout, later, who, mechanics };
+  return { phase, beatPhases, actions, done, motions, throughout, stateful, later, who, mechanics };
 }
 
 /** Состояния предметов сцены одной строкой: «main-canopy — packed and intact; parcel — sealed». */
@@ -401,6 +410,7 @@ export function shotPrompt(args: {
   // Снаряжение и реквизит сцены: то, что обязано быть в кадре, даже если само не меняется.
   // Предмет, нужный действию, исчезал из запроса ровно потому, что у него не было перехода.
   if (staging.throughout.length) lines.push(`Present in frame throughout: ${staging.throughout.join("; ")}.`);
+  if (staging.stateful.length) lines.push(`In frame, in the state the action describes at that moment: ${staging.stateful.join("; ")}.`);
   // Условие, которое появляется только во второй части окна, не выдаётся за условие всего клипа.
   if (staging.later.length) lines.push(`Appears with the later action in this clip: ${staging.later.join("; ")}.`);
   if (staging.who.length) lines.push(`Positions: ${staging.who.join(" Then: ")}.`);

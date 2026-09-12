@@ -576,3 +576,41 @@ test("реквизит не заявляет конечное состояние
   );
   assert.ok(!caused.issues.some((i) => i.code === "change-without-cause"), JSON.stringify(caused.issues.map((i) => i.code)));
 });
+
+test("кадр строится вокруг доказательства, а не вокруг ведущего", () => {
+  const press: StoryEvent = {
+    id: "sign", observable: "the device screen confirms the signature", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
+  };
+  const plan = planOf(
+    ["Он нажимает единственную кнопку на устройстве, и экран подтверждает подпись."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, shotType: "close", visualAction: "Gudini presses the single button on the hardware wallet",
+        keyMoment: "the hardware wallet screen flips to a signed confirmation", eventIds: ["sign"],
+        objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
+        camera: "Camera is close on his hand and the device",
+      }),
+    ],
+    [press],
+  );
+  const prompt = plan.shots[0].prompt;
+  // кадр назван по предмету, а человек попадает в него ровно настолько, насколько нужен
+  assert.match(prompt, /Framing: .* shot built on the hardware wallet/);
+  assert.match(prompt, /Include only as much of the person as this action needs/);
+  assert.ok(!prompt.includes("The subject sits near the centre of the frame with normal headroom"), prompt.slice(0, 400));
+  assert.match(prompt, /Camera angle: .*\(the hardware wallet\)/);
+
+  // сцена обстановки без меняющегося предмета по-прежнему описывается вокруг человека
+  const wide = planOf(
+    ["Он идёт по узкой кирпичной улице мимо низких домов и старых окон."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, purpose: "setup", shotType: "wide", visualAction: "Gudini walks along the narrow brick street",
+        keyMoment: "the length of the street is visible behind him", location: "a narrow brick street",
+      }),
+    ],
+    [],
+  ).shots[0].prompt;
+  assert.match(wide, /The subject is small inside a wide view|The subject sits near the centre/);
+});

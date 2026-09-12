@@ -493,14 +493,25 @@ export function shotPrompt(args: {
   }
   const shot = beat.shotType.replace("_", "-");
   const ratio = aspectRatio === "9:16" ? "vertical 9:16 portrait composition" : "horizontal 16:9 composition";
-  lines.push(`Framing: ${ratio}, ${shot} shot. ${COMPOSITION_LINE[beat.composition]}`);
+  // Кадр строится вокруг доказательства события. Полный рост ведущего ничего не добавляет
+  // там, где смысл сцены — шарнир, кнопка или место контакта.
+  const target = frameTarget(beats);
+  if (target) {
+    lines.push(
+      `Framing: ${ratio}, ${shot} shot built on the ${target}. ${OBJECT_COMPOSITION_LINE[beat.composition]} ` +
+        `It has to stay big enough in frame to read the change described above. ` +
+        `Include only as much of the person as this action needs — hands, forearms, part of the body; framing his whole figure or empty floor adds nothing here.`,
+    );
+  } else {
+    lines.push(`Framing: ${ratio}, ${shot} shot. ${COMPOSITION_LINE[beat.composition]}`);
+  }
   // В кадре должно быть ровно столько, чтобы событие читалось: иногда это весь предмет
   // целиком, иногда — место контакта крупно. Прежнее безусловное «всё названное целиком
   // в кадре» спорило с крупной деталью и заставляло отъезжать от самого важного.
   if (marks.length) {
     lines.push(`Frame it so that ${marks.map((d) => d.keyMoment).filter(Boolean).join("; ") || "the change named above"} is unmistakable on screen: whatever part of the action proves it must be inside the frame, not cropped away.`);
   }
-  lines.push(`Camera angle: ${ANGLE_LINE[beat.cameraAngle]}.`);
+  lines.push(`Camera angle: ${target ? `${OBJECT_ANGLE_LINE[beat.cameraAngle]} (the ${target})` : ANGLE_LINE[beat.cameraAngle]}.`);
   lines.push(`Camera: ${beat.camera || bible.cameraLanguage}. Single continuous take, no cuts inside the shot.`);
   lines.push(
     "Screen direction: keep the movement exactly as described relative to the camera. Do not turn the subject toward the lens " +
@@ -980,6 +991,47 @@ export const ANGLE_LINE: Record<CameraAngle, string> = {
  * Где в кадре человек и, главное, для чего оставлено место. Именно эта строка чинит
  * купол, который не влезал в кадр: под ним место в кадре теперь резервируется явно.
  */
+/**
+ * Что должно занимать кадр. Когда сцена снимается ради предмета или контакта, кадр строится
+ * ВОКРУГ НЕГО, а человек попадает в кадр ровно настолько, насколько нужен действию.
+ *
+ * Появилось после трёх снятых дублей: планировщик просил крупный кадр на руку и устройство,
+ * а сборщик всё равно дописывал «человек в центре кадра с нормальным отступом над головой»,
+ * и Veo отъезжал на средний план. В готовом кадре треть занимали ноги и пустой фон, а кнопка
+ * и экран устройства были размером с ноготь.
+ */
+export function frameTarget(beats: StoryBeat[]): string {
+  const beat = beats[0];
+  const key = `${beat.keyMoment} ${beat.visualAction}`.toLowerCase();
+  const changing = beats.flatMap((b) => (b.objects ?? []).filter((o) => o.after.trim() && o.before.trim() !== o.after.trim()));
+  if (!changing.length) return "";
+  // предпочитаем предмет, названный в ключевом моменте: именно его зритель обязан разглядеть
+  const named = changing.find((o) => o.id.replace(/[-_]+/g, " ").split(" ").filter((w) => w.length >= 3).some((w) => key.includes(w)));
+  const pick = named ?? changing[0];
+  return pick.id.replace(/[-_]+/g, " ").trim();
+}
+
+/** Ракурс, описанный вокруг предмета, а не вокруг человека. */
+export const OBJECT_ANGLE_LINE: Record<CameraAngle, string> = {
+  eye_level: "camera level with it, seeing it straight on",
+  low_angle: "camera below it, looking up at it",
+  high_angle: "camera above it, tilted down onto it",
+  overhead: "camera directly above it, looking straight down onto it",
+  ground_level: "camera down at surface level, close to it",
+  over_shoulder: "camera just behind the hands working on it, seeing what they see",
+  profile: "camera square to its side, seeing the contact in clean profile",
+};
+
+/** Место в кадре, отсчитанное от предмета. */
+export const OBJECT_COMPOSITION_LINE: Record<Composition, string> = {
+  center: "It sits in the middle of the frame and fills most of it.",
+  low_space_above: "It sits low in the frame; the upper half stays clear for what is above it.",
+  high_space_below: "It sits high in the frame; the lower half stays clear for what is below it.",
+  offset_left: "It sits in the left half of the frame; the right side stays open for what approaches it.",
+  offset_right: "It sits in the right half of the frame; the left side stays open for what approaches it.",
+  subject_small_in_wide: "It is seen inside the wider place, but still large enough to read the change.",
+};
+
 export const COMPOSITION_LINE: Record<Composition, string> = {
   center: "The subject sits near the centre of the frame with normal headroom.",
   low_space_above:

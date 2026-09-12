@@ -45,7 +45,7 @@ const beat = (id: string, start: number, end: number, location: string): StoryBe
   id, start, end, meaning: "", storyBeat: "", displayMode: "full_ai", purpose: "explain", priority: "high",
   requiresGeneration: true, gudiniVisible: false, universeAdaptation: "",
   visualAction: `A hand opens the ${id} parcel`, keyMoment: `the ${id} parcel opens`,
-  anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: [id.toLowerCase()],
+  anchorPhrase: "", hold: "settle", anchorAtSec: null, anchorAbsSec: null, eventIds: [id.toLowerCase()],
   objects: [{ id: id.toLowerCase(), before: "sealed", after: "open" }],
   location, motion: "the lid lifts", stateBefore: "sealed", stateAfter: "open",
   continuityGroup: "shared", continuityRequired: true, transition: "cut", shotType: "medium", frameSubject: "",

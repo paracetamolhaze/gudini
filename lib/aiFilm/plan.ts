@@ -5,6 +5,7 @@ import { veoPricePerSecond, round2 } from "./pricing";
 import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
 import { auditPlan } from "./audit";
 import { storySystemPrompt } from "./story";
+import { HOLD_SECONDS } from "./types";
 import type {
   AiFilmPlan, BeatPurpose, CameraAngle, CharacterProfile, Composition, ContinuityGroup, EventDeadline, FilmShot, ObjectState, PlanIssue, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
 } from "./types";
@@ -143,16 +144,39 @@ export function eventDeadlines(beats: StoryBeat[], shotStart: number, shownSecon
     if (continues && (rel == null || rel > shownSeconds + 1e-6)) continue;
     const inside = rel != null && rel <= shownSeconds + 1e-6;
     const bySec = inside && limit >= 1 ? Math.max(1, Math.min(Math.round(rel!), limit)) : null;
+    // Три разных времени: когда результат появился, сколько он держится и где кончается
+    // используемый отрезок. Удержание не двигает срок появления молча: оно либо помещается
+    // в отрезок, либо об этом сообщает разбор.
+    const holdSec = HOLD_SECONDS[b.hold] ?? HOLD_SECONDS.settle;
+    const untilSec = bySec != null && holdSec > 0 ? Math.min(limit, bySec + holdSec) : null;
     out.push({
       beatId: b.id,
       eventIds: b.eventIds ?? [],
       keyMoment: b.keyMoment,
       bySec,
+      holdSec,
+      untilSec,
+      ...(bySec != null && holdSec > 0 && bySec + holdSec > shownSeconds + 1e-6 ? { tight: true } : {}),
       // якорь есть, но приходится за пределы показанного отрезка: сцену нужно переставить
       beyond: rel != null && rel > shownSeconds + 1e-6,
     });
   }
   return out;
+}
+
+/**
+ * Текст удержания: сколько результат обязан оставаться на экране после появления.
+ * Мгновенному событию удержание не нужно — вспышка и удар и не должны стоять в кадре.
+ * Для читаемого результата важен не только срок появления: подтверждение, сменившееся
+ * обратно через полсекунды, зритель не успевает прочитать.
+ */
+export function holdClause(d: Pick<EventDeadline, "holdSec" | "untilSec" | "bySec">): string {
+  if (!d.holdSec) return "";
+  const until = d.untilSec != null ? ` at least until second ${d.untilSec} of the clip` : " to the end of the clip";
+  return (
+    ` Once it is there it stays:${until} it remains on screen exactly as described` +
+    ` and does not go back to the state it had before, inside this clip.`
+  );
 }
 
 /** Прежнее имя: срок первого события клипа. */
@@ -325,7 +349,7 @@ const PROBE_BEAT: StoryBeat = {
   id: "probe", start: 0, end: 8, meaning: "", storyBeat: "", displayMode: "full_ai",
   purpose: "explain", priority: "medium", requiresGeneration: true, gudiniVisible: true,
   universeAdaptation: "", visualAction: "he opens a box", keyMoment: "the box opens",
-  anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: ["probe"], objects: [{ id: "box", before: "sealed", after: "open" }],
+  anchorPhrase: "", hold: "settle", anchorAtSec: null, anchorAbsSec: null, eventIds: ["probe"], objects: [{ id: "box", before: "sealed", after: "open" }],
   location: "a room", motion: "he lifts the lid", stateBefore: "sealed", stateAfter: "open",
   continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium", frameSubject: "",
   camera: "Camera is at eye level in front of him", cameraAngle: "eye_level", composition: "center",
@@ -452,17 +476,22 @@ export function shotPrompt(args: {
   // завершиться»: так бывает у первого клипа цепочки, изменение которого приходится на
   // продолжение. Прежний запасной путь подставлял туда keyMoment бита, и одно и то же
   // изменение требовалось дважды: «рано» в первом клипе и к своей секунде во втором.
-  const marks = deadlines ?? beats.filter((b) => b.keyMoment).map((b) => ({ beatId: b.id, eventIds: b.eventIds ?? [], keyMoment: b.keyMoment, bySec: null as number | null }));
+  const marks: EventDeadline[] =
+    deadlines ??
+    beats
+      .filter((b) => b.keyMoment)
+      .map((b) => ({ beatId: b.id, eventIds: b.eventIds ?? [], keyMoment: b.keyMoment, bySec: null, holdSec: HOLD_SECONDS[b.hold] ?? HOLD_SECONDS.settle, untilSec: null }));
   if (marks.length === 1) {
     const d = marks[0];
     lines.push(
       `The one thing that must be visible: ${d.keyMoment}.` +
-        (d.bySec != null ? ` It has to be visible by second ${d.bySec} of the clip.` : " It happens early in the shot, not at the very end."),
+        (d.bySec != null ? ` It has to be visible by second ${d.bySec} of the clip.` : " It happens early in the shot, not at the very end.") +
+        holdClause(d),
     );
   } else if (marks.length > 1) {
     lines.push("What must be visible, each at its own time:");
     marks.forEach((d, i) =>
-      lines.push(`${i + 1}. ${d.keyMoment}${d.bySec != null ? ` — by second ${d.bySec} of the clip` : " — early in the shot"}`),
+      lines.push(`${i + 1}. ${d.keyMoment}${d.bySec != null ? ` — by second ${d.bySec} of the clip` : " — early in the shot"}${holdClause(d)}`),
     );
   }
   // Показанная длина входит в текст: один и тот же кадр на три и на восемь секунд — разные

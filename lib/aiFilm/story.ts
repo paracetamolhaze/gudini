@@ -3,7 +3,7 @@ import type { Word } from "../transcribe";
 import { characterBlock } from "./character";
 import { universePlannerBlock, type UniverseProfile } from "./universe";
 import { STAGING_FOR } from "./types";
-import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType, CameraAngle, Composition, ObjectState, SceneState, StoryEvent } from "./types";
+import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType, CameraAngle, Composition, HoldKind, ObjectState, SceneState, StoryEvent } from "./types";
 
 /**
  * Story Planner v2. Модель получает сценарий, чистую речь по фразам с временем, тему,
@@ -14,7 +14,7 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
 /** 9 — общая процедура режиссуры: причинность, доказательство сцены, состояние, механика, камера. */
-export const STORY_VERSION = 15;
+export const STORY_VERSION = 16;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -190,6 +190,13 @@ ${universePlannerBlock(universe)}
 Длительность генерации и длительность показа — разные вещи. Показано будет столько, сколько занимает бит речи; клип может быть длиннее.
 Поэтому визуальный смысл должен читаться РАНО, в первые секунды, а главное изменение — попасть в начало или середину сцены, а не в её хвост.
 anchorPhrase: слово или короткая фраза ИЗ РЕЧИ этого бита, на которой изменение уже должно быть видно («порвался», «открыл», «нашёл»). Копируй её из текста фразы, не придумывай.
+Различай ТРИ разных времени: когда результат ПОЯВИЛСЯ (anchorPhrase — не позже этого слова), сколько он ДЕРЖИТСЯ на экране (hold) и где кончается МОНТАЖНЫЙ ОТРЕЗОК (длительность бита речи).
+hold — сколько результат обязан оставаться в кадре после появления, по смыслу события:
+- "instant" — удар, вспышка, щелчок, брызги: показывать нечего, держать не нужно;
+- "settle" — движение должно прийти в покой: предмет упал и лежит, дверь открылась и осталась открытой;
+- "read" — надпись, экран, подтверждение, выражение лица: зритель обязан успеть прочитать, около двух секунд.
+Удержание должно помещаться в показанный отрезок: если результат появляется на седьмой секунде, прочитать его за оставшуюся секунду нельзя — двигай сцену или якорь.
+Монтажный отрезок не обязан покрывать всю реплику целиком: если действие занимает пять секунд, остаток реплики оставь авторскому материалу отдельным author-битом, а не растягивай сцену.
 motion (английский) — что происходит внутри клипа по порядку: что делает тело, что происходит с предметами, куда идёт камера. Пиши столько отрезков, сколько нужно действию, не больше трёх. Жёсткой разбивки 0-3/3-6/6-8 нет.
 
 ═══ 8. СОСТОЯНИЕ СЦЕНЫ: ОДНО СОГЛАСОВАННОЕ ОПИСАНИЕ ═══
@@ -298,7 +305,7 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."],
   "events": [{"id": "order", "observable": "english: what the viewer sees change", "required": true, "fromPhrase": 1, "toPhrase": 2, "objects": [{"id": "phone", "before": "english", "after": "english", "role": "change"}]}]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english", "role": "change"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "frameSubject": "english: what fills the frame", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "hold": "instant|settle|read", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english", "role": "change"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "frameSubject": "english: what fills the frame", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
 Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state/objects/scene оставляй пустыми, eventIds пустым списком, gudiniVisible=false.`;
 }
 
@@ -315,6 +322,7 @@ type RawBeat = {
   visualAction?: string;
   keyMoment?: string;
   anchorPhrase?: string;
+  hold?: string;
   motion?: string;
   location?: string;
   stateBefore?: string;
@@ -687,6 +695,8 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       visualAction: str(e.visualAction),
       keyMoment: mode !== "author" ? str(e.keyMoment) : "",
       anchorPhrase: mode !== "author" ? anchorPhrase : "",
+      // удержание по смыслу события; неизвестное значение — «до состояния покоя»
+      hold: (["instant", "settle", "read"] as string[]).includes(String(e.hold)) ? (e.hold as HoldKind) : "settle",
       anchorAtSec: null,
       anchorAbsSec: mode !== "author" ? anchorAbs : null,
       eventIds: mode !== "author" ? arr(e.eventIds).map(slugId).filter(Boolean).slice(0, 6) : [],

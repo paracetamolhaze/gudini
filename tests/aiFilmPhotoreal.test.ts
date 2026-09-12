@@ -32,7 +32,7 @@ const beat = (o: Partial<StoryBeat> & { visualAction: string }): StoryBeat => ({
   id: "B1", start: 0, end: 8, meaning: "", storyBeat: "", displayMode: "full_ai",
   purpose: "explain", priority: "medium", requiresGeneration: true, gudiniVisible: false,
   universeAdaptation: "", location: "a city street", motion: "he steps forward",
-  keyMoment: "", anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: [], objects: [], stateBefore: "", stateAfter: "",
+  keyMoment: "", anchorPhrase: "", hold: "settle", anchorAtSec: null, anchorAbsSec: null, eventIds: [], objects: [], stateBefore: "", stateAfter: "",
   continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium", frameSubject: "",
   camera: "Camera stands across the street at eye height; he walks past camera on the left",
   cameraAngle: "eye_level", composition: "center",

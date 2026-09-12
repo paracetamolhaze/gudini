@@ -617,3 +617,63 @@ test("кадр описывает выбранный планировщиком 
   assert.match(face, /His face sits near the centre of the frame\./);
   assert.ok(!face.includes("hardware wallet sits"), face.slice(0, 400));
 });
+
+
+test("появление результата, удержание и конец отрезка — три разных времени", () => {
+  const sign: StoryEvent = {
+    id: "sign", observable: "the device screen confirms the signature", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
+  };
+  const words = ["Он нажимает кнопку на устройстве, и экран показывает подтверждение подписи прямо сейчас."];
+  const walletOf = (over: Record<string, unknown>) =>
+    planOf(
+      words,
+      [
+        scene({
+          fromPhrase: 1, toPhrase: 1, shotType: "close", visualAction: "Gudini presses the single button on the hardware wallet",
+          keyMoment: "the hardware wallet screen flips to a signed confirmation", eventIds: ["sign"], anchorPhrase: "подтверждение",
+          objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
+          ...over,
+        }),
+      ],
+      [sign],
+    );
+
+  // читаемый результат обязан остаться на экране, а не смениться обратно внутри клипа
+  const read = walletOf({ hold: "read" });
+  const shot = read.shots[0];
+  assert.equal(shot.deadlines[0].holdSec, 2);
+  assert.ok(shot.deadlines[0].untilSec! > shot.deadlines[0].bySec!, JSON.stringify(shot.deadlines[0]));
+  assert.match(shot.prompt, /Once it is there it stays: at least until second \d+ of the clip/);
+  assert.match(shot.prompt, /does not go back to the state it had before, inside this clip/);
+
+  // мгновенному событию удержание не приписывается: вспышка и не должна стоять в кадре
+  const instant = walletOf({ hold: "instant" });
+  assert.equal(instant.shots[0].deadlines[0].holdSec, 0);
+  assert.ok(!instant.shots[0].prompt.includes("Once it is there it stays"), instant.shots[0].prompt.slice(0, 300));
+
+  // срок появления от удержания не сдвигается молча
+  assert.equal(read.shots[0].deadlines[0].bySec, instant.shots[0].deadlines[0].bySec);
+});
+
+test("результат, который не успеть рассмотреть, попадает в замечания плана", () => {
+  const sign: StoryEvent = {
+    id: "sign", observable: "the device screen confirms the signature", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
+  };
+  // якорь стоит на последнем слове реплики: результат появится к самому концу отрезка
+  const late = planOf(
+    ["Он нажимает кнопку и держит устройство перед собой, пока на экране не появится подтверждение."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, shotType: "close", visualAction: "Gudini presses the single button on the hardware wallet",
+        keyMoment: "the hardware wallet screen flips to a signed confirmation", eventIds: ["sign"], anchorPhrase: "подтверждение", hold: "read",
+        objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
+      }),
+    ],
+    [sign],
+  );
+  assert.ok(late.issues.some((i) => i.code === "hold-outside-window"), JSON.stringify(late.issues.map((i) => i.code)));
+  // это замечание, а не запрет оплаты: кадр выполним
+  assert.ok(!gateIssues(late).some((i) => i.code === "hold-outside-window"));
+});

@@ -600,13 +600,14 @@ test("кадр описывает выбранный планировщиком 
   // субъект кадра назван планировщиком: крупность и ракурс относятся именно к нему
   const chosen = walletScene({ frameSubject: "his thumb on the device button and the device screen" });
   assert.match(chosen, /Framing: .* close shot on his thumb on the device button and the device screen\./);
-  assert.match(chosen, /Camera angle: camera level with his thumb on the device button and the device screen/);
+  assert.match(chosen, /Camera: Camera is close on his hand and the device\./);
+  assert.doesNotMatch(chosen, /Camera angle:/);
   assert.ok(!/sits near the centre of the frame with normal headroom/.test(chosen), chosen.slice(0, 400));
 
   // субъекта нет — сборщик не подставляет вместо него ведущего и не переписывает ракурс
   const silent = walletScene();
   assert.match(silent, /Framing: .* close shot\. What this shot is about sits near the centre of the frame\./);
-  assert.match(silent, /Camera angle: camera level with the action, seeing it straight on\./);
+  assert.doesNotMatch(silent, /Camera angle:/);
   assert.ok(!silent.includes("The subject sits"), silent.slice(0, 400));
   // доказательство должно быть различимо, а не обязательно в середине кадра
   assert.match(silent, /large enough to read and not cropped away/);
@@ -717,6 +718,50 @@ test("требование прочитать бумагу ловится и в 
       }),
     ],
     [stamp],
+  );
+  assert.ok(plan.issues.some((i) => i.code === "readable-text"), JSON.stringify(plan.issues.map((i) => i.code)));
+});
+
+
+test("названная планировщиком точка съёмки не пересказывается шаблоном ракурса", () => {
+  const marker = (camera: string) =>
+    planOf(
+      ["Он подходит к гранитной плите в траве рядом с лункой и останавливается."],
+      [
+        scene({
+          fromPhrase: 1, toPhrase: 1, shotType: "medium_wide", cameraAngle: "low_angle", composition: "center",
+          visualAction: "Gudini walks to the grey granite marker set in the turf beside the flagged hole",
+          keyMoment: "the granite marker beside the flagged hole", frameSubject: "the grave marker in the turf beside the flagged hole",
+          camera,
+        }),
+      ],
+      [],
+    ).shots[0].prompt;
+  // позиция названа — строки «камера под плитой в траве» быть не может
+  const stated = marker("Camera is on the fairway about six meters back at knee height; Gudini walks away from camera");
+  assert.doesNotMatch(stated, /Camera angle:/);
+  assert.ok(!stated.includes("camera below the grave marker"), stated.slice(0, 500));
+  // позиции нет — шаблон ракурса остаётся и описан относительно субъекта кадра
+  const bare = marker("slow drift");
+  assert.match(bare, /Camera angle: camera below the grave marker in the turf beside the flagged hole/);
+});
+
+test("видимый заголовок документа — это требование читаемого текста", () => {
+  const llc: StoryEvent = {
+    id: "llc", observable: "the folder shows the club is an ordinary company", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "folder", before: "closed", after: "open on the registration page", role: "change" }],
+  };
+  const plan = planOf(
+    ["Он открывает папку, и там документы клуба как обычной компании."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, shotType: "medium", eventIds: ["llc"],
+        visualAction: "Gudini opens a manila folder revealing a printed page with the club's LLC registration heading visible on top",
+        keyMoment: "the folder lies open on the registration page",
+        objects: [{ id: "folder", before: "closed", after: "open on the registration page", role: "change" }],
+      }),
+    ],
+    [llc],
   );
   assert.ok(plan.issues.some((i) => i.code === "readable-text"), JSON.stringify(plan.issues.map((i) => i.code)));
 });

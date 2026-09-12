@@ -322,20 +322,22 @@ test("ракурс и композиция приходят из плана, а 
   assert.match(above, /What this shot is about sits LOW in the frame/);
   assert.match(above, /the whole upper half stays clear/);
   assert.match(above, /never cropped by the top edge/);
-  assert.match(above, /Camera angle: camera below the action, tilted up/);
+  // позиция камеры названа планировщиком — шаблон ракурса её не пересказывает
+  assert.match(above, /Camera: Camera stands across the street at eye height/);
+  assert.doesNotMatch(above, /Camera angle:/);
   assert.match(above, /is unmistakable on screen/);
   // прежняя жёсткая строка про центр из промпта ушла
   assert.doesNotMatch(above, /subject near the vertical center/);
 
   // вид строго сверху на падение
-  const down = promptFor(bible, beat({ visualAction: "he falls away from the camera", composition: "high_space_below", cameraAngle: "overhead" }));
+  const down = promptFor(bible, beat({ visualAction: "he falls away from the camera", composition: "high_space_below", cameraAngle: "overhead", camera: "" }));
   assert.match(down, /camera directly above the action, looking straight down at it/);
   assert.match(down, /What this shot is about sits HIGH in the frame/);
 
   // и обычный кадр остаётся обычным
   const plain = promptFor(bible, beat({ visualAction: "he sits at a table" }));
   assert.match(plain, /near the centre of the frame/);
-  assert.match(plain, /Camera angle: camera level with the action, seeing it straight on/);
+  assert.doesNotMatch(plain, /Camera angle:/);
 });
 
 test("нормализатор принимает ракурс и композицию модели и чинит мусор", () => {

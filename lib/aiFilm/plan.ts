@@ -532,7 +532,11 @@ export function shotPrompt(args: {
   if (marks.length) {
     lines.push(`Frame it so that ${marks.map((d) => d.keyMoment).filter(Boolean).join("; ") || "the change named above"} is unmistakable on screen: whatever part of the action proves it must be inside the frame, large enough to read and not cropped away.`);
   }
-  lines.push(`Camera angle: ${angleLine(subject, beat.cameraAngle)}.`);
+  // Точку съёмки, названную планировщиком словами («Camera is on the fairway six meters back
+  // at knee height»), шаблон не пересказывает. Пересказ относительно субъекта кадра дал
+  // «camera below the grave marker in the turf» — камеру под землёй рядом с живой строкой
+  // про колено. Шаблонный ракурс остаётся только там, где позиции камеры в тексте нет.
+  if (!CAMERA_POSITION_STATED.test(beat.camera || "")) lines.push(`Camera angle: ${angleLine(subject, beat.cameraAngle)}.`);
   // точка planner-текста не удваивается: «onto the button.. Single continuous take» читается как опечатка
   lines.push(`Camera: ${(beat.camera || bible.cameraLanguage).replace(/[.;,\s]+$/, "")}. Single continuous take, no cuts inside the shot.`);
   lines.push(
@@ -1035,6 +1039,9 @@ export function compositionLine(subject: string, composition: Composition): stri
  * Прежний текст описывал только человека: «он вырастает на фоне неба», «вокруг него видна
  * земля». В сцене про кнопку это уводило камеру от кнопки.
  */
+/** Планировщик сам назвал, где стоит камера: такой текст и есть решение о ракурсе. */
+export const CAMERA_POSITION_STATED = /^\s*camera\s+(?:is|stands|sits|starts|stays|holds|hangs|lies|rests|hovers|placed|positioned|mounted)\b/i;
+
 export function angleLine(subject: string, angle: CameraAngle): string {
   const s = subject || "the action";
   switch (angle) {

@@ -23,7 +23,9 @@ const INTACT = /\b(?:intact|whole|unopened|sealed|new|full|folded|packed|closed)
  * Прямая просьба показать РАЗБОРЧИВЫЙ текст: это Veo не выполняет, и кадр выходит с кашей
  * вместо букв. Запрет.
  */
-const READABLE_HARD = /\b(?:reads? "|legible|readable|the words?|caption|subtitle|text (?:on|saying)|label saying|clearly shows the (?:price|number|name))\b/i;
+// Заголовок документа, который «видно»: доказательство сцены тогда — прочитанные слова.
+// Так прошла сцена «printed page with the club's LLC registration heading visible on top».
+const READABLE_HARD = /\b(?:reads? "|legible|readable|the words?|caption|subtitle|text (?:on|saying)|label saying|clearly shows the (?:price|number|name)|(?:heading|headline|title|letterhead)\b[^.;]{0,24}\b(?:visible|shown|showing))\b/i;
 /**
  * Экран или бумага в кадре с содержимым. Снять это можно — подпись выйдет нечитаемой, и
  * обычно это не мешает. Прежде сюда попадало и «screen showing a product photo», и такой

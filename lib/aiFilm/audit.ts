@@ -367,7 +367,12 @@ export function auditPlan(
     shown
       .filter((b) => {
         const demand = `${b.visualAction} ${b.keyMoment}`;
-        if (!re.test(demand)) return false;
+        const found = demand.match(re);
+        if (!found) return false;
+        // «no readable text», «without legible labels» — это ОТКАЗ от читаемости, а не
+        // требование её показать. Отрицание перед совпадением снимает требование.
+        const before = demand.slice(Math.max(0, (found.index ?? 0) - 24), found.index ?? 0);
+        if (/\b(?:no|not|without|never|nothing)\b[^.]{0,14}$/i.test(before)) return false;
         const staging = [...(b.scene?.props ?? []), ...(b.scene?.worn ?? []), b.scene?.mechanics ?? "", b.stateBefore, b.stateAfter, demand];
         const hit = demand.match(re)?.[0] ?? "";
         const around = demand.slice(Math.max(0, demand.indexOf(hit) - 60), demand.indexOf(hit) + hit.length + 60);

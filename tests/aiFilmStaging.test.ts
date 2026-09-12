@@ -486,3 +486,35 @@ test("чтение персонажем не требует читаемости
   );
   assert.ok(other.includes("readable-text:block"), JSON.stringify(other));
 });
+
+test("отказ от читаемости не считается требованием её показать", () => {
+  const ev: StoryEvent = {
+    id: "block", observable: "the withdrawal request is refused on screen", required: true, fromPhrase: 1, toPhrase: 1,
+    objects: [{ id: "screen", before: "normal balance layout", after: "red-tinted blocked layout", role: "change" }],
+  };
+  const build = (visualAction: string, keyMoment: string) =>
+    planOf(
+      ["Он нажал вывод на телефоне, и заявка сразу повисла в ожидании."],
+      [
+        scene({
+          fromPhrase: 1, toPhrase: 1, visualAction, keyMoment, eventIds: ["block"],
+          objects: [{ id: "screen", before: "normal balance layout", after: "red-tinted blocked layout", role: "change" }],
+        }),
+      ],
+      [ev],
+    ).issues.map((i) => `${i.code}:${i.severity}`);
+
+  // сцена прямо отказывается от читаемого текста
+  const denied = build(
+    "Gudini taps the button and the screen changes to a plain red-tinted blocked layout with no readable text",
+    "the screen switches to the blocked layout",
+  );
+  assert.ok(!denied.includes("readable-text:block"), JSON.stringify(denied));
+
+  // а прямое требование разобрать цифру остаётся запретом
+  const demanded = build(
+    "Gudini sets a card down and the number 1999 is clearly visible and readable",
+    "the number on the card is readable",
+  );
+  assert.ok(demanded.includes("readable-text:block"), JSON.stringify(demanded));
+});

@@ -577,40 +577,43 @@ test("реквизит не заявляет конечное состояние
   assert.ok(!caused.issues.some((i) => i.code === "change-without-cause"), JSON.stringify(caused.issues.map((i) => i.code)));
 });
 
-test("кадр строится вокруг доказательства, а не вокруг ведущего", () => {
+test("кадр описывает выбранный планировщиком субъект, а сборщик своего не назначает", () => {
   const press: StoryEvent = {
     id: "sign", observable: "the device screen confirms the signature", required: true, fromPhrase: 1, toPhrase: 1,
     objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
   };
-  const plan = planOf(
-    ["Он нажимает единственную кнопку на устройстве, и экран подтверждает подпись."],
-    [
-      scene({
-        fromPhrase: 1, toPhrase: 1, shotType: "close", visualAction: "Gudini presses the single button on the hardware wallet",
-        keyMoment: "the hardware wallet screen flips to a signed confirmation", eventIds: ["sign"],
-        objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
-        camera: "Camera is close on his hand and the device",
-      }),
-    ],
-    [press],
-  );
-  const prompt = plan.shots[0].prompt;
-  // кадр назван по предмету, а человек попадает в него ровно настолько, насколько нужен
-  assert.match(prompt, /Framing: .* shot built on the hardware wallet/);
-  assert.match(prompt, /Include only as much of the person as this action needs/);
-  assert.ok(!prompt.includes("The subject sits near the centre of the frame with normal headroom"), prompt.slice(0, 400));
-  assert.match(prompt, /Camera angle: .*\(the hardware wallet\)/);
+  const walletScene = (over: Record<string, unknown> = {}) =>
+    planOf(
+      ["Он нажимает единственную кнопку на устройстве, и экран подтверждает подпись."],
+      [
+        scene({
+          fromPhrase: 1, toPhrase: 1, shotType: "close", visualAction: "Gudini presses the single button on the hardware wallet",
+          keyMoment: "the hardware wallet screen flips to a signed confirmation", eventIds: ["sign"],
+          objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" }],
+          camera: "Camera is close on his hand and the device",
+          ...over,
+        }),
+      ],
+      [press],
+    ).shots[0].prompt;
 
-  // сцена обстановки без меняющегося предмета по-прежнему описывается вокруг человека
-  const wide = planOf(
-    ["Он идёт по узкой кирпичной улице мимо низких домов и старых окон."],
-    [
-      scene({
-        fromPhrase: 1, toPhrase: 1, purpose: "setup", shotType: "wide", visualAction: "Gudini walks along the narrow brick street",
-        keyMoment: "the length of the street is visible behind him", location: "a narrow brick street",
-      }),
-    ],
-    [],
-  ).shots[0].prompt;
-  assert.match(wide, /The subject is small inside a wide view|The subject sits near the centre/);
+  // субъект кадра назван планировщиком: крупность и ракурс относятся именно к нему
+  const chosen = walletScene({ frameSubject: "his thumb on the device button and the device screen" });
+  assert.match(chosen, /Framing: .* close shot on his thumb on the device button and the device screen\./);
+  assert.match(chosen, /Camera angle: camera level with his thumb on the device button and the device screen/);
+  assert.ok(!/sits near the centre of the frame with normal headroom/.test(chosen), chosen.slice(0, 400));
+
+  // субъекта нет — сборщик не подставляет вместо него ведущего и не переписывает ракурс
+  const silent = walletScene();
+  assert.match(silent, /Framing: .* close shot\. What this shot is about sits near the centre of the frame\./);
+  assert.match(silent, /Camera angle: camera level with the action, seeing it straight on\./);
+  assert.ok(!silent.includes("The subject sits"), silent.slice(0, 400));
+  // доказательство должно быть различимо, а не обязательно в середине кадра
+  assert.match(silent, /large enough to read and not cropped away/);
+
+  // наличие меняющегося предмета не назначает субъект кадра: планировщик выбрал лицо
+  const face = walletScene({ frameSubject: "his face", shotType: "close", composition: "center" });
+  assert.match(face, /Framing: .* close shot on his face\./);
+  assert.match(face, /His face sits near the centre of the frame\./);
+  assert.ok(!face.includes("hardware wallet sits"), face.slice(0, 400));
 });

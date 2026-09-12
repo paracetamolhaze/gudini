@@ -33,7 +33,7 @@ const beat = (o: Partial<StoryBeat> & { visualAction: string }): StoryBeat => ({
   purpose: "explain", priority: "medium", requiresGeneration: true, gudiniVisible: false,
   universeAdaptation: "", location: "a city street", motion: "he steps forward",
   keyMoment: "", anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: [], objects: [], stateBefore: "", stateAfter: "",
-  continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium",
+  continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium", frameSubject: "",
   camera: "Camera stands across the street at eye height; he walks past camera on the left",
   cameraAngle: "eye_level", composition: "center",
   suggestedDuration: 8, ...o,
@@ -319,23 +319,23 @@ test("ракурс и композиция приходят из плана, а 
     keyMoment: "the orange canopy is fully open above him",
     composition: "low_space_above", cameraAngle: "low_angle", shotType: "medium_wide",
   }));
-  assert.match(above, /The subject sits LOW in the frame/);
-  assert.match(above, /upper half of the frame is kept clear/);
+  assert.match(above, /What this shot is about sits LOW in the frame/);
+  assert.match(above, /the whole upper half stays clear/);
   assert.match(above, /never cropped by the top edge/);
-  assert.match(above, /Camera angle: camera below the subject, tilted up/);
+  assert.match(above, /Camera angle: camera below the action, tilted up/);
   assert.match(above, /is unmistakable on screen/);
   // прежняя жёсткая строка про центр из промпта ушла
   assert.doesNotMatch(above, /subject near the vertical center/);
 
   // вид строго сверху на падение
   const down = promptFor(bible, beat({ visualAction: "he falls away from the camera", composition: "high_space_below", cameraAngle: "overhead" }));
-  assert.match(down, /camera directly above the subject looking straight down/);
-  assert.match(down, /The subject sits HIGH in the frame/);
+  assert.match(down, /camera directly above the action, looking straight down at it/);
+  assert.match(down, /What this shot is about sits HIGH in the frame/);
 
   // и обычный кадр остаётся обычным
   const plain = promptFor(bible, beat({ visualAction: "he sits at a table" }));
   assert.match(plain, /near the centre of the frame/);
-  assert.match(plain, /Camera angle: camera at the subject's own eye level/);
+  assert.match(plain, /Camera angle: camera level with the action, seeing it straight on/);
 });
 
 test("нормализатор принимает ракурс и композицию модели и чинит мусор", () => {

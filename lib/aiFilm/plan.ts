@@ -327,7 +327,7 @@ const PROBE_BEAT: StoryBeat = {
   universeAdaptation: "", visualAction: "he opens a box", keyMoment: "the box opens",
   anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: ["probe"], objects: [{ id: "box", before: "sealed", after: "open" }],
   location: "a room", motion: "he lifts the lid", stateBefore: "sealed", stateAfter: "open",
-  continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium",
+  continuityGroup: null, continuityRequired: false, transition: "cut", shotType: "medium", frameSubject: "",
   camera: "Camera is at eye level in front of him", cameraAngle: "eye_level", composition: "center",
   suggestedDuration: 8,
 };
@@ -495,24 +495,17 @@ export function shotPrompt(args: {
   const ratio = aspectRatio === "9:16" ? "vertical 9:16 portrait composition" : "horizontal 16:9 composition";
   // Кадр строится вокруг доказательства события. Полный рост ведущего ничего не добавляет
   // там, где смысл сцены — шарнир, кнопка или место контакта.
-  const target = frameTarget(beats);
-  if (target) {
-    lines.push(
-      `Framing: ${ratio}, ${shot} shot built on the ${target}. ${OBJECT_COMPOSITION_LINE[beat.composition]} ` +
-        `It has to stay big enough in frame to read the change described above. ` +
-        `Include only as much of the person as this action needs — hands, forearms, part of the body; framing his whole figure or empty floor adds nothing here.`,
-    );
-  } else {
-    lines.push(`Framing: ${ratio}, ${shot} shot. ${COMPOSITION_LINE[beat.composition]}`);
-  }
+  const subject = frameSubject(beat);
+  lines.push(`Framing: ${ratio}, ${shot} shot${subject ? ` on ${subject}` : ""}. ${compositionLine(subject, beat.composition)}`);
   // В кадре должно быть ровно столько, чтобы событие читалось: иногда это весь предмет
   // целиком, иногда — место контакта крупно. Прежнее безусловное «всё названное целиком
   // в кадре» спорило с крупной деталью и заставляло отъезжать от самого важного.
   if (marks.length) {
-    lines.push(`Frame it so that ${marks.map((d) => d.keyMoment).filter(Boolean).join("; ") || "the change named above"} is unmistakable on screen: whatever part of the action proves it must be inside the frame, not cropped away.`);
+    lines.push(`Frame it so that ${marks.map((d) => d.keyMoment).filter(Boolean).join("; ") || "the change named above"} is unmistakable on screen: whatever part of the action proves it must be inside the frame, large enough to read and not cropped away.`);
   }
-  lines.push(`Camera angle: ${target ? `${OBJECT_ANGLE_LINE[beat.cameraAngle]} (the ${target})` : ANGLE_LINE[beat.cameraAngle]}.`);
-  lines.push(`Camera: ${beat.camera || bible.cameraLanguage}. Single continuous take, no cuts inside the shot.`);
+  lines.push(`Camera angle: ${angleLine(subject, beat.cameraAngle)}.`);
+  // точка planner-текста не удваивается: «onto the button.. Single continuous take» читается как опечатка
+  lines.push(`Camera: ${(beat.camera || bible.cameraLanguage).replace(/[.;,\s]+$/, "")}. Single continuous take, no cuts inside the shot.`);
   lines.push(
     "Screen direction: keep the movement exactly as described relative to the camera. Do not turn the subject toward the lens " +
       "and do not have him run or jump into the camera unless the action says so.",
@@ -974,75 +967,64 @@ export function buildShots(beats: StoryBeat[], character: CharacterProfile, bibl
 }
 
 /**
- * Куда смотрит камера. Раньше в промпт уходила одна фраза на все сцены, и ролик выглядел
- * снятым с одной точки; ракурс теперь приходит из плана и меняется от действия.
- */
-export const ANGLE_LINE: Record<CameraAngle, string> = {
-  eye_level: "camera at the subject's own eye level, level with the horizon",
-  low_angle: "camera below the subject, tilted up at him, so he rises against the sky or ceiling",
-  high_angle: "camera above the subject, tilted down at him, so the ground around him is visible",
-  overhead: "camera directly above the subject looking straight down, the ground far below him",
-  ground_level: "camera down on the ground close to the subject's feet, looking along the surface",
-  over_shoulder: "camera just behind the subject's shoulder, seeing roughly what he sees",
-  profile: "camera square to the subject's side, seeing him in clean profile",
-};
-
-/**
- * Где в кадре человек и, главное, для чего оставлено место. Именно эта строка чинит
- * купол, который не влезал в кадр: под ним место в кадре теперь резервируется явно.
- */
-/**
- * Что должно занимать кадр. Когда сцена снимается ради предмета или контакта, кадр строится
- * ВОКРУГ НЕГО, а человек попадает в кадр ровно настолько, насколько нужен действию.
+ * ЧТО занимает кадр. Это решение планировщика (frameSubject): им может быть лицо, расстояние
+ * между двумя людьми, место контакта пальца с кнопкой, движение толпы или пустое помещение.
+ * Сборщик только переносит решение в запрос и своего героя кадра не назначает.
  *
  * Появилось после трёх снятых дублей: планировщик просил крупный кадр на руку и устройство,
- * а сборщик всё равно дописывал «человек в центре кадра с нормальным отступом над головой»,
- * и Veo отъезжал на средний план. В готовом кадре треть занимали ноги и пустой фон, а кнопка
- * и экран устройства были размером с ноготь.
+ * а сборщик всё равно дописывал «человек в центре кадра с нормальным отступом над головой»
+ * и «камера сверху вниз на него, вокруг видна земля». Два указания спорили в одном запросе.
  */
-export function frameTarget(beats: StoryBeat[]): string {
-  const beat = beats[0];
-  const key = `${beat.keyMoment} ${beat.visualAction}`.toLowerCase();
-  const changing = beats.flatMap((b) => (b.objects ?? []).filter((o) => o.after.trim() && o.before.trim() !== o.after.trim()));
-  if (!changing.length) return "";
-  // предпочитаем предмет, названный в ключевом моменте: именно его зритель обязан разглядеть
-  const named = changing.find((o) => o.id.replace(/[-_]+/g, " ").split(" ").filter((w) => w.length >= 3).some((w) => key.includes(w)));
-  const pick = named ?? changing[0];
-  return pick.id.replace(/[-_]+/g, " ").trim();
+export function frameSubject(beat: Pick<StoryBeat, "frameSubject">): string {
+  return (beat.frameSubject ?? "").trim().replace(/[.;]+$/, "");
 }
 
-/** Ракурс, описанный вокруг предмета, а не вокруг человека. */
-export const OBJECT_ANGLE_LINE: Record<CameraAngle, string> = {
-  eye_level: "camera level with it, seeing it straight on",
-  low_angle: "camera below it, looking up at it",
-  high_angle: "camera above it, tilted down onto it",
-  overhead: "camera directly above it, looking straight down onto it",
-  ground_level: "camera down at surface level, close to it",
-  over_shoulder: "camera just behind the hands working on it, seeing what they see",
-  profile: "camera square to its side, seeing the contact in clean profile",
-};
+/**
+ * Где в кадре субъект и, главное, для чего оставлено место. Формулировка ничего не добавляет
+ * от себя — ни отступа над головой, ни земли вокруг: только то, что означает выбор планировщика.
+ */
+export function compositionLine(subject: string, composition: Composition): string {
+  const s = subject ? subject[0].toUpperCase() + subject.slice(1) : "What this shot is about";
+  switch (composition) {
+    case "low_space_above":
+      return `${s} sits LOW in the frame, in the bottom third; the whole upper half stays clear for what is above, and that thing is shown whole, never cropped by the top edge.`;
+    case "high_space_below":
+      return `${s} sits HIGH in the frame, in the top third; the lower half stays clear for the ground or the drop below.`;
+    case "offset_left":
+      return `${s} sits in the left third of the frame; the right side stays open for what it faces or what approaches.`;
+    case "offset_right":
+      return `${s} sits in the right third of the frame; the left side stays open for what it faces or what approaches.`;
+    case "subject_small_in_wide":
+      return `${s} is small inside a wide view; the scale of the place is the point of this shot.`;
+    default:
+      return `${s} sits near the centre of the frame.`;
+  }
+}
 
-/** Место в кадре, отсчитанное от предмета. */
-export const OBJECT_COMPOSITION_LINE: Record<Composition, string> = {
-  center: "It sits in the middle of the frame and fills most of it.",
-  low_space_above: "It sits low in the frame; the upper half stays clear for what is above it.",
-  high_space_below: "It sits high in the frame; the lower half stays clear for what is below it.",
-  offset_left: "It sits in the left half of the frame; the right side stays open for what approaches it.",
-  offset_right: "It sits in the right half of the frame; the left side stays open for what approaches it.",
-  subject_small_in_wide: "It is seen inside the wider place, but still large enough to read the change.",
-};
-
-export const COMPOSITION_LINE: Record<Composition, string> = {
-  center: "The subject sits near the centre of the frame with normal headroom.",
-  low_space_above:
-    "The subject sits LOW in the frame, in the bottom third. The whole upper half of the frame is kept clear for what is above him, " +
-    "and that thing is shown whole, never cropped by the top edge.",
-  high_space_below:
-    "The subject sits HIGH in the frame, in the top third. The lower half of the frame is kept clear for the ground or drop below him.",
-  offset_left: "The subject sits in the left third of the frame; the right side stays open for what he faces or what approaches.",
-  offset_right: "The subject sits in the right third of the frame; the left side stays open for what he faces or what approaches.",
-  subject_small_in_wide: "The subject is small inside a wide view; the place around him is the point of the shot, not his face.",
-};
+/**
+ * Откуда смотрит камера — тоже относительно субъекта кадра, а не относительно человека.
+ * Прежний текст описывал только человека: «он вырастает на фоне неба», «вокруг него видна
+ * земля». В сцене про кнопку это уводило камеру от кнопки.
+ */
+export function angleLine(subject: string, angle: CameraAngle): string {
+  const s = subject || "the action";
+  switch (angle) {
+    case "low_angle":
+      return `camera below ${s}, tilted up at it`;
+    case "high_angle":
+      return `camera above ${s}, tilted down at it`;
+    case "overhead":
+      return `camera directly above ${s}, looking straight down at it`;
+    case "ground_level":
+      return `camera down at surface level, close to ${s}`;
+    case "over_shoulder":
+      return `camera just behind the shoulder of the person doing it, seeing ${s} as he sees it`;
+    case "profile":
+      return `camera square to the side of ${s}, seeing it in clean profile`;
+    default:
+      return `camera level with ${s}, seeing it straight on`;
+  }
+}
 
 /**
  * Есть ли в действии событие. Проверка именно такая, а не поиск статичных глаголов:

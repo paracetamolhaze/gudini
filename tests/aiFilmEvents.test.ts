@@ -88,7 +88,7 @@ test("приземление вместо отзыва не засчитывае
     anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: ["review"],
     objects: [{ id: "reserve-canopy", before: "open", after: "collapsed on the grass" }],
     location: "a field", motion: "", stateBefore: "", stateAfter: "", continuityGroup: null, continuityRequired: false,
-    transition: "cut", shotType: "medium", camera: "Camera is at eye level", cameraAngle: "eye_level",
+    transition: "cut", shotType: "medium", frameSubject: "", camera: "Camera is at eye level", cameraAngle: "eye_level",
     composition: "center", suggestedDuration: 6,
   };
   const review = landingInsteadOfReview.find((e) => e.id === "review")!;
@@ -552,7 +552,7 @@ test("первый клип цепочки не требует того, что 
     anchorPhrase: "", anchorAtSec: 10, anchorAbsSec: 10, eventIds: ["open"],
     objects: [{ id: "box", before: "sealed", after: "open" }],
     location: "a kitchen", motion: "the lid comes off", stateBefore: "sealed", stateAfter: "open",
-    continuityGroup: "c", continuityRequired: true, transition: "cut", shotType: "medium",
+    continuityGroup: "c", continuityRequired: true, transition: "cut", shotType: "medium", frameSubject: "",
     camera: "Camera is at eye level", cameraAngle: "eye_level", composition: "center", suggestedDuration: 12,
   };
   const bible = bibleWith([{ id: "open", observable: "the box opens", required: true, fromPhrase: 1, toPhrase: 1, objects: beat.objects }]);

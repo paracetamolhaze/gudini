@@ -48,7 +48,7 @@ const beat = (id: string, start: number, end: number, location: string): StoryBe
   anchorPhrase: "", anchorAtSec: null, anchorAbsSec: null, eventIds: [id.toLowerCase()],
   objects: [{ id: id.toLowerCase(), before: "sealed", after: "open" }],
   location, motion: "the lid lifts", stateBefore: "sealed", stateAfter: "open",
-  continuityGroup: "shared", continuityRequired: true, transition: "cut", shotType: "medium",
+  continuityGroup: "shared", continuityRequired: true, transition: "cut", shotType: "medium", frameSubject: "",
   camera: "Camera is at eye level", cameraAngle: "eye_level", composition: "center", suggestedDuration: end - start,
 });
 

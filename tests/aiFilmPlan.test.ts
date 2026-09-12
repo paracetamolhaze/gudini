@@ -60,7 +60,7 @@ export const beat = (
   stateBefore: "he stands", stateAfter: `state after ${id}`,
   continuityGroup: o.continuityGroup ?? null,
   continuityRequired: Boolean(o.continuityGroup),
-  transition: "cut", shotType: "medium", camera: "slow push-in", cameraAngle: "eye_level", composition: "center",
+  transition: "cut", shotType: "medium", frameSubject: "", camera: "slow push-in", cameraAngle: "eye_level", composition: "center",
   suggestedDuration: end - start,
 });
 

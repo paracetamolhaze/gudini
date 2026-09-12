@@ -14,7 +14,7 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
 /** 9 — общая процедура режиссуры: причинность, доказательство сцены, состояние, механика, камера. */
-export const STORY_VERSION = 14;
+export const STORY_VERSION = 15;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -215,7 +215,7 @@ stateBefore / stateAfter (английский, одна строка) — ко�
 Одна поза при разных физических состояниях — ошибка: тело под нагрузкой, в свободном падении и на опоре выглядит по-разному. Руки, инструмент и обрабатываемый предмет образуют одну понятную систему.
 
 ═══ 9. РАКУРС И КОМПОЗИЦИЯ ВЫБИРАЮТСЯ ПОД ДОКАЗАТЕЛЬСТВО СОБЫТИЯ ═══
-Сначала назови, какой факт зритель обязан различить (отрыв ног от края, контакт мяча со стаканом, переход ключа в чужую руку), и только потом выбирай, откуда это видно.
+Сначала назови, какой факт зритель обязан различить (отрыв ног от края, контакт мяча со стаканом, переход ключа в чужую руку), запиши его в frameSubject и только потом выбирай, откуда это видно.
 Проверь геометрию: куда повёрнута поверхность, на которой видно доказательство, что её не закрывает рука или спина, и достаточно ли она крупная. Экран, повёрнутый к лицу героя, камере спереди не виден — либо ставь камеру из-за плеча, либо герой сам поворачивает экран к камере, и это написано в действии.
 
 cameraAngle — откуда смотрит камера:
@@ -228,12 +228,16 @@ cameraAngle — откуда смотрит камера:
 - "profile" — строго сбоку: движение поперёк кадра, силуэт, скорость.
 Разнообразие ракурсов полезно там, где помогает рассказу. Механическое чередование ради разнообразия качеством не является: если действие читается только с одной точки, ставь её, даже если в прошлой сцене был тот же ракурс.
 
-composition — где человек в кадре и, главное, ДЛЯ ЧЕГО ОСТАВЛЕНО МЕСТО:
-- "center" — человек по центру, вокруг ничего важного;
-- "low_space_above" — человек внизу кадра, СВЕРХУ ОСТАВЛЕНО МЕСТО: купол, крона, потолок, небо, то, что над ним;
-- "high_space_below" — человек вверху, место снизу: земля под ним, пропасть, то, куда он падает;
-- "offset_left" / "offset_right" — человек сбоку, место в другой половине: он смотрит туда, оттуда что-то приближается;
-- "subject_small_in_wide" — человек мелко в общем плане: важен масштаб места, а не он.
+frameSubject (английский, короткая именная группа) — ЧТО занимает кадр и обязано читаться. Это не обязательно предмет и не обязательно человек: "his face", "the distance between the two men", "his thumb on the device button and the device screen", "the empty hall", "the crowd moving past him". Назови то, без чего реплика не будет понята. shotType, composition и cameraAngle относятся именно к frameSubject, и другого героя кадра сборщик не добавляет.
+Меняющийся предмет в objects сам по себе субъекта кадра не назначает: предмет бывает поводом сцены, а смысл — в лице человека рядом или в расстоянии между людьми.
+
+composition — где в кадре frameSubject и, главное, ДЛЯ ЧЕГО ОСТАВЛЕНО МЕСТО:
+- "center" — субъект кадра по центру, вокруг ничего важного;
+- "low_space_above" — субъект внизу кадра, СВЕРХУ ОСТАВЛЕНО МЕСТО: купол, крона, потолок, небо, то, что над ним;
+- "high_space_below" — субъект вверху, место снизу: земля, пропасть, то, куда он падает;
+- "offset_left" / "offset_right" — субъект сбоку, место в другой половине: он обращён туда, оттуда что-то приближается;
+- "subject_small_in_wide" — субъект мелко в общем плане: важен масштаб места.
+Середина кадра сама по себе не требуется: требуется, чтобы доказательство события было отчётливо видно.
 ПРАВИЛО: в кадре должно быть ровно столько, чтобы доказательство события читалось. Иногда для этого нужен весь предмет целиком (раскрывшаяся ткань, вся комната), иногда — крупная деталь контакта (пальцы на ключе, край стакана). Общего правила «предмет всегда целиком» нет; есть требование не обрезать то, ради чего снимается сцена.
 Если важное происходит НАД человеком, сверху или сбоку нужно место в кадре и крупность не ближе medium_wide, иначе оно не влезет.
 
@@ -248,7 +252,7 @@ camera (английский) начинается с позиции камер�
 Хорошо: "Camera is on the opposite bank, following him from the side as the far shore slides past behind him" — есть ориентир движения.
 ВАЖНО: если важное находится НАД человеком, камера сбоку или снизу; если ПОД ним — сверху. Направление движения в camera и motion пиши под выбранную точку съёмки, а не под прежнюю.
 Лицо не обязано занимать центр каждой сцены. Эталоны задают внешность; поза и взгляд определяются действием, а не привычкой смотреть в объектив.
-ГЛАВНОЕ В КАДРЕ — ДОКАЗАТЕЛЬСТВО, А НЕ ВЕДУЩИЙ. shotType и composition описывают крупность на том, что зритель обязан разглядеть: шарнир, кнопку, место контакта, лицо собеседника. Если сцена про предмет в руках, в кадр берутся руки и предмет, а не человек целиком: полный рост, ноги и пустой пол смысла не добавляют. Эталоны задают внешность, а не крупность, и показывать костюм целиком незачем.
+ГЛАВНОЕ В КАДРЕ — ТО, ЧТО ЗРИТЕЛЬ ОБЯЗАН УВИДЕТЬ, и это назначаешь ты в frameSubject. Крупность выбирается под него: место контакта, шарнир, кнопка, лицо собеседника, расстояние между людьми, пустое помещение, движение толпы. Ведущий занимает столько кадра, сколько нужно действию; полный рост, ноги и пустой пол добавлять незачем, если сцена не про них. Эталоны задают внешность, а не крупность, и показывать костюм целиком не нужно.
 shotType: close | medium | medium_wide | wide | full_body. Кадр вертикальный 9:16, для hybrid — горизонтальный 16:9.
 
 ═══ 9a. ОДИН ПРЕДМЕТ — ОДНО НАЗВАНИЕ ═══
@@ -294,7 +298,7 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."],
   "events": [{"id": "order", "observable": "english: what the viewer sees change", "required": true, "fromPhrase": 1, "toPhrase": 2, "objects": [{"id": "phone", "before": "english", "after": "english", "role": "change"}]}]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english", "role": "change"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english", "role": "change"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "frameSubject": "english: what fills the frame", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
 Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state/objects/scene оставляй пустыми, eventIds пустым списком, gudiniVisible=false.`;
 }
 
@@ -321,6 +325,7 @@ type RawBeat = {
   shotType?: string;
   camera?: string;
   cameraAngle?: string;
+  frameSubject?: string;
   composition?: string;
   eventIds?: unknown;
   objects?: unknown;
@@ -697,6 +702,9 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       shotType: (SHOTS as string[]).includes(String(e.shotType)) ? (e.shotType as ShotType) : "medium",
       camera: str(e.camera),
       cameraAngle: (ANGLES as string[]).includes(String(e.cameraAngle)) ? (e.cameraAngle as CameraAngle) : "eye_level",
+      // Именная группа, а не предложение: она подставляется внутрь строк кадра и ракурса.
+      // Пустая строка допустима — тогда кадр описывается вокруг самого действия.
+      frameSubject: mode !== "author" ? str(e.frameSubject).replace(/[.;]+$/, "").slice(0, 90) : "",
       composition: (COMPOSITIONS as string[]).includes(String(e.composition)) ? (e.composition as Composition) : "center",
       suggestedDuration: Math.round((end - start) * 10) / 10,
       ...(reduced ? { reduced } : {}),

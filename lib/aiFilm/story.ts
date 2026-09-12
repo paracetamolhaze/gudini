@@ -864,6 +864,8 @@ export async function planStory(args: {
   retryNote?: string;
   /** наблюдатель запроса и ответа модели: нужен разбору качества, на конвейер не влияет */
   onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
+  /** подмена самого вызова модели: нужна проверкам разбора ответа, в конвейере не используется */
+  complete?: (a: { system: string; user: string }) => Promise<string>;
 }): Promise<{ bible: StoryBible; beats: StoryBeat[]; phrases: Phrase[] }> {
   const phrases = phrasesFromWords(args.words);
   if (phrases.length < 2) throw new Error("AI-фильм: в речи меньше двух фраз — не из чего строить историю");
@@ -884,11 +886,21 @@ export async function planStory(args: {
       : "");
   // без скрытых размышлений: на речи в 124 с модель потратила на них все 16 000 токенов и не выдала текст
   const system = storySystemPrompt(args.character, args.universe, args.coverage);
-  const raw = await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", reasoning: "off", system, user });
+  const raw = args.complete
+    ? await args.complete({ system, user })
+    : await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", reasoning: "off", system, user });
   // Крючок для разбора качества планировщика: сохранить ровно то, что ушло в модель и что
   // она ответила, не подменяя это пересказом. На работу конвейера не влияет.
   args.onCall?.({ system, user, raw, retry: Boolean(args.retryNote) });
-  const parsed = parseJson<RawStory>(raw, "AI Film Story");
+  // Ответ уже оплачен. Если он не разобрался, без его текста причину не найти: конец ответа
+  // уходит в саму ошибку, а целиком его сохраняет onCall.
+  let parsed: RawStory;
+  try {
+    parsed = parseJson<RawStory>(raw, "AI Film Story");
+  } catch {
+    const tail = raw.slice(-300).replace(/\s+/g, " ");
+    throw new Error(`AI Film Story: ответ модели не разобрался как JSON (символов ${raw.length}, конец ответа: ...${tail})`);
+  }
   const bible = normalizeBible(parsed, args.character, args.universe);
   const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration, args.words);
   if (!beats.length) throw new Error("AI Film Story: модель не вернула биты");

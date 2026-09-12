@@ -175,10 +175,23 @@ export async function runAiFilmStage(args: {
     args.setStep("AI-фильм: разбор истории", 26);
     const research = await args.research.catch(() => null);
     const summary = research ? research.facts.slice(0, 8).map((f) => f.text).filter(Boolean).join("; ") : "";
+    // Ответы планировщика сохраняются рядом с планом ДО разбора: упавший разбор стоит
+    // столько же, сколько удачный, и без текста ответа причину падения искать нечем.
+    const callsDir = path.join(dir, "ai-film", "story-calls");
+    let callNo = 0;
     const { plan } = await planFilm({
       words, script: project.script ?? "", topic: project.topic, researchSummary: summary,
       character, universe, duration, coverage, cfg,
       onStep: (step, progress) => args.setStep(step, progress),
+      onCall: ({ system, user, raw, retry }) => {
+        try {
+          fs.mkdirSync(callsDir, { recursive: true });
+          const name = `${String(++callNo).padStart(2, "0")}-${retry ? "retry" : "first"}`;
+          fs.writeFileSync(path.join(callsDir, `${name}-raw.json`), raw, "utf8");
+          fs.writeFileSync(path.join(callsDir, `${name}-user.txt`), user, "utf8");
+          fs.writeFileSync(path.join(callsDir, `${name}-system.txt`), system, "utf8");
+        } catch {}
+      },
     });
     fs.writeFileSync(path.join(dir, PLAN_FILE), JSON.stringify(plan, null, 2), "utf8");
     const s = plan.stats;

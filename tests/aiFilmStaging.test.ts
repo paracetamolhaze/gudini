@@ -677,3 +677,25 @@ test("результат, который не успеть рассмотрет�
   // это замечание, а не запрет оплаты: кадр выполним
   assert.ok(!gateIssues(late).some((i) => i.code === "hold-outside-window"));
 });
+
+
+test("неразобранный ответ планировщика попадает в ошибку вместе с концом текста", async () => {
+  // Ответ уже оплачен: если он не разобрался, причину ищут по его же тексту.
+  const { planStory } = await import("../lib/aiFilm/story");
+  const words = speech(["Он нажимает кнопку на устройстве и ждёт ответа экрана.", "Экран показывает подтверждение подписи.", "Он кладёт устройство на стол."]);
+  const seen: string[] = [];
+  await assert.rejects(
+    () =>
+      planStory({
+        words, script: "x", topic: "t", character, universe, duration: words[words.length - 1].end, coverage: { target: 0.5, max: 0.7 },
+        complete: async () => "вот план: {beats: [ // без кавычек",
+        onCall: ({ raw }) => seen.push(raw),
+      }),
+    (e: Error) => {
+      assert.match(e.message, /не разобрался как JSON/);
+      assert.match(e.message, /конец ответа/);
+      return true;
+    },
+  );
+  assert.equal(seen.length, 1, "ответ модели обязан дойти до наблюдателя до разбора");
+});

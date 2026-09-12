@@ -1030,13 +1030,34 @@ export function mentionsPerson(name: string, text: string, declared: string[]): 
   const low = text.toLowerCase();
   const full = name.trim().toLowerCase();
   if (!full) return false;
-  if (low.includes(full)) return true;
+  if (containsWord(low, full)) return true;
   const parts = full.split(/[\s/()-]+/).filter((w) => w.length >= 3);
   const others = declared.filter((d) => d.trim().toLowerCase() !== full);
   return parts.some((w) => {
     const shared = others.some((d) => d.toLowerCase().split(/[\s/()-]+/).includes(w));
-    return !shared && low.includes(w);
+    return !shared && containsWord(low, w);
   });
+}
+
+/**
+ * Встречается ли слово или имя ЦЕЛИКОМ, а не как часть другого слова. Без границ «bench»
+ * приводил в кадр персонажа Ben, «Anna» — отсутствующую Ann, а «banner» — её же.
+ * Границы считаются по буквам и цифрам любого алфавита: дефис и пробел словом не считаются,
+ * поэтому «Jean-Luc Picard» находится целиком.
+ */
+export function containsWord(text: string, phrase: string): boolean {
+  const p = phrase.trim().toLowerCase();
+  if (!p) return false;
+  const low = text.toLowerCase();
+  const letter = (c: string) => c !== "" && /[\p{L}\p{N}]/u.test(c);
+  for (let from = 0; ; from += 1) {
+    const at = low.indexOf(p, from);
+    if (at < 0) return false;
+    const before = at > 0 ? low[at - 1] : "";
+    const after = at + p.length < low.length ? low[at + p.length] : "";
+    if (!letter(before) && !letter(after)) return true;
+    from = at;
+  }
 }
 
 /** Прежнее имя: те же нарушения структуры одними сообщениями. */

@@ -346,3 +346,43 @@ test("общая часть имени не приводит в кадр дру�
   assert.ok(!prompt.includes("Robert Smith"), "в запрос попал персонаж, которого в сцене нет");
   assert.ok(!prompt.includes("grey jacket"), "в запрос попала внешность постороннего персонажа");
 });
+
+test("имя ищется целиком, а не как часть обычного слова", async () => {
+  const { mentionsPerson, containsWord } = await import("../lib/aiFilm/plan");
+  const cast = ["Ben", "Ann", "Ben Carter", "Anna", "Jean-Luc Picard"];
+
+  // обычные слова именами не становятся
+  assert.equal(mentionsPerson("Ben", "the courier sits on a wooden bench", cast), false);
+  assert.equal(mentionsPerson("Ann", "Anna hands over the parcel", cast), false);
+  assert.equal(mentionsPerson("Ann", "a banner hangs over the door", cast), false);
+  assert.equal(mentionsPerson("Ben Carter", "the courier sits on a wooden bench", cast), false);
+
+  // прямое упоминание человека по-прежнему находится
+  assert.equal(mentionsPerson("Ben", "Ben waits by the door", cast), true);
+  assert.equal(mentionsPerson("Ann", "Ann signs the form, then leaves", cast), true);
+  assert.equal(mentionsPerson("Ben Carter", "Ben Carter counts the boxes", cast), true);
+  assert.equal(mentionsPerson("Anna", "Anna hands over the parcel", cast), true);
+  assert.equal(mentionsPerson("Jean-Luc Picard", "Jean-Luc Picard steps aside.", cast), true, "составное имя и точка рядом");
+
+  // границы считаются по буквам любого алфавита
+  assert.equal(containsWord("скамья у двери", "ска"), false);
+  assert.equal(containsWord("ска, потом дверь", "ска"), true);
+
+  // и то же самое на конечном запросе: лишнего человека и его внешности в нём нет
+  const plan = planOf(
+    ["Курьер оставил посылку возле деревянной скамьи и почти сразу ушёл обратно."],
+    [
+      scene({
+        fromPhrase: 1, toPhrase: 1, visualAction: "The courier sets the parcel down on a wooden bench",
+        keyMoment: "the parcel rests on the bench", eventIds: ["drop"],
+        objects: [{ id: "parcel", before: "in the courier's hands", after: "on the wooden bench" }],
+        scene: { who: "Gudini watches from the door; the courier stands at the bench" },
+      }),
+    ],
+    [{ id: "drop", observable: "the parcel reaches the bench", required: true, fromPhrase: 1, toPhrase: 1, objects: [{ id: "parcel", before: "in the courier's hands", after: "on the wooden bench" }] }],
+    { supportingCharacters: [{ name: "Ben", function: "witness", appearance: "an adult in a striped shirt" }] },
+  );
+  const prompt = plan.shots[0].prompt;
+  assert.ok(!prompt.includes("Ben"), "скамья привела в кадр персонажа Ben");
+  assert.ok(!prompt.includes("striped shirt"), "в запрос попала внешность постороннего персонажа");
+});

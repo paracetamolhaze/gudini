@@ -19,6 +19,35 @@ export const FILM_FPS = 30;
 
 export type Overlay = { segment: TimelineSegment; clip: GroupClip };
 
+/** С какой секунды клипа группы начинается материал окна. */
+export function clipOffset(seg: TimelineSegment, group: { start: number }): number {
+  return seg.clipIn ?? Math.max(0, seg.start - group.start);
+}
+
+/**
+ * Ставит окно группы на таймлайн: где вставка идёт в ролике и с какой секунды клипа берётся
+ * материал — две независимые величины. Прежние окна этой группы убираются, промежутки уходят
+ * автору. Пересечение с окном другой группы — ошибка, а не молчаливая перезапись.
+ */
+export function placeWindow(timeline: TimelineSegment[], duration: number, win: TimelineSegment & { groupId: string; clipIn: number }): TimelineSegment[] {
+  const ai = [...timeline.filter((s) => s.mode !== "author" && s.groupId !== win.groupId), { ...win }].sort((a, b) => a.start - b.start);
+  for (let i = 1; i < ai.length; i++) {
+    if (ai[i].start < ai[i - 1].end - 1e-6) throw new Error(`AI-фильм: окно ${win.groupId} пересекается с окном ${ai[i].groupId === win.groupId ? ai[i - 1].groupId : ai[i].groupId}`);
+  }
+  const out: TimelineSegment[] = [];
+  let cursor = 0;
+  const author = (start: number, end: number) => {
+    if (end - start > 1e-6) out.push({ start, end, mode: "author", beatIds: [] });
+  };
+  for (const s of ai) {
+    author(cursor, s.start);
+    out.push(s);
+    cursor = s.end;
+  }
+  author(cursor, duration);
+  return out;
+}
+
 /** Окна наложения: по AI-сегментам таймлайна, клип группы стартует с начала группы. */
 export function overlaysFor(plan: AiFilmPlan, clips: GroupClip[]): Overlay[] {
   const byGroup = new Map(clips.map((c) => [c.groupId, c]));
@@ -28,8 +57,10 @@ export function overlaysFor(plan: AiFilmPlan, clips: GroupClip[]): Overlay[] {
     const clip = byGroup.get(seg.groupId);
     if (!clip) throw new Error(`AI-фильм: для группы ${seg.groupId} нет клипа`);
     const group = plan.groups.find((g) => g.id === seg.groupId)!;
-    if (clip.seconds + 0.5 < group.end - group.start) {
-      throw new Error(`AI-фильм: клип группы ${seg.groupId} короче своего отрезка (${clip.seconds.toFixed(1)} с < ${(group.end - group.start).toFixed(1)} с)`);
+    // Материала должно хватить именно этому окну: с точкой входа окно берёт клип не от начала группы.
+    const need = clipOffset(seg, group) + (seg.end - seg.start);
+    if (clip.seconds + 0.5 < need) {
+      throw new Error(`AI-фильм: окно ${seg.start.toFixed(1)}–${seg.end.toFixed(1)} с берёт клип группы ${seg.groupId} до ${need.toFixed(1)} с, а в клипе ${clip.seconds.toFixed(1)} с`);
     }
     out.push({ segment: seg, clip });
   }
@@ -47,7 +78,7 @@ export function compositeFilter(fit: string, overlays: Overlay[], plan: AiFilmPl
   overlays.forEach((o, k) => {
     const group = plan.groups.find((g) => g.id === o.segment.groupId)!;
     const inputIdx = firstInput + k;
-    const offset = Math.max(0, o.segment.start - group.start); // окно может начинаться не с начала клипа группы
+    const offset = clipOffset(o.segment, group);
     const len = o.segment.end - o.segment.start;
     const scaled =
       o.segment.mode === "full_ai"

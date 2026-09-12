@@ -1093,7 +1093,17 @@ export const FIRST_SHOT_DEADLINE_SECONDS = 8;
  * поэтому видит и то, что редьюсер снял по бюджету, и то, чего планировщик не показал.
  * Возвращает предупреждения, а не правит план: выдумать сцену за планировщика нельзя.
  */
-export function authorStretchIssues(timeline: TimelineSegment[], duration: number): PlanIssue[] {
+/** Короче этого авторский кусок между двумя сценами мелькает. */
+export const MIN_AUTHOR_PIECE_SECONDS = 2;
+
+/** Отрезки речи, которые планировщик сам отдал объяснению: честной картинки для них нет. */
+export function explanationRanges(bible: Pick<StoryBible, "visualTasks">): { start: number; end: number }[] {
+  return (bible.visualTasks ?? [])
+    .filter((t) => t.role === "explanation" && t.start != null && t.end != null)
+    .map((t) => ({ start: t.start!, end: t.end! }));
+}
+
+export function authorStretchIssues(timeline: TimelineSegment[], duration: number, explained: { start: number; end: number }[] = []): PlanIssue[] {
   const out: PlanIssue[] = [];
   const ai = timeline.filter((s) => s.mode !== "author");
   if (!ai.length) {
@@ -1111,19 +1121,45 @@ export function authorStretchIssues(timeline: TimelineSegment[], duration: numbe
       message: `Первая сцена появляется только на ${first.toFixed(1)} с — начало ролика без картинки не удержит зрителя`,
     });
   }
-  const longs: string[] = [];
+  const gaps: [number, number][] = [];
   let cursor = 0;
   for (const s of ai) {
-    if (s.start - cursor > MAX_AUTHOR_STRETCH_SECONDS + 1e-6) longs.push(`${cursor.toFixed(1)}–${s.start.toFixed(1)} с`);
+    if (s.start > cursor + 1e-6) gaps.push([cursor, s.start]);
     cursor = Math.max(cursor, s.end);
   }
-  if (duration - cursor > MAX_AUTHOR_STRETCH_SECONDS + 1e-6) longs.push(`${cursor.toFixed(1)}–${duration.toFixed(1)} с`);
-  if (longs.length) {
+  if (duration > cursor + 1e-6) gaps.push([cursor, duration]);
+  const fmt = (g: [number, number][]) => g.map(([a, b]) => `${a.toFixed(1)}–${b.toFixed(1)} с`).join(", ");
+  // Длинный авторский кусок — повод поискать отдельную визуальную задачу, но не повод ставить
+  // заполнитель. Раньше замечание гнало во второй заход при любом содержании отрезка, и под
+  // правовые и числовые утверждения появлялись пустая карточка, выдуманный штамп и безликий
+  // лист. Если планировщик сам отдал отрезок объяснению, замечание остаётся видимым, но второго
+  // захода ради картинки к тому, что честно не снять, нет.
+  const covered = (a: number, b: number) =>
+    explained.reduce((sum, r) => sum + Math.max(0, Math.min(b, r.end) - Math.max(a, r.start)), 0) / Math.max(1e-6, b - a);
+  const longs = gaps.filter(([a, b]) => b - a > MAX_AUTHOR_STRETCH_SECONDS + 1e-6);
+  const open = longs.filter(([a, b]) => covered(a, b) < 0.6);
+  const told = longs.filter(([a, b]) => covered(a, b) >= 0.6);
+  if (open.length) {
     out.push({
       code: "author-stretch-long",
       severity: "warn",
       beatIds: [],
-      message: `Длинные куски без сцен (больше ${MAX_AUTHOR_STRETCH_SECONDS} с): ${longs.join(", ")}`,
+      message:
+        `Длинные куски без сцен (больше ${MAX_AUTHOR_STRETCH_SECONDS} с): ${fmt(open)}. Проверьте, есть ли в них отдельная визуальная задача, ` +
+        `которой ещё нет в плане; если честной картинки нет, отметьте отрезок как объяснение, а не ставьте заполнитель`,
+    });
+  }
+  if (told.length) {
+    out.push({ code: "author-stretch-explained", severity: "warn", beatIds: [], message: `Длинные авторские куски отданы объяснению: ${fmt(told)}` });
+  }
+  // Авторский кусок между двумя сценами короче двух секунд не читается: лицо только мелькает.
+  const flicker = gaps.filter(([a, b]) => a > 1e-6 && b < duration - 1e-6 && b - a < MIN_AUTHOR_PIECE_SECONDS);
+  if (flicker.length) {
+    out.push({
+      code: "author-flicker",
+      severity: "warn",
+      beatIds: [],
+      message: `Авторский кусок между сценами короче ${MIN_AUTHOR_PIECE_SECONDS} с мелькает: ${fmt(flicker)} — продлите соседнюю сцену или отдайте автору больше`,
     });
   }
   return out;
@@ -1318,7 +1354,7 @@ export function buildFilmPlan(args: {
   // именно на этих шагах, а не в ответе модели.
   const issues: PlanIssue[] = [
     ...auditPlan(beats, bible, character, built.shots),
-    ...authorStretchIssues(built.timeline, duration),
+    ...authorStretchIssues(built.timeline, duration, explanationRanges(bible)),
     ...uncoveredGroupIssues(built),
   ];
   const warnings = [...built.warnings];

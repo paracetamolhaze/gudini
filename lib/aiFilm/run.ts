@@ -80,6 +80,26 @@ export type FilmStageResult =
  * прогнать план вне конвейера — например, при разборе качества планировщика на новых темах,
  * без видео и без Veo. Конвейер вызывает её же.
  */
+/**
+ * План без визуальных задач всей истории — прежний подбор картинки под каждую реплику. Такой
+ * план получает замечание и второй заход; проверки самих задач живут в разборе плана.
+ */
+function withVisualTaskIssue(plan: AiFilmPlan, bible: { visualTasks?: unknown[] }): AiFilmPlan {
+  if ((bible.visualTasks ?? []).length || !plan.shots.length) return plan;
+  return {
+    ...plan,
+    issues: [
+      ...(plan.issues ?? []),
+      {
+        code: "no-visual-tasks",
+        severity: "warn" as const,
+        beatIds: [],
+        message: "План составлен без визуальных задач всей истории — сначала выпишите, что зритель должен увидеть за весь ролик, потом раскладывайте сцены",
+      },
+    ],
+  };
+}
+
 export async function planFilm(args: {
   words: Word[];
   script: string;
@@ -110,6 +130,8 @@ export async function planFilm(args: {
   // выражениями, а ворота смотрели только на issues, и известная склейка внутри кадра
   // проходила мимо ворот. Теперь набор один — criteria.ts.
   const required = requiredEvents(story.bible.events);
+  plan = withVisualTaskIssue(plan, story.bible);
+  candidates.first = plan;
   const first = retryIssues(plan);
   let retried = false;
   let accepted = false;
@@ -134,7 +156,7 @@ export async function planFilm(args: {
     // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
     // событие в сцене и забывает переписать его в bible.events.
     reconcileEventRefs(retryBible, retry.beats);
-    const retryPlan = buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg });
+    const retryPlan = withVisualTaskIssue(buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg }), retryBible);
     candidates.retry = retryPlan;
     // Выбор по тяжести и сохранённым событиям, а не по числу строк.
     const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };

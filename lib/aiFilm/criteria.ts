@@ -17,7 +17,7 @@ import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
  * генерации: ролик с поздним началом смотрибелен, а вот кадра с невыполнимым указанием
  * не существует вовсе.
  */
-export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present"]);
+export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present", "scene-without-visual-task", "explanation-staged", "repeated-visual-task", "duplicate-visual-tasks", "author-flicker", "no-visual-tasks"]);
 
 /** Нарушения, запрещающие оплату. */
 export function gateIssues(plan: Pick<AiFilmPlan, "issues">): PlanIssue[] {

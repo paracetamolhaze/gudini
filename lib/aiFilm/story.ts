@@ -3,7 +3,7 @@ import type { Word } from "../transcribe";
 import { characterBlock } from "./character";
 import { universePlannerBlock, type UniverseProfile } from "./universe";
 import { STAGING_FOR } from "./types";
-import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType, CameraAngle, Composition, HoldKind, ObjectState, SceneState, StoryEvent } from "./types";
+import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType, CameraAngle, Composition, HoldKind, ObjectState, SceneState, StoryEvent, VisualTask } from "./types";
 
 /**
  * Story Planner v2. Модель получает сценарий, чистую речь по фразам с временем, тему,
@@ -14,7 +14,7 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
 /** 9 — общая процедура режиссуры: причинность, доказательство сцены, состояние, механика, камера. */
-export const STORY_VERSION = 16;
+export const STORY_VERSION = 17;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -33,15 +33,6 @@ export const MIN_BEAT_SEC = 2;
  * Планировщик собирал сцены в конце и оставлял первые двадцать секунд без единой вставки.
  */
 export const MAX_AUTHOR_STRETCH_SEC = 12;
-
-/**
- * Сколько сцен нужно на речь такой длины, чтобы нигде не было длинного куска без картинки.
- * Считается по шагу «сцена плюс допустимый разрыв»; на 45 секундах это четыре сцены.
- */
-export function minScenes(duration: number): number {
-  const step = MIN_AI_BEAT_SEC + MAX_AUTHOR_STRETCH_SEC;
-  return Math.max(1, Math.ceil((duration - MAX_AUTHOR_STRETCH_SEC) / step) + 1);
-}
 
 export type Phrase = { index: number; start: number; end: number; text: string };
 
@@ -104,7 +95,7 @@ export function anchorOffset(words: Word[], anchor: string, start: number, end: 
 }
 
 export function storySystemPrompt(character: CharacterProfile, universe: UniverseProfile, coverage: { target: number; max: number }): string {
-  return `Ты режиссёр коротких вертикальных роликов (9:16). Автор говорит на камеру непрерывно; его голос и субтитры идут весь ролик. Ты решаешь, что зритель ВИДИТ: самого автора (AUTHOR), снятую сцену на весь экран (FULL_AI) или сцену в карточке над автором (HYBRID). Генерация стоит денег и не должна покрывать весь ролик: ориентир ${Math.round(coverage.target * 100)}% времени, не больше ${Math.round(coverage.max * 100)}%. Меньше — можно.
+  return `Ты режиссёр коротких вертикальных роликов (9:16). Автор говорит на камеру непрерывно; его голос и субтитры идут весь ролик. Ты решаешь, что зритель ВИДИТ: самого автора (AUTHOR), снятую сцену на весь экран (FULL_AI) или сцену в карточке над автором (HYBRID). Генерация стоит денег: не больше ${Math.round(coverage.max * 100)}% времени ролика. Отдельного ориентира по доле нет: сколько показывать, решают визуальные задачи истории.
 
 ПОРЯДОК РАБОТЫ. Сначала содержание, потом экранное время. Не наоборот.
 
@@ -121,12 +112,27 @@ objects.id — устойчивое короткое имя того, ЧТО м�
 - подтверждённое событие показывай прямо.
 Это правило одинаково для техники, истории и новостей.
 
-ШАГ 2. Реши, какие события показываешь. Не обязаны все: генерация стоит денег, ориентир ${Math.round(coverage.target * 100)}% времени ролика, не больше ${Math.round(coverage.max * 100)}%. Обязательное событие должно быть показано. Снять с него обязательность, чтобы план прошёл проверку, нельзя: required ставится один раз по смыслу истории, а не по удобству. Число сцен определяется историей и бюджетом, а не заранее заданной цифрой.
+ШАГ 2. ВИЗУАЛЬНЫЕ ЗАДАЧИ ВСЕЙ ИСТОРИИ (bible.visualTasks). Составь их до раскладки по битам: не картинку под каждую реплику, а то, что зритель должен УВИДЕТЬ за весь ролик.
+У каждой задачи: id; learns — что зритель узнаёт из картинки, по-русски одной фразой; role; номера фраз; action — одно выполнимое наблюдаемое действие по-английски.
+role:
+- "event" — кадр показывает само сказанное: совершение, результат или состояние, о котором говорит речь;
+- "illustration" — кадр показывает место, масштаб или обстановку, но не доказывает утверждение: общий план места не доказывает ни права, ни суммы, ни решения;
+- "explanation" — правовая, числовая или причинная связь, для которой честной картинки нет. Её несёт автор: action пустой, сцены под неё нет.
+Порядок:
+1. Пройди всю речь и выпиши кандидатов в задачи.
+2. Убери повторы по смыслу: если после двух задач зритель понимает одно и то же, это одна задача. Другой ракурс, другая крупность или другое время суток того же понимания — не развитие.
+3. Каждая следующая задача добавляет к уже показанному новое понимание. Если нового показать нечего, это explanation.
+4. Действие выбирай выполнимым: одно простое движение в одном месте, без обязательных пролётов и подъёмов камеры; без документов, штампов, вывесок и решений ведомств, о которых речь не говорит.
+5. Проверь ритм задуманной последовательности вместе с авторскими кусками, а не каждую реплику по отдельности.
+Пример на постороннем материале, не образец для этой истории: в ролике о ремонте старого велосипеда задача «в каком состоянии велосипед» — illustration, «цепь снимают и ставят новую» — event, «сколько стоил ремонт» — explanation, её говорит автор. Второй общий план того же велосипеда — не новая задача.
 
-ШАГ 3. Разложи выбранные события по речи и добавь, где нужно, связки автора.
+ШАГ 3. Реши, какие события показываешь. Не обязаны все: генерация стоит денег, не больше ${Math.round(coverage.max * 100)}% времени ролика. Обязательное событие должно быть показано. Снять с него обязательность, чтобы план прошёл проверку, нельзя: required ставится один раз по смыслу истории, а не по удобству. Число сцен определяется историей и бюджетом, а не заранее заданной цифрой.
+
+ШАГ 4. Разложи визуальные задачи и выбранные события по речи и добавь, где нужно, связки автора.
 - Первый бит ролика — full_ai, если в первых фразах есть что показать. Ролик, начинающийся с двадцати секунд говорящей головы, зритель закрывает.
-- Между сценами не больше ${MAX_AUTHOR_STRETCH_SEC} секунд подряд одного автора.
+- Ритм считай на всём ролике вместе с авторскими кусками. Авторский кусок короче двух секунд между сценами мелькает. Кусок длиннее ${MAX_AUTHOR_STRETCH_SEC} секунд допустим, если это explanation, но сначала проверь, нет ли в нём отдельной визуальной задачи.
 - Каждая AI-сцена ссылается на события, которые она показывает, через eventIds.
+- Каждая AI-сцена ссылается на свою визуальную задачу через visualTask. Сцены без задачи не бывает; под explanation сцену не ставят; одну задачу решает одна сцена.
 
 СЦЕНА ОБЯЗАНА ВЫПОЛНИТЬ ОБЕЩАНИЕ СОБЫТИЯ. Это проверяется, и несоответствие — ошибка плана, а не мелочь.
 Правило одно: если событие — СОВЕРШЕНИЕ, то в кадре видно, как состояние переходит из «до» в «после». Готовый результат, подготовка и последствие события не заменяют.
@@ -181,7 +187,7 @@ ${universePlannerBlock(universe)}
 ФИЗИЧЕСКИЙ ПРОЦЕСС ИДЁТ СТОЛЬКО, СКОЛЬКО ИДЁТ. Дело не только в числе действий: у каждого процесса своя длительность. Бумага вспыхивает за секунды, деревянный стол прогорает и теряет прочность десятки минут, вода закипает минуты, краска сохнет часы. Если за показанное время процесс дойдёт только до своей ранней стадии, её и показывай: пламя перекидывается на бумаги, а не обрушивает стол; тесто начинает подниматься, а не печётся. Ускоренная физика в кадре выглядит как подделка, и никакие слова о реализме этого не исправят.
 
 ДЕЙСТВИЕ ОБЯЗАНО ПОМЕСТИТЬСЯ В ПОКАЗАННОЕ ВРЕМЯ. Считай зависимые шаги: сложить, закрыть, заклеить, поднять, вынести — это пять последовательных движений, и за две с половиной секунды они не произойдут. Если времени мало, начинай ближе к решающему моменту и выбрасывай подготовку: зрителю нужен переход, а не путь к нему.
-Доказательством не может быть жест, который лишь намекает на смысл. Размер налога, право собственности, юридическое условие показываются документом в работе, действием с деньгами или сравнением обстановки; если показать нечего, оставь это голосу автора и сними обстановку. Сжатый кулак, задумчивый взгляд и покачивание головой — реакция, а не объяснение.
+Доказательством не может быть жест, который лишь намекает на смысл. Размер налога, право собственности и юридическое условие — это объяснения. Документ, штамп, решение ведомства или действие с деньгами ставится в кадр, только если о нём говорит сама речь; иначе его не придумывают: отрезок несёт автор, а обстановку можно снять как иллюстрацию, не выдавая её за доказательство. Сжатый кулак, задумчивый взгляд и покачивание головой — реакция, а не объяснение.
 Чем меньше одновременно движущихся людей и предметов, тем выше шанс, что кадр получится. Один человек и один предмет, с которым что-то происходит, — самая надёжная сцена. Герой в кадре не обязателен: мяч, который скатывается и сбивает стакан, — полноценная сцена.
 
 ПРЕДМЕТЫ ИЗ РЕЧИ НАЗЫВАЙ ТОЧНО, со своими приметами: не «a small package», не «an object», не «some gear» — на месте обобщения генератор дорисовывает случайный мусор. Посылка — картонная коробка с почтовой наклейкой; парашют — конкретный купол конкретного цвета.
@@ -295,18 +301,20 @@ continuityGroup: одинаковая метка у ДВУХ соседних AI
 priority: "high" — hook, ключевой reveal, climax; "medium" — примеры и история; "low" — украшение, которое можно убрать. При нехватке бюджета low снимут первыми.
 purpose: hook | setup | explain | example | reveal | emotion | transition | climax | resolution. transition: "cut" (обычно) или "dissolve" (редко).
 
-РАСПРЕДЕЛЕНИЕ — это два жёстких требования из начала инструкции. Проверь себя перед ответом:
+ПРОВЕРЬ ВСЮ ПОСЛЕДОВАТЕЛЬНОСТЬ ПЕРЕД ОТВЕТОМ, вместе с авторскими кусками:
 - первый бит full_ai, если в первых фразах есть что показать;
-- нигде между сценами нет больше ${MAX_AUTHOR_STRETCH_SEC} секунд подряд одного автора;
-- сцены стоят по всей длине речи, а не только в конце.
-Если из-за этого не хватает покрытия на развязку — укоротите сцены, а не выбрасывайте начало.
+- каждая следующая сцена даёт зрителю новое понимание, а не другой ракурс уже показанного;
+- между сценами нет авторских кусков короче двух секунд;
+- длинные авторские куски — это explanation из visualTasks, а не места, где не нашлось сцены.
+Если бюджета не хватает, укорачивай сцены, а не выбрасывай начало.
 
 Ответь только JSON:
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."],
+  "visualTasks": [{"id": "state", "learns": "русский: что зритель узнаёт из картинки", "role": "event|illustration|explanation", "fromPhrase": 1, "toPhrase": 2, "action": "english: one feasible observable action, empty for explanation"}],
   "events": [{"id": "order", "observable": "english: what the viewer sees change", "required": true, "fromPhrase": 1, "toPhrase": 2, "objects": [{"id": "phone", "before": "english", "after": "english", "role": "change"}]}]},
- "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "hold": "instant|settle|read", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english", "role": "change"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "frameSubject": "english: what fills the frame", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
-Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state/objects/scene оставляй пустыми, eventIds пустым списком, gudiniVisible=false.`;
+ "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "visualTask": "state", "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "hold": "instant|settle|read", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english", "role": "change"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "frameSubject": "english: what fills the frame", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
+Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state/objects/scene оставляй пустыми, eventIds пустым списком, visualTask пустой строкой, gudiniVisible=false.`;
 }
 
 type RawBeat = {
@@ -323,6 +331,7 @@ type RawBeat = {
   keyMoment?: string;
   anchorPhrase?: string;
   hold?: string;
+  visualTask?: string;
   motion?: string;
   location?: string;
   stateBefore?: string;
@@ -588,6 +597,23 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
   // постановка, и флаг reconstruction ниже как раз про то, что кадр — переигранная сцена,
   // а не запись события. Ограничение одно и живёт в промпте: узнаваемого публичного
   // человека подменять собой нельзя, его показывают им самим.
+  // Визуальные задачи всей истории: без id и понимания для зрителя задача ничего не решает.
+  // Неизвестная роль читается как иллюстрация — так сцена не пропадает молча.
+  const rawTasks: unknown[] = Array.isArray(b.visualTasks) ? b.visualTasks : [];
+  const visualTasks: VisualTask[] = rawTasks
+    .map((t: any) => {
+      const role: VisualTask["role"] = t?.role === "event" || t?.role === "explanation" ? t.role : "illustration";
+      return {
+        id: slugId(t?.id),
+        learns: str(t?.learns),
+        role,
+        fromPhrase: Math.max(1, Math.round(Number(t?.fromPhrase) || 1)),
+        toPhrase: Math.max(1, Math.round(Number(t?.toPhrase) || Number(t?.fromPhrase) || 1)),
+        action: role === "explanation" ? "" : str(t?.action),
+      };
+    })
+    .filter((t) => t.id && t.learns)
+    .slice(0, 16);
   const playedByGudini = str(b.playedByGudini);
   const cast = playedByGudini
     ? supporting.filter((c: any) => c.name.toLowerCase() !== playedByGudini.toLowerCase())
@@ -597,6 +623,7 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     universeId: universe.id,
     storyType,
     eventsDropped: Math.max(0, Math.min(rawEvents.length, 12) - events.length),
+    visualTasks,
     staging: STAGING_FOR[storyType],
     // кадры новости — реконструкция; происхождение хранится в плане, а не подразумевается
     reconstruction: storyType === "news" || storyType === "history",
@@ -700,6 +727,7 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       anchorAtSec: null,
       anchorAbsSec: mode !== "author" ? anchorAbs : null,
       eventIds: mode !== "author" ? arr(e.eventIds).map(slugId).filter(Boolean).slice(0, 6) : [],
+      visualTask: mode !== "author" ? slugId(e.visualTask) : "",
       objects: mode !== "author" ? objectStates(e.objects) : [],
       ...(mode !== "author" ? { scene: sceneState(e.scene) } : {}),
       location: str(e.location),
@@ -887,11 +915,10 @@ export async function planStory(args: {
     `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
     `Сценарий (что автор хотел сказать):\n${args.script.slice(0, 4000)}\n\n` +
     `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}\n\n` +
-    // Число модель выполняет заметно охотнее, чем правило: «не больше 12 секунд подряд»
-    // она трактует как пожелание, а «нужно минимум 4 сцены» — как задачу.
-    `СЧИТАЙ САМ: речь длится ${args.duration.toFixed(0)} секунд. Чтобы нигде не было больше ${MAX_AUTHOR_STRETCH_SEC} секунд подряд без картинки, ` +
-    `на этой длине нужно НЕ МЕНЬШЕ ${minScenes(args.duration)} сцен, и первая из них — в самом начале. ` +
-    `Расставь их по всей длине речи и проверь себя по номерам фраз перед тем, как отвечать.` +
+    // Прежде здесь стояло «нужно НЕ МЕНЬШЕ N сцен»: модель выполняла число как задачу и под
+    // правовые и числовые реплики ставила пустой реквизит. Число сцен следует из визуальных задач.
+    `Речь длится ${args.duration.toFixed(0)} секунд. Сначала составь визуальные задачи всей истории, убери повторы по смыслу и отдай объяснения автору; ` +
+    `число сцен следует из этих задач, а не из длины речи. Перед ответом проверь ритм всей последовательности вместе с авторскими кусками по номерам фраз.` +
     (args.retryNote
       ? `\n\nПРЕДЫДУЩИЙ ТВОЙ ПЛАН НА ЭТУ ЖЕ РЕЧЬ НАРУШИЛ ЖЁСТКИЕ ТРЕБОВАНИЯ К СТРУКТУРЕ:\n${args.retryNote}\n` +
         `Составь план заново и исправь именно это. Остальное можно оставить прежним.`
@@ -914,6 +941,15 @@ export async function planStory(args: {
     throw new Error(`AI Film Story: ответ модели не разобрался как JSON (символов ${raw.length}, конец ответа: ...${tail})`);
   }
   const bible = normalizeBible(parsed, args.character, args.universe);
+  // Задача хранит и секунды речи: по ним разбор ритма отличает объяснение от забытого отрезка.
+  for (const t of bible.visualTasks ?? []) {
+    const from = phrases.find((p) => p.index === t.fromPhrase);
+    const to = phrases.find((p) => p.index === t.toPhrase) ?? from;
+    if (from && to) {
+      t.start = from.start;
+      t.end = Math.max(from.start, to.end);
+    }
+  }
   const beats = beatsFromRaw(parsed.beats ?? [], phrases, args.duration, args.words);
   if (!beats.length) throw new Error("AI Film Story: модель не вернула биты");
   // Герой истории и постоянный персонаж — один человек: в тексте сцен остаётся одно имя,

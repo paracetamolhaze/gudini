@@ -65,7 +65,7 @@ test("M: субтитры — верхний слой и на авторе, и �
 test("клип короче своего окна — ошибка сборки, а не тихая заморозка", () => {
   const plan = plan120();
   const clips = plan.groups.map((g) => ({ groupId: g.id, file: `x-${g.id}.mp4`, seconds: g.id === "G2" ? 4 : 8 }));
-  assert.throws(() => overlaysFor(plan, clips), /короче своего отрезка/);
+  assert.throws(() => overlaysFor(plan, clips), /берёт клип группы G2/);
 });
 
 test("N: смена одного независимого shot не меняет ключи остальных", () => {

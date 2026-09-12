@@ -635,6 +635,47 @@ export function auditPlan(
     "block",
   );
 
+  // Визуальные задачи всей истории. Судятся, когда планировщик их составил: сцена без задачи —
+  // заполнитель, две сцены с одной задачей — одно и то же понимание с другого ракурса, сцена
+  // поверх объяснения — выдуманная картинка к тому, что честно не снять. Появилось после ролика,
+  // где под реплики о налоге встали пустая карточка, штамп отказа и безликий лист.
+  const tasks = bible.visualTasks ?? [];
+  if (tasks.length) {
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    add(
+      "scene-without-visual-task",
+      shown.filter((b) => !b.visualTask || !byId.has(b.visualTask)).map((b) => b.id),
+      "Сцена не решает ни одной визуальной задачи истории — это заполнитель: привяжите её к задаче или отдайте отрезок автору",
+    );
+    add(
+      "explanation-staged",
+      shown.filter((b) => byId.get(b.visualTask ?? "")?.role === "explanation").map((b) => b.id),
+      "Сцена поставлена на объяснение, для которого честной картинки нет — такой отрезок несёт автор",
+    );
+    const firstFor = new Map<string, StoryBeat>();
+    const repeats: string[] = [];
+    for (const b of shown) {
+      if (!b.visualTask) continue;
+      const prev = firstFor.get(b.visualTask);
+      if (!prev) firstFor.set(b.visualTask, b);
+      // одна непрерывная сцена, разложенная на клипы цепочки, повтором не считается
+      else if (!(prev.continuityGroup && prev.continuityGroup === b.continuityGroup)) repeats.push(b.id);
+    }
+    add(
+      "repeated-visual-task",
+      repeats,
+      "Несколько сцен решают одну и ту же визуальную задачу — другой ракурс не даёт зрителю нового понимания, оставьте одну",
+    );
+    const pictured = tasks.filter((t) => t.role !== "explanation");
+    const twins: string[] = [];
+    for (let i = 0; i < pictured.length; i++) {
+      for (let j = i + 1; j < pictured.length; j++) {
+        if (sameLearning(pictured[i].learns, pictured[j].learns)) twins.push(`${pictured[i].id}/${pictured[j].id}`);
+      }
+    }
+    add("duplicate-visual-tasks", twins, "Две визуальные задачи дают зрителю одно и то же понимание — объедините их в одну");
+  }
+
   // Сцена, которая сама объявляет себя происходящей раньше предыдущих. В ролике на сорок
   // секунд флешбэк читается как ошибка монтажа, а не как приём: после порванного купола
   // зритель видит, как герой только надевает запасной ранец «перед прыжком».
@@ -650,4 +691,17 @@ export function auditPlan(
   }
 
   return out;
+}
+
+
+/** Одно ли понимание описывают две задачи: почти все значимые слова совпадают по основе. */
+export function sameLearning(a: string, b: string): boolean {
+  const stems = (t: string) =>
+    new Set(t.toLowerCase().replace(/ё/g, "е").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4).map((w) => w.slice(0, 5)));
+  const x = stems(a);
+  const y = stems(b);
+  if (x.size < 2 || y.size < 2) return false;
+  let common = 0;
+  for (const w of x) if (y.has(w)) common++;
+  return common / Math.min(x.size, y.size) >= 0.7;
 }

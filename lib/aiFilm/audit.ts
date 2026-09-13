@@ -300,7 +300,8 @@ export function auditPlan(
 
   // Обязательные события. Проверяется ПОСЛЕ нормализации, группировки и сокращения бюджета:
   // именно там события пропадали незаметно.
-  const missing = events.filter((e) => e.required && e.objects.length && !eventCovered(e, beats, shots));
+  const carried = new Set(bible.authorCarried ?? []);
+  const missing = events.filter((e) => e.required && e.objects.length && !carried.has(e.id) && !eventCovered(e, beats, shots));
   if (missing.length) {
     out.push({
       code: "event-not-covered",
@@ -308,6 +309,21 @@ export function auditPlan(
       beatIds: [],
       eventIds: missing.map((e) => e.id),
       message: `Обязательные события не показаны: ${missing.map((e) => `${e.id} (${e.observable})`).join("; ")}`,
+    });
+  }
+
+  // Обязательное для понимания не всегда обязательно к показу: если планировщик сам отдал эти
+  // реплики объяснению, событие несёт голос автора. Так было с отказом в кладбищенской льготе:
+  // требование «покажи каждое» во втором заходе вернуло выдуманный штамп на бумагах ООО.
+  // Решение остаётся видимым в замечаниях, но второго захода за картинкой нет.
+  const voiced = events.filter((e) => carried.has(e.id));
+  if (voiced.length) {
+    out.push({
+      code: "event-carried-by-author",
+      severity: "warn",
+      beatIds: [],
+      eventIds: voiced.map((e) => e.id),
+      message: `Обязательные события несёт голос автора, картинки к ним нет: ${voiced.map((e) => `${e.id} (${e.observable})`).join("; ")}`,
     });
   }
 
@@ -635,6 +651,81 @@ export function auditPlan(
     "block",
   );
 
+  // Визуальные задачи всей истории. Судятся, когда планировщик их составил: сцена без задачи —
+  // заполнитель, две сцены с одной задачей — одно и то же понимание с другого ракурса, сцена
+  // поверх объяснения — выдуманная картинка к тому, что честно не снять. Появилось после ролика,
+  // где под реплики о налоге встали пустая карточка, штамп отказа и безликий лист.
+  const tasks = bible.visualTasks ?? [];
+  if (tasks.length) {
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    add(
+      "scene-without-visual-task",
+      shown.filter((b) => !b.visualTask || !byId.has(b.visualTask)).map((b) => b.id),
+      "Сцена не решает ни одной визуальной задачи истории — это заполнитель: привяжите её к задаче или отдайте отрезок автору",
+    );
+    // Под объяснение можно поставить иллюстрацию, которая помогает пониманию: голос называет сумму
+    // налога поверх кадра с полем. Нельзя ставить выдуманное доказательство — документ, штамп,
+    // чиновника, экран с цифрами: такой кадр утверждает то, чего речь не показывала.
+    add(
+      "explanation-faked-proof",
+      shown
+        .filter((b) => byId.get(b.visualTask ?? "")?.role === "explanation")
+        .filter((b) => PROOF_PROPS.test(`${b.visualAction} ${b.keyMoment} ${b.motion} ${(b.scene?.props ?? []).join(" ")} ${b.scene?.mechanics ?? ""}`))
+        .map((b) => b.id),
+      "Под объяснение поставлено выдуманное доказательство: документ, штамп, чиновник или цифры — иллюстрация помогает пониманию, но не изображает то, чего речь не показывала",
+    );
+    // Объяснение не оправдывает пропуск показываемого события: разрыв купола, вскрытие посылки или
+    // передача ключа остаются обязательными к показу, даже если их реплики отданы объяснению.
+    // Голосу отдаётся только исход, который честно не снять: право, статус, сумма, причина.
+    const explainedPhrases = new Set<number>();
+    for (const t of tasks) {
+      if (t.role !== "explanation") continue;
+      for (let i = t.fromPhrase; i <= Math.min(t.toPhrase, t.fromPhrase + 500); i++) explainedPhrases.add(i);
+    }
+    const hidden = events.filter((e) => {
+      if (!e.required || !e.id || voiceOnlyEvent(e)) return false;
+      for (let i = e.fromPhrase; i <= Math.min(e.toPhrase, e.fromPhrase + 500); i++) if (!explainedPhrases.has(i)) return false;
+      return true;
+    });
+    if (hidden.length) {
+      out.push({
+        code: "explanation-hides-event",
+        severity: "warn",
+        beatIds: [],
+        eventIds: hidden.map((e) => e.id),
+        message: `Показываемое событие отдано объяснению: ${hidden.map((e) => `${e.id} (${e.observable})`).join("; ")} — это действие с предметом, его нужно показать, а не рассказать`,
+      });
+    }
+    const firstFor = new Map<string, StoryBeat>();
+    const repeats: string[] = [];
+    for (const b of shown) {
+      if (!b.visualTask) continue;
+      const prev = firstFor.get(b.visualTask);
+      if (!prev) {
+        firstFor.set(b.visualTask, b);
+        continue;
+      }
+      // одна непрерывная сцена, разложенная на клипы цепочки, повтором не считается
+      if (prev.continuityGroup && prev.continuityGroup === b.continuityGroup) continue;
+      // Две сцены одной задачи допустимы, когда вторая добавляет новое: общий план и деталь вместе
+      // раскрывают один смысл. Повтор — когда решающий момент тот же, а меняется только ракурс.
+      if (sameLearning(`${prev.keyMoment} ${prev.frameSubject}`, `${b.keyMoment} ${b.frameSubject}`)) repeats.push(b.id);
+    }
+    add(
+      "repeated-visual-task",
+      repeats,
+      "Сцена повторяет решающий момент предыдущей сцены той же задачи — другой ракурс не даёт зрителю нового понимания, оставьте одну или покажите новое",
+    );
+    const pictured = tasks.filter((t) => t.role !== "explanation");
+    const twins: string[] = [];
+    for (let i = 0; i < pictured.length; i++) {
+      for (let j = i + 1; j < pictured.length; j++) {
+        if (sameLearning(pictured[i].learns, pictured[j].learns)) twins.push(`${pictured[i].id}/${pictured[j].id}`);
+      }
+    }
+    add("duplicate-visual-tasks", twins, "Две визуальные задачи дают зрителю одно и то же понимание — объедините их в одну");
+  }
+
   // Сцена, которая сама объявляет себя происходящей раньше предыдущих. В ролике на сорок
   // секунд флешбэк читается как ошибка монтажа, а не как приём: после порванного купола
   // зритель видит, как герой только надевает запасной ранец «перед прыжком».
@@ -650,4 +741,42 @@ export function auditPlan(
   }
 
   return out;
+}
+
+
+/**
+ * Исход, который честно не снять: право, статус, сумма, причина, решение ведомства. Только такое
+ * событие можно отдать голосу автора. Всё, что меняет предмет — купол, посылку, экран, ключ в
+ * руке, — остаётся обязательным к показу, как бы речь его ни называла.
+ */
+const VOICE_ONLY_OUTCOME =
+  /\b(?:tax(?:es|ed|ation)?|exempt(?:ion|ed)?|status|register(?:ed|ation)?|legal(?:ly)?|illegal(?:ly)?|law(?:ful)?|ownership|classif(?:ied|ication)|denied|denial|approv(?:ed|al)|granted|reject(?:ed|ion)|price|cost|sum|amount|dollars?|percent|rate|fee|fine|penalt(?:y|ies)|ruling|verdict|licen[cs]e|permit(?:ted)?|entitled|qualif(?:y|ies|ied)|because|reason|savings?|worth|valued?|debt|loan|interest|budget|revenue|profit|loss|deduction|liabilit(?:y|ies))\b/i;
+const PHYSICAL_CHANGE =
+  /\b(?:tears?|torn|rips?|opens?|opened|unpacks?|unwraps?|pulls?|drops?|falls?|jumps?|lands|landed|landing|throws?|breaks?|broken|snaps?|deploys?|inflates?|collapses?|catches?|hits?|slams?|spills?|pours?|cuts?|lifts?|pushes?|closes?|closed|clicks?|presses?|taps?|types?|hands?|handed|pass(?:es|ed)?|changes? hands|slides?|swings?|kicks?|rolls?|crashes?|bursts?|shreds?|flips?|grabs?|releases?|launches?|climbs?|runs?|walks?|screen|display|lights? up|turns? on|turns? off|signs?|signed|stamps?|stamped)\b/i;
+
+/** Проверка на документ, штамп, чиновника и цифры в кадре под объяснением. */
+const PROOF_PROPS =
+  /\b(?:documents?|paperwork|papers|forms?|stamps?|stamped|seals?|certificates?|contracts?|invoices?|receipts?|tax bill|ledger|signature|signs the|official|clerk|inspector|notary|court|verdict|figures? (?:on|printed)|numbers? (?:on|printed)|amount (?:on|printed))\b/i;
+
+/**
+ * Можно ли отдать событие голосу автора: все его носители абстрактны (статус, право, сумма) и
+ * ни в наблюдаемом изменении, ни в состояниях нет физического действия с предметом.
+ */
+export function voiceOnlyEvent(e: Pick<StoryEvent, "observable" | "objects">): boolean {
+  const all = `${e.observable} ${e.objects.map((o) => `${o.id.replace(/[-_]+/g, " ")} ${o.before} ${o.after}`).join(" ")}`;
+  if (PHYSICAL_CHANGE.test(all)) return false;
+  if (!e.objects.length) return VOICE_ONLY_OUTCOME.test(e.observable);
+  return e.objects.every((o) => VOICE_ONLY_OUTCOME.test(`${o.id.replace(/[-_]+/g, " ")} ${o.before} ${o.after}`));
+}
+
+/** Одно ли понимание описывают две задачи: почти все значимые слова совпадают по основе. */
+export function sameLearning(a: string, b: string): boolean {
+  const stems = (t: string) =>
+    new Set(t.toLowerCase().replace(/ё/g, "е").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4).map((w) => w.slice(0, 5)));
+  const x = stems(a);
+  const y = stems(b);
+  if (x.size < 2 || y.size < 2) return false;
+  let common = 0;
+  for (const w of x) if (y.has(w)) common++;
+  return common / Math.min(x.size, y.size) >= 0.7;
 }

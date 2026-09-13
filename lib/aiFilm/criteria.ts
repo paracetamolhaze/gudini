@@ -1,4 +1,4 @@
-import { eventCovered } from "./audit";
+import { eventCovered, voiceOnlyEvent } from "./audit";
 import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
 
 /**
@@ -17,7 +17,7 @@ import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
  * генерации: ролик с поздним началом смотрибелен, а вот кадра с невыполнимым указанием
  * не существует вовсе.
  */
-export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present"]);
+export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present", "scene-without-visual-task", "explanation-faked-proof", "explanation-hides-event", "repeated-visual-task", "duplicate-visual-tasks", "author-flicker", "author-stretch-explained", "no-visual-tasks"]);
 
 /** Нарушения, запрещающие оплату. */
 export function gateIssues(plan: Pick<AiFilmPlan, "issues">): PlanIssue[] {
@@ -38,8 +38,38 @@ export function requiredEvents(events: StoryEvent[] | undefined): StoryEvent[] {
  * Какие обязательные события ИСХОДНОГО контракта план не показывает. Проверяется по
  * конечным запросам: бит мог остаться в таймлайне, но не попасть ни в один клип.
  */
-export function missingRequired(plan: Pick<AiFilmPlan, "beats" | "shots">, required: StoryEvent[]): string[] {
-  return required.filter((e) => !eventCovered(e, plan.beats, plan.shots)).map((e) => e.id);
+export function missingRequired(
+  plan: Pick<AiFilmPlan, "beats" | "shots"> & { bible?: { authorCarried?: string[] } },
+  required: StoryEvent[],
+): string[] {
+  const carried = new Set(plan.bible?.authorCarried ?? []);
+  return required.filter((e) => !carried.has(e.id) && !eventCovered(e, plan.beats, plan.shots)).map((e) => e.id);
+}
+
+/**
+ * Обязательные события, чьи реплики планировщик сам отдал объяснению И которые честно не снять:
+ * право, статус, сумма, причина. Их несёт голос автора — требовать под них сцену значит снова
+ * получить выдуманный штамп. Действие с предметом (разрыв купола, вскрытие посылки, передача
+ * ключа) голосу не отдаётся, как бы речь его ни называла: обязательность для рассказа и
+ * обязательность показа — разные вещи, и метка «объяснение» вторую не снимает.
+ */
+export function authorCarriedEvents(bible: {
+  events?: StoryEvent[];
+  visualTasks?: { role: string; fromPhrase: number; toPhrase: number }[];
+}): string[] {
+  const explained = new Set<number>();
+  for (const t of bible.visualTasks ?? []) {
+    if (t.role !== "explanation") continue;
+    for (let i = t.fromPhrase; i <= Math.min(t.toPhrase, t.fromPhrase + 500); i++) explained.add(i);
+  }
+  if (!explained.size) return [];
+  return (bible.events ?? [])
+    .filter((e) => e.required && e.id && voiceOnlyEvent(e))
+    .filter((e) => {
+      for (let i = e.fromPhrase; i <= Math.min(e.toPhrase, e.fromPhrase + 500); i++) if (!explained.has(i)) return false;
+      return true;
+    })
+    .map((e) => e.id);
 }
 
 /**

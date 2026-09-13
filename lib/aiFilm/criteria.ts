@@ -38,8 +38,36 @@ export function requiredEvents(events: StoryEvent[] | undefined): StoryEvent[] {
  * Какие обязательные события ИСХОДНОГО контракта план не показывает. Проверяется по
  * конечным запросам: бит мог остаться в таймлайне, но не попасть ни в один клип.
  */
-export function missingRequired(plan: Pick<AiFilmPlan, "beats" | "shots">, required: StoryEvent[]): string[] {
-  return required.filter((e) => !eventCovered(e, plan.beats, plan.shots)).map((e) => e.id);
+export function missingRequired(
+  plan: Pick<AiFilmPlan, "beats" | "shots"> & { bible?: { authorCarried?: string[] } },
+  required: StoryEvent[],
+): string[] {
+  const carried = new Set(plan.bible?.authorCarried ?? []);
+  return required.filter((e) => !carried.has(e.id) && !eventCovered(e, plan.beats, plan.shots)).map((e) => e.id);
+}
+
+/**
+ * Обязательные события, чьи реплики планировщик сам отдал объяснению. Их несёт голос автора:
+ * требовать под них сцену значит снова получить выдуманный штамп или документ. Считается по
+ * номерам фраз: событие целиком лежит внутри объяснений.
+ */
+export function authorCarriedEvents(bible: {
+  events?: StoryEvent[];
+  visualTasks?: { role: string; fromPhrase: number; toPhrase: number }[];
+}): string[] {
+  const explained = new Set<number>();
+  for (const t of bible.visualTasks ?? []) {
+    if (t.role !== "explanation") continue;
+    for (let i = t.fromPhrase; i <= Math.min(t.toPhrase, t.fromPhrase + 500); i++) explained.add(i);
+  }
+  if (!explained.size) return [];
+  return (bible.events ?? [])
+    .filter((e) => e.required && e.id)
+    .filter((e) => {
+      for (let i = e.fromPhrase; i <= Math.min(e.toPhrase, e.fromPhrase + 500); i++) if (!explained.has(i)) return false;
+      return true;
+    })
+    .map((e) => e.id);
 }
 
 /**

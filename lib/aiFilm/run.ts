@@ -7,7 +7,7 @@ import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
 import { planStory, reconcileEventRefs, STORY_VERSION } from "./story";
 import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
-import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, requiredEvents, retryIssues } from "./criteria";
+import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, requiredEvents, retryIssues, authorCarriedEvents } from "./criteria";
 import { generateGroups } from "./generate";
 import { loadCharacterProfile } from "./character";
 import { loadUniverseProfile } from "./universe";
@@ -121,6 +121,9 @@ export async function planFilm(args: {
       character, universe, duration, coverage: args.coverage, retryNote, onCall: args.onCall,
     });
   let story = await ask();
+  // Какие обязательные события несёт голос автора, решает первый ответ: во втором заходе под
+  // давлением списка нарушений модель могла бы отдать объяснению то, что обязана показать.
+  story.bible.authorCarried = authorCarriedEvents(story.bible);
   args.onStep?.("AI-фильм: план сцен", 30);
   let plan = buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg });
   // Оба кандидата сохраняются: по ним видно, что выбрал планировщик, а что изменила сборка.
@@ -142,9 +145,10 @@ export async function planFilm(args: {
     // Во второй заход уходит и сам контракт: те же идентификаторы, те же состояния.
     // Иначе модель переименовывает событие, прежнее возвращается принудительно, и в плане
     // оказываются два обязательства об одном и том же — одно из них навсегда непоказанное.
-    const contract = required.length
+    const mustShow = required.filter((e) => !(story.bible.authorCarried ?? []).includes(e.id));
+    const contract = mustShow.length
       ? `\nОбязательные события остаются теми же, с теми же id и состояниями. Покажи каждое:\n` +
-        required
+        mustShow
           .map((e) => `- ${e.id}: ${e.observable} (${e.objects.map((o) => `${o.id}: ${o.before} → ${o.after}`).join("; ")})`)
           .join("\n") +
         `\nСостояние предмета после сцены пиши теми же словами, что и after у события.`
@@ -152,7 +156,7 @@ export async function planFilm(args: {
     const retry = await ask(issueLines(first).map((w) => `- ${w}`).join("\n") + contract);
     // Обязательный набор первого захода возвращается силой: снять обязательность вместо
     // постановки сцены модель не может — это делало проверку зелёной, не показав события.
-    const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events) };
+    const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events), authorCarried: story.bible.authorCarried };
     // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
     // событие в сцене и забывает переписать его в bible.events.
     reconcileEventRefs(retryBible, retry.beats);

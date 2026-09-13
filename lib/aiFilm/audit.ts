@@ -300,7 +300,8 @@ export function auditPlan(
 
   // Обязательные события. Проверяется ПОСЛЕ нормализации, группировки и сокращения бюджета:
   // именно там события пропадали незаметно.
-  const missing = events.filter((e) => e.required && e.objects.length && !eventCovered(e, beats, shots));
+  const carried = new Set(bible.authorCarried ?? []);
+  const missing = events.filter((e) => e.required && e.objects.length && !carried.has(e.id) && !eventCovered(e, beats, shots));
   if (missing.length) {
     out.push({
       code: "event-not-covered",
@@ -308,6 +309,21 @@ export function auditPlan(
       beatIds: [],
       eventIds: missing.map((e) => e.id),
       message: `Обязательные события не показаны: ${missing.map((e) => `${e.id} (${e.observable})`).join("; ")}`,
+    });
+  }
+
+  // Обязательное для понимания не всегда обязательно к показу: если планировщик сам отдал эти
+  // реплики объяснению, событие несёт голос автора. Так было с отказом в кладбищенской льготе:
+  // требование «покажи каждое» во втором заходе вернуло выдуманный штамп на бумагах ООО.
+  // Решение остаётся видимым в замечаниях, но второго захода за картинкой нет.
+  const voiced = events.filter((e) => carried.has(e.id));
+  if (voiced.length) {
+    out.push({
+      code: "event-carried-by-author",
+      severity: "warn",
+      beatIds: [],
+      eventIds: voiced.map((e) => e.id),
+      message: `Обязательные события несёт голос автора, картинки к ним нет: ${voiced.map((e) => `${e.id} (${e.observable})`).join("; ")}`,
     });
   }
 

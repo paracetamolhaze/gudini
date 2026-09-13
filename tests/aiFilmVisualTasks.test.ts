@@ -103,3 +103,27 @@ test("визуальные задачи: заполнитель, повтор п
   const legacy = auditPlan([beat("B1", 0, 6)], bible, character).map((i) => i.code);
   assert.ok(!legacy.some((c) => /visual-task|explanation-staged/.test(c)), legacy.join(","));
 });
+
+test("обязательное для понимания не обязательно к показу: объяснение несёт автор", async () => {
+  const { authorCarriedEvents, missingRequired } = await import("../lib/aiFilm/criteria");
+  const bible = normalizeBible({ bible: { storyType: "explainer" } } as any, character, universe);
+  const denied = {
+    id: "exemption-denied", observable: "the exemption is denied", required: true, fromPhrase: 3, toPhrase: 4,
+    objects: [{ id: "exemption", before: "requested", after: "denied", role: "change" as const }],
+  };
+  const tasks: VisualTask[] = [
+    { id: "place", learns: "где всё происходит", role: "illustration", fromPhrase: 1, toPhrase: 2, action: "a wide view of the place" },
+    { id: "why-denied", learns: "почему льготу не дали", role: "explanation", fromPhrase: 3, toPhrase: 4, action: "" },
+  ];
+  const withTasks = { ...bible, events: [denied], visualTasks: tasks };
+  assert.deepEqual(authorCarriedEvents(withTasks), ["exemption-denied"]);
+  const beats = [beat("B1", 0, 6, { visualTask: "place" })];
+  const carried = auditPlan(beats, { ...withTasks, authorCarried: ["exemption-denied"] }, character).map((i) => i.code);
+  assert.ok(carried.includes("event-carried-by-author"), carried.join(","));
+  assert.ok(!carried.includes("event-not-covered"), carried.join(","));
+  assert.deepEqual(missingRequired({ beats, shots: [], bible: { authorCarried: ["exemption-denied"] } } as any, [denied]), []);
+  // без объяснения то же событие по-прежнему обязано быть показано
+  const plain = { ...bible, events: [denied], visualTasks: [tasks[0]] };
+  assert.deepEqual(authorCarriedEvents(plain), []);
+  assert.ok(auditPlan(beats, plain, character).map((i) => i.code).includes("event-not-covered"));
+});

@@ -154,6 +154,44 @@ test("позднее начало не гонит во второй заход �
   assert.ok(RETRY_WARN_CODES.has("voice-contradicts-facts"));
 });
 
+test("обстановка сцены не считается уже достигнутым результатом", async () => {
+  const { eventCovered } = await import("../lib/aiFilm/audit");
+  // настоящий случай: «standing outside the car» → «seated inside the car»; «car» есть в обоих
+  // состояниях сцены, а в исходном состоянии контракта его нет — посадка не засчитывалась
+  const board = ev("board", "two teenagers get into the car", [{ id: "teens-location", before: "standing outside on the street", after: "seated inside the car", role: "change" }]);
+  const shown = beat("B1", 0, 8, {
+    eventIds: ["board"],
+    objects: [{ id: "teens-location", before: "standing on the sidewalk outside the car", after: "seated inside the back seat of the car", role: "change" }],
+  });
+  assert.equal(eventCovered(board, [shown]), true);
+  // а уже достигнутый результат по-прежнему не засчитывается
+  const already = beat("B1", 0, 8, {
+    eventIds: ["board"],
+    objects: [{ id: "teens-location", before: "already seated inside the car", after: "seated inside the car, doors closing", role: "change" }],
+  });
+  assert.equal(eventCovered(board, [already]), false);
+  // и обстановка сама по себе результатом не становится: рядом с машиной остались
+  const leaning = beat("B1", 0, 8, {
+    eventIds: ["board"],
+    objects: [{ id: "teens-location", before: "standing by the car", after: "leaning on the car", role: "change" }],
+  });
+  assert.equal(eventCovered(board, [leaning]), false);
+});
+
+test("обязательное событие без перехода — порча контракта, а не «не показано»", () => {
+  const waiting = ev("waiting", "the teens remain seated calmly inside the stopped car", [{ id: "car-doors", before: "unlocked", after: "held closed with teens inside", role: "keep" }]);
+  const bible = { ...normalizeBible({ bible: { storyType: "news" } } as any, character, universe, FACTS), events: [waiting, surrounded] };
+  const issues = auditPlan(
+    [beat("B1", 0, 8, { eventIds: ["surrounded-stop"], objects: surrounded.objects })],
+    bible,
+    character,
+  );
+  const codes = issues.map((i) => i.code);
+  assert.ok(codes.includes("event-without-change"), codes.join(","));
+  assert.ok(!issues.some((i) => i.code === "event-not-covered" && (i.eventIds ?? []).includes("waiting")), codes.join(","));
+  assert.deepEqual(showableEvents(bible).map((e) => e.id), ["surrounded-stop"]);
+});
+
 test("границы правила: документальная новость, вымышленная история, условный пример", () => {
   const fable = ev("guard-decides", "the tower guard system decides to lock the gate and sound the alarm", [
     { id: "gate", before: "open", after: "locked with the alarm sounding", role: "change" },

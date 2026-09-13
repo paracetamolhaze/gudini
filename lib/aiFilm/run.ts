@@ -115,12 +115,17 @@ export async function planFilm(args: {
   onStep?: (step: string, progress: number) => void;
   /** запрос и ответ модели на каждом заходе: нужен разбору, на выбор плана не влияет */
   onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
+  /** подмена вызова модели по заходам: продолжить прерванный прогон от сохранённого ответа; в конвейере не задаётся */
+  complete?: (a: { system: string; user: string; retry: boolean }) => Promise<string>;
 }): Promise<{ plan: AiFilmPlan; story: Awaited<ReturnType<typeof planStory>>; retried: boolean; accepted: boolean; candidates: { first: AiFilmPlan; retry?: AiFilmPlan } }> {
   const { character, universe, duration, cfg } = args;
   const ask = (retryNote?: string) =>
     planStory({
       words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary, researchFacts: args.researchFacts,
       character, universe, duration, coverage: args.coverage, retryNote, onCall: args.onCall,
+      // подмена вызова модели: даёт продолжить прерванный прогон от сохранённого ответа тем же
+      // кодом — первый заход из файла, второй к модели; в конвейере не задаётся
+      complete: args.complete ? (a) => args.complete!({ ...a, retry: Boolean(retryNote) }) : undefined,
     });
   let story = await ask();
   // Какие обязательные события несёт голос автора, решает первый ответ: во втором заходе под

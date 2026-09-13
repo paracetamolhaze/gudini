@@ -71,6 +71,8 @@ export function effectiveBasis(e: Pick<StoryEvent, "basis" | "basisFact" | "obse
  */
 export function mustShowEvent(e: StoryEvent, facts: string[], documentary = true): boolean {
   if (!e.required || !e.id || !e.objects.length) return false;
+  // событие без перехода — обстановка, показать его как событие нельзя; об этом отдельный запрет
+  if (!e.objects.some((o) => objectRole(o) === "change")) return false;
   const basis = effectiveBasis(e, facts);
   if (basis === "contradicted") return false;
   // Ограничение относится к фактическим утверждениям документальной истории: скрытый механизм
@@ -288,13 +290,19 @@ export function eventCovered(event: StoryEvent, beats: StoryBeat[], shots?: Film
       // Сцена обязана что-то изменить. Неизменное состояние — это не показанное событие,
       // сколько бы слов из обещания в нём ни повторялось.
       if (before && sameState(before, after)) return false;
+      // Слова, стоящие и в «до», и в «после» самой сцены, — её обстановка, а не переход:
+      // «standing outside the car» → «seated inside the car» меняет положение, а не машину.
+      // Раньше «car» из обещания «seated inside the car» считалось достигнутым уже в «до»
+      // сцены, и показанная посадка не засчитывалась.
+      const context = before ? [...stateTokens(before).words].filter((w) => stateTokens(after).words.has(w)) : [];
+      const skip = [...ignore, ...context];
       // Результат уже достигнут ДО действия: «уже порванный купол колышется на ветру»
       // показывает последствие, а не сам разрыв. Добавленные слова про ветер меняют строку,
       // но не делают событие показанным.
-      if (before && stateReached(want.after, before, want.before, ignore)) return false;
+      if (before && stateReached(want.after, before, want.before, skip)) return false;
       // Результат сцены — именно обещанный результат, со знаком: «review not submitted»
       // не закрывает «review submitted».
-      if (!stateReached(want.after, after, want.before, ignore)) return false;
+      if (!stateReached(want.after, after, want.before, skip)) return false;
       return true;
     }),
   );
@@ -432,6 +440,19 @@ export function auditPlan(
     "Сцена ставит утверждение, которое справка опровергает — такой кадр не снимается, конфликт решает автор",
     "block",
   );
+  // Обязательное событие, у которого нет перехода, только сохраняемые условия: сцена может
+  // честно показать всё обещанное, и это всё равно не событие. Раньше это выходило как
+  // «не показано», и второй заход искал сцену, хотя чинить надо контракт.
+  const noChange = events.filter((e) => e.required && e.id && e.objects.length && !e.objects.some((o) => objectRole(o) === "change"));
+  if (noChange.length) {
+    out.push({
+      code: "event-without-change",
+      severity: "block",
+      beatIds: [],
+      eventIds: noChange.map((e) => e.id),
+      message: `У обязательного события нет перехода, только сохраняемые условия — это обстановка, а не событие: ${noChange.map((e) => `${e.id} (${e.observable})`).join("; ")}. Опишите, что меняется, или снимите обязательность`,
+    });
+  }
   const missing = events.filter((e) => mustShowEvent(e, facts, documentary) && !carried.has(e.id) && !eventCovered(e, beats, shots));
   if (missing.length) {
     out.push({

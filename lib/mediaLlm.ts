@@ -406,20 +406,75 @@ async function visionOnce(
 }
 
 /** Снимает markdown-ограждение и парсит JSON. Ошибка разбора — это ошибка стадии. */
-export function parseJson<T>(raw: string, stage: string): T {
-  const cleaned = raw
-    .replace(/^```(json)?/m, "")
-    .replace(/```$/m, "")
-    .trim();
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        return JSON.parse(match[0]) as T;
-      } catch {}
+/**
+ * Разбор JSON из ответа модели. Модель иногда пишет перед JSON рассуждение («Смотрю на историю:
+ * это реальное событие…») и кладёт сам ответ в блок ```json. Прежний разбор снимал ограду только
+ * в начале строки и брал текст от первой фигурной скобки, поэтому скобка в рассуждении ломала
+ * весь ответ, и оплаченный план пропадал. Теперь сначала берётся содержимое ограды ```json, где
+ * бы она ни стояла, затем перебираются сбалансированные объекты от каждой открывающей скобки.
+ */
+/** Позиция «}», на которой глубина скобок падает до нуля раньше конца текста; null — таких нет. */
+function earlyClose(text: string): number | null {
+  let depth = 0;
+  let inString = false;
+  const last = text.trimEnd().length - 1;
+  for (let j = 0; j < text.length; j++) {
+    const ch = text[j];
+    if (inString) {
+      if (ch === "\\") j++;
+      else if (ch === '"') inString = false;
+      continue;
     }
-    throw new Error(`${stage}: ответ модели не разобрался как JSON`);
+    if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0 && ch === "}" && j < last) return j;
+    }
   }
+  return null;
+}
+
+export function parseJson<T>(raw: string, stage: string): T {
+  const candidates: string[] = [];
+  const fenced = [...raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((m) => m[1].trim()).filter(Boolean);
+  candidates.push(...fenced);
+  candidates.push(raw.replace(/^```(json)?/m, "").replace(/```$/m, "").trim());
+  // сбалансированные объекты: от каждой открывающей скобки до парной закрывающей, длинные первыми
+  const spans: string[] = [];
+  for (let i = raw.indexOf("{"); i >= 0 && spans.length < 8; i = raw.indexOf("{", i + 1)) {
+    let depth = 0;
+    let inString = false;
+    for (let j = i; j < raw.length; j++) {
+      const ch = raw[j];
+      if (inString) {
+        if (ch === "\\") j++;
+        else if (ch === "\"") inString = false;
+        continue;
+      }
+      if (ch === "\"") inString = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) {
+        spans.push(raw.slice(i, j + 1));
+        break;
+      }
+    }
+  }
+  // Ранее закрытый объект: модель ставит лишнюю «}» после одного из списков, и дальше идёт
+  // «, "beats": [...]}». Сбалансированный объект тогда обрывается на середине ответа, а
+  // остаток — «лишние данные». Если после раннего закрытия стоит запятая, эта скобка лишняя.
+  // Починенный вариант пробуется ДО сбалансированных обрезков: иначе разбор принимал первую
+  // половину ответа за весь ответ, и план выходил без единой сцены.
+  for (const c of [...candidates]) {
+    const early = earlyClose(c);
+    if (early != null && /^\s*,/.test(c.slice(early + 1))) candidates.push(c.slice(0, early) + c.slice(early + 1));
+  }
+  candidates.push(...spans.sort((a, b) => b.length - a.length));
+  for (const c of candidates) {
+    try {
+      const v = JSON.parse(c);
+      if (v && typeof v === "object") return v as T;
+    } catch {}
+  }
+  throw new Error(`${stage}: ответ модели не разобрался как JSON`);
 }

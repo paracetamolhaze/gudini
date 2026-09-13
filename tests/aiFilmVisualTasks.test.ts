@@ -133,6 +133,20 @@ test("обязательное для понимания не обязатель
   assert.ok(auditPlan(beats, plain, character).map((i) => i.code).includes("event-not-covered"));
 });
 
+test("задачи и события на верхнем уровне ответа принимаются как из bible", () => {
+  const bible = normalizeBible(
+    {
+      bible: { storyType: "news" },
+      visualTasks: [{ id: "board", learns: "садятся в машину", role: "event", fromPhrase: 1, toPhrase: 2, action: "two teens climb in" }],
+      events: [{ id: "board", observable: "two teens get into the car", required: true, fromPhrase: 1, toPhrase: 2, objects: [{ id: "teens", before: "outside", after: "inside", role: "change" }] }],
+    } as any,
+    character,
+    universe,
+  );
+  assert.deepEqual((bible.visualTasks ?? []).map((t) => t.id), ["board"]);
+  assert.deepEqual(bible.events.map((e) => e.id), ["board"]);
+});
+
 test("объяснение без learns не выбрасывается: его роль решает ритм", () => {
   const bible = normalizeBible(
     { bible: { storyType: "explainer", visualTasks: [

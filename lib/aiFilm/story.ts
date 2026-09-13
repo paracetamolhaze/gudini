@@ -609,7 +609,10 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
   const storyType: StoryType = (STORY_TYPES as readonly string[]).includes(b.storyType) ? (b.storyType as StoryType) : "explainer";
   // События — контракт содержания. Без id и наблюдаемого изменения событие ничего не проверяет,
   // такие записи не сохраняем: пустой контракт хуже отсутствующего, он создаёт ложную уверенность.
-  const rawEvents: unknown[] = Array.isArray(b.events) ? b.events : [];
+  // Списки контракта модель иногда выносит на верхний уровень ответа вместо bible: план тогда
+  // выходил без событий и задач, хотя они были написаны. Принимаются оба места.
+  const top = raw as any;
+  const rawEvents: unknown[] = Array.isArray(b.events) ? b.events : Array.isArray(top?.events) ? top.events : [];
   const events: StoryEvent[] = rawEvents
     .map((e: any) => ({
       id: slugId(e?.id),
@@ -638,7 +641,7 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
   // человека подменять собой нельзя, его показывают им самим.
   // Визуальные задачи всей истории: без id и понимания для зрителя задача ничего не решает.
   // Неизвестная роль читается как иллюстрация — так сцена не пропадает молча.
-  const rawTasks: unknown[] = Array.isArray(b.visualTasks) ? b.visualTasks : [];
+  const rawTasks: unknown[] = Array.isArray(b.visualTasks) ? b.visualTasks : Array.isArray(top?.visualTasks) ? top.visualTasks : [];
   const visualTasks: VisualTask[] = rawTasks
     .map((t: any) => {
       const role: VisualTask["role"] = t?.role === "event" || t?.role === "explanation" ? t.role : "illustration";

@@ -285,3 +285,20 @@ test("механизм без предметов — не порча контр�
   const broken = auditPlan([beat("B1", 0, 8, { eventIds: ["surrounded-stop"], objects: surrounded.objects })], { ...bible, events: [bareFire, surrounded] }, character).map((i) => i.code);
   assert.ok(broken.includes("event-contract-broken"), broken.join(","));
 });
+
+test("время суток не прыгает между соседними сценами без названного разрыва во времени", () => {
+  const bible = normalizeBible({ bible: { storyType: "news" } } as any, character, universe, FACTS);
+  const stop = beat("B1", 0, 5, { location: "a daytime parking lot, car pulling in and stopping", visualAction: "the white car drives into an empty parking lot and stops" });
+  const police = beat("B2", 5, 12, { location: "a dim night parking lot with police light bars flashing", visualAction: "armed officers approach the stationary car" });
+  const codes = auditPlan([stop, police], bible, character).map((i) => i.code);
+  assert.ok(codes.includes("time-of-day-jump"), codes.join(","));
+  // тот же свет — замечания нет
+  const dayPolice = beat("B2", 5, 12, { location: "the same daytime parking lot", visualAction: "armed officers approach the stationary car" });
+  assert.ok(!auditPlan([stop, dayPolice], bible, character).map((i) => i.code).includes("time-of-day-jump"));
+  // названный разрыв во времени — допустимо
+  const later = beat("B2", 5, 12, { location: "a dim night parking lot", visualAction: "hours later, armed officers approach the stationary car" });
+  assert.ok(!auditPlan([stop, later], bible, character).map((i) => i.code).includes("time-of-day-jump"));
+  // без примет времени суток — нечего сравнивать
+  const plain = beat("B2", 5, 12, { location: "a parking lot", visualAction: "armed officers approach the stationary car" });
+  assert.ok(!auditPlan([stop, plain], bible, character).map((i) => i.code).includes("time-of-day-jump"));
+});

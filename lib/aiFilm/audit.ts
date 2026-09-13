@@ -598,6 +598,33 @@ export function auditPlan(
   // но обязательным запретом он быть не может.
   add("location-jump-back", flash, "Действие возвращается в прежнее место через сцену — проверьте порядок событий");
 
+  // Время суток между соседними сценами. В плане про такси машина останавливалась на дневной
+  // парковке, а через ноль секунд полиция подходила к ней ночью, хотя по речи прошло несколько
+  // минут. Два независимых клипа сняли бы один и тот же момент при разном свете. Смена
+  // времени суток допустима, только если она названа в сцене как прошедшее время.
+  const DAY = /\b(?:daytime|daylight|midday|noon|afternoon|morning|sunny|broad daylight)\b/i;
+  const NIGHT = /\b(?:night|nighttime|midnight|after dark|dusk|evening|late at night)\b/i;
+  const TIME_PASSES = /\b(?:hours? later|later that|the next (?:day|morning)|by (?:night|evening|morning)|as night falls|after dark falls|time-lapse|days? later)\b/i;
+  const tod = (b: StoryBeat): "day" | "night" | null => {
+    const t = `${b.location} ${b.visualAction} ${b.stateBefore}`;
+    const d = DAY.test(t);
+    const n = NIGHT.test(t);
+    if (d && !n) return "day";
+    if (n && !d) return "night";
+    return null;
+  };
+  const jumps: string[] = [];
+  for (let i = 1; i < shown.length; i++) {
+    const a = tod(shown[i - 1]);
+    const b = tod(shown[i]);
+    if (a && b && a !== b && !TIME_PASSES.test(`${shown[i].visualAction} ${shown[i].motion} ${shown[i].stateBefore}`)) jumps.push(shown[i].id);
+  }
+  add(
+    "time-of-day-jump",
+    jumps,
+    "Время суток меняется между соседними сценами без названного прошедшего времени — два клипа снимут один момент при разном свете; выровняйте время суток или назовите разрыв во времени в сцене",
+  );
+
   // Проверки по конечным запросам. До них разбор смотрел только на биты, и потерянная
   // сцена — бит есть в таймлайне, но ни в одном клипе его нет — выглядела как исправный план.
   if (shots) {

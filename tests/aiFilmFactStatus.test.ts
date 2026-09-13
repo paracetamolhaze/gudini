@@ -213,3 +213,27 @@ test("роль другого возраста: запрет в документ
   assert.equal(cast("news")?.severity, "block");
   assert.equal(cast("philosophy")?.severity, "warn");
 });
+
+test("цитата с человеком-исполнителем опровергает механизм системы, а не подтверждает его", () => {
+  const voiced = { ...fakeFault, basis: "confirmed" as const, basisFact: "Сотрудники Waymo дистанционно заглушили машину и сообщили пассажирам о технической неисправности" };
+  assert.equal(effectiveBasis(voiced, FACTS), "contradicted");
+  // цитата без человека-исполнителя подтверждает по-прежнему
+  const recorded = ev("camera-record", "the cabin camera records the passengers and the pistol", [{ id: "recording", before: "not recorded", after: "recorded", role: "change" }],
+    { basis: "confirmed", basisFact: "Инцидент со стрельбой внутри робота-такси был зафиксирован камерами автомобиля" });
+  assert.equal(effectiveBasis(recorded, FACTS), "confirmed");
+  const bible = { ...normalizeBible({ bible: { storyType: "news" } } as any, character, universe, FACTS), events: [voiced, surrounded] };
+  const codes = auditPlan([beat("B1", 0, 8, { eventIds: ["surrounded-stop"], objects: surrounded.objects })], bible, character).map((i) => i.code);
+  assert.ok(codes.includes("voice-contradicts-facts"), codes.join(","));
+});
+
+test("механизм без предметов — не порча контракта, а честный отказ выдумывать доказательство", () => {
+  const bare = { ...detect, objects: [] };
+  const bible = { ...normalizeBible({ bible: { storyType: "news" } } as any, character, universe, FACTS), events: [bare, surrounded] };
+  const codes = auditPlan([beat("B1", 0, 8, { eventIds: ["surrounded-stop"], objects: surrounded.objects })], bible, character).map((i) => i.code);
+  assert.ok(!codes.includes("event-contract-broken"), codes.join(","));
+  assert.ok(codes.includes("unconfirmed-mechanism"), codes.join(","));
+  // событие с предметом и без механизма без предметов по-прежнему ломает контракт
+  const bareFire = { ...fire, objects: [] };
+  const broken = auditPlan([beat("B1", 0, 8, { eventIds: ["surrounded-stop"], objects: surrounded.objects })], { ...bible, events: [bareFire, surrounded] }, character).map((i) => i.code);
+  assert.ok(broken.includes("event-contract-broken"), broken.join(","));
+});

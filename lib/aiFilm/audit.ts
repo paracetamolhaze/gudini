@@ -25,6 +25,8 @@ const DEVICE_AGENCY =
   /\b(?:system|systems|software|algorithm|ai|a\.i\.|artificial intelligence|neural|camera|cameras|sensor|sensors|assistant|autopilot|robot|robotaxi|the car|the cars|the vehicle|the vehicles|the taxi|computer|waymo|tesla)\b[^.;]{0,60}?\b(?:detects?|detected|recogni[sz]es?|recogni[sz]ed|registers?|registered|identif(?:y|ies|ied)|decides?|decided|triggers?|triggered|activates?|activated|alerts?|alerted|announces?|announced|notif(?:y|ies|ied)|calls?|called|contacts?|contacted|locks?|locked|chooses?|chose|selects?|selected|plans?|planned|prepares?|prepared|tricks?|tricked|deceives?|deceived|lies|lied|tells?|told|warns?|warned|reports?|reported|flags?|flagged|launches?|launched|initiates?|initiated)\b/i;
 /** Видимая реакция устройства, которой в кадре берутся доказывать механизм. */
 const DEVICE_REACTION = /\b(?:swivels?|swivel(?:l)?ing|blinks?|blinking|glows?|glowing|lights? up|flashes|flashing|beeps?|scans?|scanning|indicator|alert|alarm|warning light|red light)\b/i;
+/** Человек как исполнитель действия в цитате справки. */
+const HUMAN_AGENT = /сотрудник|оператор|работник|персонал|диспетчер|полицейск|люди\b|человек|employee|staff|operator|worker|dispatcher|officer|police|human|person\b|people/i;
 /** Роль, которая по возрасту или полу не для постоянного персонажа. */
 const ROLE_OTHER_PERSON = /подрост|\bteen|ребён|ребен|мальчик|девоч|девуш|женщин|\bgirl|\bwoman|\bboy\b|\bchild|\bkid\b|elderly|старик|пожил|старуш|\d{1,2}-летн/i;
 
@@ -51,10 +53,15 @@ export function mechanismEvent(e: Pick<StoryEvent, "observable" | "objects">): b
  * Статус факта после сверки со справкой: «подтверждено» и «опровергнуто» требуют цитаты,
  * которая есть в справке; без неё событие считается рассказом автора.
  */
-export function effectiveBasis(e: Pick<StoryEvent, "basis" | "basisFact">, facts: string[]): "confirmed" | "told" | "contradicted" {
+export function effectiveBasis(e: Pick<StoryEvent, "basis" | "basisFact" | "observable" | "objects">, facts: string[]): "confirmed" | "told" | "contradicted" {
   const b = e.basis ?? "told";
   if (b === "told") return "told";
-  return facts.length && factMatches(e.basisFact ?? "", facts) ? b : "told";
+  if (!facts.length || !factMatches(e.basisFact ?? "", facts)) return "told";
+  // Совпадение цитаты не есть смысловая поддержка. Одно расхождение ловится наверняка: событие
+  // приписывает действие системе, а цитата называет исполнителем человека — сотрудников,
+  // оператора, полицию. Такая цитата опровергает механизм, а не подтверждает его.
+  if (b === "confirmed" && mechanismEvent(e) && HUMAN_AGENT.test(e.basisFact ?? "")) return "contradicted";
+  return b;
 }
 
 /**
@@ -308,7 +315,13 @@ export function auditPlan(
   // Контракт событий проверяется первым: молча испорченный или пустой контракт превращал
   // непокрытый план в «зелёный», и проверка ниже подтверждала успех на пустом месте.
   const events = bible.events ?? [];
-  const broken = events.filter((e) => !e.id || !e.observable || !e.objects.length);
+  // Механизм без подтверждения и опровергнутое утверждение не обязаны быть показаны, поэтому
+  // отсутствие у них предметов — не порча контракта, а честный отказ выдумывать доказательство.
+  // Без этого планировщик наказывался запретом ровно за то, что не стал ставить сцену.
+  const factsForContract = bible.researchFacts ?? [];
+  const voiceOnly = (e: StoryEvent) =>
+    e.id && e.observable && (effectiveBasis(e, factsForContract) === "contradicted" || (isDocumentary(bible) && mechanismEvent(e) && effectiveBasis(e, factsForContract) !== "confirmed"));
+  const broken = events.filter((e) => !e.id || !e.observable || (!e.objects.length && !voiceOnly(e)));
   if (broken.length) {
     out.push({
       code: "event-contract-broken",
@@ -817,7 +830,9 @@ export function auditPlan(
       for (let i = t.fromPhrase; i <= Math.min(t.toPhrase, t.fromPhrase + 500); i++) explainedPhrases.add(i);
     }
     const hidden = events.filter((e) => {
-      if (!e.required || !e.id || voiceOnlyEvent(e)) return false;
+      // то, что к показу не обязательно (исход только голосом, неподтверждённый механизм,
+      // опровергнутое утверждение), объяснением не «прячется» — там ему и место
+      if (!e.required || !e.id || voiceOnlyEvent(e) || !mustShowEvent(e, bible.researchFacts ?? [], isDocumentary(bible))) return false;
       for (let i = e.fromPhrase; i <= Math.min(e.toPhrase, e.fromPhrase + 500); i++) if (!explainedPhrases.has(i)) return false;
       return true;
     });

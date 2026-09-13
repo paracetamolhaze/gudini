@@ -62,12 +62,20 @@ export function effectiveBasis(e: Pick<StoryEvent, "basis" | "basisFact">, facts
  * разные вещи: неподтверждённый механизм и опровергнутое справкой утверждение показывать нельзя,
  * даже если без них история не рассказывается. Их несёт голос, а видимый исход — отдельное событие.
  */
-export function mustShowEvent(e: StoryEvent, facts: string[]): boolean {
+export function mustShowEvent(e: StoryEvent, facts: string[], documentary = true): boolean {
   if (!e.required || !e.id || !e.objects.length) return false;
   const basis = effectiveBasis(e, facts);
   if (basis === "contradicted") return false;
-  if (basis !== "confirmed" && mechanismEvent(e)) return false;
+  // Ограничение относится к фактическим утверждениям документальной истории: скрытый механизм
+  // и причина без подтверждения. В вымышленной истории и условном примере постановочный
+  // механизм — часть постановки, а не утверждение о реальном событии.
+  if (documentary && basis !== "confirmed" && mechanismEvent(e)) return false;
   return true;
+}
+
+/** Документальная история: новость или реконструкция реального события. */
+export function isDocumentary(bible: Pick<StoryBible, "storyType">): boolean {
+  return bible.storyType === "news" || bible.storyType === "history";
 }
 
 /** Слова состояния, у которых есть направление: обратно они не отыгрываются. */
@@ -370,7 +378,8 @@ export function auditPlan(
       message: `Статус без цитаты из справки не подтверждён, событие считается рассказом автора: ${unverified.map((e) => `${e.id} (${e.basis})`).join(", ")}`,
     });
   }
-  const mechanisms = events.filter((e) => e.required && e.id && mechanismEvent(e) && effectiveBasis(e, facts) !== "confirmed");
+  const documentary = isDocumentary(bible);
+  const mechanisms = documentary ? events.filter((e) => e.required && e.id && mechanismEvent(e) && effectiveBasis(e, facts) !== "confirmed") : [];
   if (mechanisms.length) {
     out.push({
       code: "unconfirmed-mechanism",
@@ -410,7 +419,7 @@ export function auditPlan(
     "Сцена ставит утверждение, которое справка опровергает — такой кадр не снимается, конфликт решает автор",
     "block",
   );
-  const missing = events.filter((e) => mustShowEvent(e, facts) && !carried.has(e.id) && !eventCovered(e, beats, shots));
+  const missing = events.filter((e) => mustShowEvent(e, facts, documentary) && !carried.has(e.id) && !eventCovered(e, beats, shots));
   if (missing.length) {
     out.push({
       code: "event-not-covered",
@@ -762,13 +771,17 @@ export function auditPlan(
     `Роль назначена неверно: участник в чужой одежде — отдельный персонаж (supportingCharacters), а не ${character.name} в его костюме; ${character.name} в такой сцене либо отсутствует, либо стоит рядом в своём костюме`,
     "block",
   );
-  // Роль другого возраста или пола тоже не для постоянного персонажа, какой бы костюм ни стоял.
+  // Роль другого возраста или пола. В документальной истории это реальные люди — отдельные
+  // участники, запрет. В вымышленной истории и условном примере перевоплощение остаётся
+  // художественным решением: замечание, не запрет.
   if (ROLE_OTHER_PERSON.test(bible.playedByGudini ?? "")) {
     add(
       "role-miscast",
       shown.filter((b) => b.gudiniVisible).map((b) => b.id),
-      `Роль «${bible.playedByGudini}» требует другого возраста или пола: её играет отдельный участник, а не ${character.name}`,
-      "block",
+      isDocumentary(bible)
+        ? `Роль «${bible.playedByGudini}» — реальный человек другого возраста или пола: её играет отдельный участник, а не ${character.name}`
+        : `Роль «${bible.playedByGudini}» другого возраста или пола: ${character.name} играет её собой, без смены внешности — проверьте, что сцена это допускает`,
+      isDocumentary(bible) ? "block" : "warn",
     );
   }
 

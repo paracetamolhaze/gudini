@@ -153,3 +153,63 @@ test("позднее начало не гонит во второй заход �
   assert.ok(RETRY_WARN_CODES.has("unconfirmed-mechanism"));
   assert.ok(RETRY_WARN_CODES.has("voice-contradicts-facts"));
 });
+
+test("границы правила: документальная новость, вымышленная история, условный пример", () => {
+  const fable = ev("guard-decides", "the tower guard system decides to lock the gate and sound the alarm", [
+    { id: "gate", before: "open", after: "locked with the alarm sounding", role: "change" },
+  ]);
+  // документальная новость: механизм без подтверждения к показу не обязателен и не изображается
+  const news = { ...normalizeBible({ bible: { storyType: "news" } } as any, character, universe, FACTS), events: [detect, fire] };
+  assert.deepEqual(showableEvents(news).map((e) => e.id), ["fire-out-window"]);
+  const newsCodes = auditPlan(
+    [beat("B1", 0, 8, { eventIds: ["detect-weapon"], visualAction: "the cabin camera swivels toward the pistol and the indicator blinks red", keyMoment: "the indicator blinks red" })],
+    news,
+    character,
+  ).map((i) => i.code);
+  assert.ok(newsCodes.includes("invented-mechanism"), newsCodes.join(","));
+  // явно вымышленная история: тот же по форме механизм — часть постановки
+  const fiction = { ...normalizeBible({ bible: { storyType: "philosophy" } } as any, character, universe), events: [fable] };
+  assert.deepEqual(showableEvents(fiction).map((e) => e.id), ["guard-decides"]);
+  const fictionCodes = auditPlan(
+    [beat("B1", 0, 8, { eventIds: ["guard-decides"], objects: fable.objects, visualAction: "the gate mechanism locks by itself and the alarm light starts blinking", keyMoment: "the gate locks and the alarm blinks" })],
+    fiction,
+    character,
+  ).map((i) => i.code);
+  assert.ok(!fictionCodes.some((c) => /mechanism|contradict/.test(c)), fictionCodes.join(","));
+  // условный пример разбора темы: система на экране подтверждает подпись — обычное наблюдаемое действие
+  const sign = ev("sign", "the wallet device screen shows a signed confirmation after the button press", [
+    { id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" },
+  ]);
+  const example = { ...normalizeBible({ bible: { storyType: "explainer" } } as any, character, universe), events: [sign] };
+  assert.deepEqual(showableEvents(example).map((e) => e.id), ["sign"]);
+  const exampleCodes = auditPlan(
+    [beat("B1", 0, 8, { eventIds: ["sign"], objects: sign.objects, visualAction: "his thumb presses the button and the device screen switches to a signed confirmation", keyMoment: "the screen shows the confirmation" })],
+    example,
+    character,
+  ).map((i) => i.code);
+  assert.ok(!exampleCodes.some((c) => /mechanism|contradict/.test(c)), exampleCodes.join(","));
+});
+
+test("отсутствие сведений — не опровержение", () => {
+  // told: справка молчит — замечание о неподтверждённом механизме, конфликта нет
+  const news = { ...normalizeBible({ bible: { storyType: "news" } } as any, character, universe, FACTS), events: [detect] };
+  const told = auditPlan([beat("B1", 0, 8)], news, character).map((i) => i.code);
+  assert.ok(told.includes("unconfirmed-mechanism"), told.join(","));
+  assert.ok(!told.includes("voice-contradicts-facts"), told.join(","));
+  // contradicted без цитаты из справки не признаётся: это тоже «сведений нет»
+  const claimed = { ...detect, basis: "contradicted" as const, basisFact: "в справке такого нет" };
+  const unproven = auditPlan([beat("B1", 0, 8)], { ...news, events: [claimed] }, character).map((i) => i.code);
+  assert.ok(unproven.includes("basis-unverified"), unproven.join(","));
+  assert.ok(!unproven.includes("voice-contradicts-facts"), unproven.join(","));
+});
+
+test("роль другого возраста: запрет в документальной истории, замечание в вымышленной", () => {
+  const cast = (storyType: string) =>
+    auditPlan(
+      [beat("B1", 0, 8, { gudiniVisible: true, visualAction: "Gudini climbs into the back seat", scene: { who: "Gudini in the back seat" } })],
+      normalizeBible({ bible: { storyType, playedByGudini: "пятнадцатилетний подросток" } } as any, character, universe),
+      character,
+    ).find((i) => i.code === "role-miscast");
+  assert.equal(cast("news")?.severity, "block");
+  assert.equal(cast("philosophy")?.severity, "warn");
+});

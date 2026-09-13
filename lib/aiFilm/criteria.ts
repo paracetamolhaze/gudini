@@ -1,4 +1,4 @@
-import { eventCovered, mustShowEvent, voiceOnlyEvent } from "./audit";
+import { eventCovered, isDocumentary, mustShowEvent, voiceOnlyEvent } from "./audit";
 import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
 
 /**
@@ -39,9 +39,10 @@ export function requiredEvents(events: StoryEvent[] | undefined): StoryEvent[] {
  * справкой утверждения. Раньше «все обязательные показаны» означало только, что сохранён
  * контракт, даже когда сам контракт выбрал неверные события.
  */
-export function showableEvents(bible: { events?: StoryEvent[]; researchFacts?: string[] }): StoryEvent[] {
+export function showableEvents(bible: { events?: StoryEvent[]; researchFacts?: string[]; storyType?: string }): StoryEvent[] {
   const facts = bible.researchFacts ?? [];
-  return requiredEvents(bible.events).filter((e) => mustShowEvent(e, facts));
+  const documentary = isDocumentary({ storyType: (bible.storyType ?? "news") as "news" });
+  return requiredEvents(bible.events).filter((e) => mustShowEvent(e, facts, documentary));
 }
 
 /**
@@ -49,13 +50,14 @@ export function showableEvents(bible: { events?: StoryEvent[]; researchFacts?: s
  * конечным запросам: бит мог остаться в таймлайне, но не попасть ни в один клип.
  */
 export function missingRequired(
-  plan: Pick<AiFilmPlan, "beats" | "shots"> & { bible?: { authorCarried?: string[]; researchFacts?: string[] } },
+  plan: Pick<AiFilmPlan, "beats" | "shots"> & { bible?: { authorCarried?: string[]; researchFacts?: string[]; storyType?: string } },
   required: StoryEvent[],
 ): string[] {
   const carried = new Set(plan.bible?.authorCarried ?? []);
   const facts = plan.bible?.researchFacts ?? [];
+  const documentary = isDocumentary({ storyType: (plan.bible?.storyType ?? "news") as "news" });
   return required
-    .filter((e) => mustShowEvent(e, facts) && !carried.has(e.id) && !eventCovered(e, plan.beats, plan.shots))
+    .filter((e) => mustShowEvent(e, facts, documentary) && !carried.has(e.id) && !eventCovered(e, plan.beats, plan.shots))
     .map((e) => e.id);
 }
 

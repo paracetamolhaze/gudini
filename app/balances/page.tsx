@@ -45,6 +45,8 @@ const PROVIDER_NAMES: Record<string, string> = {
   google: "Google Veo",
   openai: "OpenAI",
   local: "локально",
+  // раздел «Карусели»: свой ключ OpenRouter и свой журнал, в остатки видео-ключей не входит
+  carousel: "Карусели (свой ключ)",
 };
 
 function opsWord(n: number): string {

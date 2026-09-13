@@ -1,16 +1,17 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import type { Carousel, CarouselJob, CarouselRequest, JobParams, JobType, PublishState } from "./types";
+import type { Carousel, CarouselJob, CarouselMode, CarouselRequest, DesignSettings, ImageModelId, JobParams, JobType, PublishState, SlideImage } from "./types";
 import { CAROUSEL_LIMITS } from "./limits";
 
 /**
- * Хранилище каруселей: data/carousels/<id>/carousel.json и слайды в slides/. Отдельно от
- * db.json и uploads видеопроектов — ни чтение, ни запись каруселей их не касаются.
+ * Хранилище каруселей: data/carousels/<id>/carousel.json, готовые карточки в slides/,
+ * версии иллюстраций в images/. Отдельно от db.json и uploads видеопроектов — ни чтение,
+ * ни запись каруселей их не касаются.
  *
- * Файл карусели меняют два процесса: сайт (правки пользователя) и фоновый обработчик
- * (статус задания, рендер). Поэтому каждое изменение идёт под файловой блокировкой:
- * прочитать → изменить → атомарно записать.
+ * Файл карусели меняют несколько процессов: сайт (правки пользователя, планировщик) и
+ * фоновый обработчик (статус задания, иллюстрации, рендер). Поэтому каждое изменение идёт
+ * под файловой блокировкой: прочитать → изменить → атомарно записать.
  */
 
 export class CarouselError extends Error {
@@ -34,12 +35,14 @@ export function carouselsRoot(): string {
 const CAROUSEL_ID_RE = /^c[a-z0-9]{12,40}$/;
 const SLIDE_ID_RE = /^s[a-z0-9]{12,40}$/;
 const SLIDE_FILE_RE = /^slide-s[a-z0-9]{12,40}-[a-f0-9]{12}\.jpg$/;
+const IMAGE_FILE_RE = /^img-s[a-z0-9]{12,40}-v[a-z0-9]{12,40}\.(png|jpg|webp)$/;
 
 export const isCarouselId = (v: unknown): v is string => typeof v === "string" && CAROUSEL_ID_RE.test(v);
 export const isSlideId = (v: unknown): v is string => typeof v === "string" && SLIDE_ID_RE.test(v);
 export const isSlideFile = (v: unknown): v is string => typeof v === "string" && SLIDE_FILE_RE.test(v);
+export const isImageFile = (v: unknown): v is string => typeof v === "string" && IMAGE_FILE_RE.test(v);
 
-export function newId(prefix: "c" | "s" | "j"): string {
+export function newId(prefix: "c" | "s" | "j" | "v" | "sp" | "sc"): string {
   return prefix + Date.now().toString(36) + crypto.randomBytes(6).toString("hex");
 }
 
@@ -55,10 +58,16 @@ export function carouselDir(id: string): string {
 
 const jsonFile = (id: string) => path.join(carouselDir(id), "carousel.json");
 export const slidesDir = (id: string) => path.join(carouselDir(id), "slides");
+export const imagesDir = (id: string) => path.join(carouselDir(id), "images");
 
 export function slideFilePath(id: string, file: string): string {
   if (!isSlideFile(file)) throw new CarouselError("Недопустимое имя файла", 400, "bad_file");
   return path.join(slidesDir(id), file);
+}
+
+export function imageFilePath(id: string, file: string): string {
+  if (!isImageFile(file)) throw new CarouselError("Недопустимое имя файла", 400, "bad_file");
+  return path.join(imagesDir(id), file);
 }
 
 function sleepSync(ms: number) {
@@ -126,9 +135,28 @@ export function emptyPublish(): PublishState {
   return { status: "idle", items: [], publishAttempts: 0, log: [] };
 }
 
+function normalizeImage(raw: any): SlideImage | undefined {
+  if (!raw || typeof raw !== "object" || typeof raw.brief !== "string") return undefined;
+  const versions = Array.isArray(raw.versions) ? raw.versions.filter((v: any) => v && typeof v.id === "string" && typeof v.file === "string") : [];
+  return {
+    brief: raw.brief,
+    composition: typeof raw.composition === "string" ? raw.composition : "",
+    textPlacement: raw.textPlacement === "top" ? "top" : "bottom",
+    versions,
+    currentId: typeof raw.currentId === "string" && versions.some((v: any) => v.id === raw.currentId) ? raw.currentId : undefined,
+    rev: Number.isInteger(raw.rev) ? raw.rev : 0,
+    status: ["none", "generating", "ready", "error", "uncertain"].includes(raw.status) ? raw.status : versions.length ? "ready" : "none",
+    error: typeof raw.error === "string" ? raw.error : undefined,
+    inFlight: raw.inFlight && typeof raw.inFlight === "object" && typeof raw.inFlight.spendId === "string" ? raw.inFlight : undefined,
+    attempts: Number.isInteger(raw.attempts) ? raw.attempts : 0,
+  };
+}
+
 function normalize(raw: any, id: string): Carousel | null {
   if (!raw || typeof raw !== "object" || raw.id !== id || !Array.isArray(raw.slides)) return null;
   const c = raw as Carousel;
+  c.schema = c.schema === 2 ? 2 : 1;
+  c.mode = c.mode === "illustrated" ? "illustrated" : "text_cards";
   c.story = Array.isArray(c.story) ? c.story : [];
   c.hashtags = Array.isArray(c.hashtags) ? c.hashtags : [];
   c.claimsToCheck = Array.isArray(c.claimsToCheck) ? c.claimsToCheck : [];
@@ -137,13 +165,17 @@ function normalize(raw: any, id: string): Carousel | null {
   c.publish = c.publish && typeof c.publish === "object" ? { ...emptyPublish(), ...c.publish } : emptyPublish();
   c.publish.items = Array.isArray(c.publish.items) ? c.publish.items : [];
   c.publish.log = Array.isArray(c.publish.log) ? c.publish.log : [];
-  c.cost = c.cost ?? { usd: 0, calls: 0 };
+  c.cost = c.cost && typeof c.cost === "object" ? { ...c.cost, usd: Number(c.cost.usd) || 0, calls: Number(c.cost.calls) || 0 } : { usd: 0, calls: 0 };
   c.job = c.job ?? null;
+  if (c.schedule && (typeof c.schedule !== "object" || typeof c.schedule.id !== "string" || typeof c.schedule.runAt !== "string")) c.schedule = undefined;
+  if (c.schedule) c.schedule.history = Array.isArray(c.schedule.history) ? c.schedule.history : [];
+  if (c.anchor && (typeof c.anchor !== "object" || typeof c.anchor.file !== "string")) c.anchor = undefined;
   for (const s of c.slides) {
     s.kicker = s.kicker ?? "";
     s.body = s.body ?? "";
     s.cta = s.cta ?? "";
     s.bullets = Array.isArray(s.bullets) ? s.bullets : [];
+    s.image = normalizeImage(s.image);
   }
   return c;
 }
@@ -182,13 +214,16 @@ export function listCarousels(): Carousel[] {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export function createCarousel(request: CarouselRequest): Carousel {
+export type CreateExtra = { mode: CarouselMode; design?: DesignSettings; imageModel?: ImageModelId; imageResolution?: string | null };
+
+export function createCarousel(request: CarouselRequest, extra: CreateExtra = { mode: "text_cards" }): Carousel {
   const id = newId("c");
   const now = iso();
   const firstLine = request.idea.split("\n")[0].trim();
+  const illustrated = extra.mode === "illustrated";
   const c: Carousel = {
     id,
-    schema: 1,
+    schema: 2,
     createdAt: now,
     updatedAt: now,
     revision: 1,
@@ -203,7 +238,10 @@ export function createCarousel(request: CarouselRequest): Carousel {
     caption: "",
     hashtags: [],
     claimsToCheck: [],
-    mode: "text_cards",
+    mode: extra.mode,
+    imageModel: illustrated ? extra.imageModel : undefined,
+    imageResolution: illustrated ? extra.imageResolution : undefined,
+    design: illustrated ? extra.design : undefined,
     job: null,
     publish: emptyPublish(),
     cost: { usd: 0, calls: 0 },
@@ -326,19 +364,24 @@ export function deleteCarousel(id: string, now = Date.now()): void {
     if (p.status === "queued" || p.status === "running" || p.status === "uncertain" || p.stage === "publish_sent" || p.stage === "verifying") {
       throw new CarouselError("Публикация не завершена или её результат не подтверждён — сначала проверьте статус публикации", 409, "publishing");
     }
+    const sc = c.schedule?.status;
+    if (sc === "queued" || sc === "publishing" || sc === "uncertain") {
+      throw new CarouselError("Запланированная публикация выполняется или не подтверждена — дождитесь итога", 409, "publishing");
+    }
     // переименование убирает карусель из списка одним действием; файлы стираются уже вне блокировки
     renameWithRetry(carouselDir(id), trash);
   });
   fs.rmSync(trash, { recursive: true, force: true });
 }
 
-/** Удаляет файлы слайдов, на которые не ссылаются ни текущие слайды, ни незавершённая публикация. */
+/** Удаляет готовые карточки, на которые не ссылаются ни слайды, ни публикация, ни расписание. Версии иллюстраций хранятся все. */
 export function cleanupSlideFiles(id: string): number {
   const c = getCarousel(id);
   if (!c) return 0;
   const keep = new Set<string>();
   for (const s of c.slides) if (s.render?.file) keep.add(s.render.file);
   for (const item of c.publish.items) keep.add(item.file);
+  for (const item of c.schedule?.snapshot?.items ?? []) keep.add(item.file);
   let removed = 0;
   let names: string[] = [];
   try {

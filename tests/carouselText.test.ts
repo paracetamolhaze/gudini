@@ -105,9 +105,19 @@ test("ZIP: заголовки, число файлов и контрольная
 });
 
 test("форма создания: значения по умолчанию и пределы", () => {
-  const ok = parseCreateRequest({ idea: "Как высыпаться" });
+  const ok = parseCreateRequest({ idea: "Как высыпаться" }, { imageModel: "google/gemini-3.1-flash-image" });
   assert.ok("request" in ok);
-  if ("request" in ok) assert.deepEqual(ok.request, { idea: "Как высыпаться", wishes: "", slideCount: 7, language: "ru", style: "graphite", format: "portrait" });
+  if ("request" in ok) {
+    assert.equal(ok.mode, "illustrated");
+    assert.equal(ok.imageModel, "google/gemini-3.1-flash-image");
+    assert.deepEqual(ok.request, { idea: "Как высыпаться", wishes: "", slideCount: 7, language: "ru", style: "graphite", format: "portrait", imageModel: "google/gemini-3.1-flash-image" });
+  }
+  // без модели по умолчанию карусель с иллюстрациями не создаётся; текстовые карточки — как раньше
+  assert.ok("error" in parseCreateRequest({ idea: "Как высыпаться" }));
+  const legacy = parseCreateRequest({ idea: "Как высыпаться", mode: "text_cards" });
+  assert.ok("request" in legacy && legacy.mode === "text_cards");
+  const unknown = parseCreateRequest({ idea: "Тема", imageModel: "vendor/unknown-model" });
+  assert.ok("error" in unknown && /не поддерживается/.test(unknown.error));
   assert.ok("error" in parseCreateRequest({ idea: "" }));
   const tooMany = parseCreateRequest({ idea: "Тема", slideCount: 11 });
   assert.ok("error" in tooMany && /10/.test(tooMany.error));

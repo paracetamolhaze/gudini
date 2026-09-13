@@ -3,14 +3,19 @@ import os from "os";
 import path from "path";
 import { spawn } from "child_process";
 import { carouselsRoot, findRunnableJob, readRunnerLock, RUNNER_STALE_MS } from "./store";
+import { scheduleTick } from "./schedule";
 
 /**
  * Запуск фонового обработчика каруселей из процесса сайта. Обработчик — отдельный процесс
- * (tsx lib/carousel/runner.ts), как воркер монтажа: рендер в Chromium и вызовы Claude не
- * нагружают сервер сайта, у обработчика свой учёт расходов и пониженный приоритет.
+ * (tsx lib/carousel/runner.ts), как воркер монтажа: рендер в Chromium, вызовы Claude и
+ * генератора не нагружают сервер сайта, у обработчика свой учёт расходов и пониженный приоритет.
+ *
+ * Здесь же живёт планировщик отложенных публикаций: раз в полминуты сайт ставит в очередь
+ * карусели, чьё время пришло. Переходы состояний идут под файловой блокировкой карусели,
+ * поэтому второй процесс сайта с теми же данными не поставит ту же публикацию дважды.
  */
 
-const g = globalThis as unknown as { __gudiniCarouselSpawnAt?: number };
+const g = globalThis as unknown as { __gudiniCarouselSpawnAt?: number; __gudiniCarouselScheduler?: ReturnType<typeof setInterval>; __gudiniCarouselTickBusy?: boolean };
 
 export function runnerState(now = Date.now()): { alive: boolean; pid: number | null } {
   const lock = readRunnerLock();
@@ -60,8 +65,32 @@ export function ensureRunner(): { started: boolean; reason: string } {
   }
 }
 
-/** При старте сервера: продолжить задания, прерванные перезапуском или развёртыванием. */
+/** Один проход планировщика; ошибки не роняют сайт. */
+export function runSchedulerTick(): void {
+  if (g.__gudiniCarouselTickBusy) return;
+  g.__gudiniCarouselTickBusy = true;
+  try {
+    const r = scheduleTick();
+    if (r.queued.length || r.missed.length) console.log(`Карусели: планировщик — в очередь ${r.queued.length}, просрочено ${r.missed.length}`);
+    if (r.queued.length) ensureRunner();
+  } catch (e: any) {
+    console.error("Карусели: планировщик:", String(e?.message ?? e).slice(0, 200));
+  } finally {
+    g.__gudiniCarouselTickBusy = false;
+  }
+}
+
+export const SCHEDULER_INTERVAL_MS = 30_000;
+
+/** При старте сервера: продолжить прерванные задания и запустить планировщик публикаций. */
 export function kickRunnerOnBoot(): void {
-  const timer = setTimeout(() => ensureRunner(), 4000);
+  const timer = setTimeout(() => {
+    ensureRunner();
+    runSchedulerTick();
+  }, 4000);
   timer.unref?.();
+  if (!g.__gudiniCarouselScheduler) {
+    g.__gudiniCarouselScheduler = setInterval(runSchedulerTick, SCHEDULER_INTERVAL_MS);
+    g.__gudiniCarouselScheduler.unref?.();
+  }
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { collectBalances, ProviderBalance } from "@/lib/balances";
 import { readManualBalances, readSpendLog } from "@/lib/spendLog";
+import { spendRuns as carouselSpendRuns } from "@/lib/carousel/spend";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,8 @@ export async function GET(req: NextRequest) {
   }
   // журнал и ручные остатки читаются каждый раз: они меняются после каждого прогона
   const since = Date.now() - SPEND_WINDOW_MS;
-  const spend = readSpendLog().filter((r) => Date.parse(r.at) >= since);
+  // расходы каруселей — из их собственного журнала, отдельной категорией «carousel»; журнал роликов не меняется
+  const spend = [...readSpendLog().filter((r) => Date.parse(r.at) >= since), ...carouselSpendRuns(since)];
   return NextResponse.json({
     balances: cache!.balances,
     checkedAt: new Date(cache!.at).toISOString(),

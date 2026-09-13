@@ -4,6 +4,9 @@ import { attachJob, createCarousel, deleteCarousel, isJobPending, listCarousels,
 import { parseCreateRequest } from "@/lib/carousel/request";
 import { toSummary } from "@/lib/carousel/view";
 import { ensureRunner } from "@/lib/carousel/runnerControl";
+import { configProblems, defaultImageModel, imageResolution } from "@/lib/carousel/config";
+import { requestResolution } from "@/lib/carousel/models";
+import { readDesign } from "@/lib/carousel/design";
 
 export const dynamic = "force-dynamic";
 
@@ -20,14 +23,24 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** Новая карусель: сохраняется сразу, генерация уходит в фоновое задание. */
+/** Новая карусель: сохраняется сразу с копией оформления аккаунта, генерация уходит в фоновое задание. */
 export async function POST(req: NextRequest) {
   const denied = guard(req);
   if (denied) return denied;
   try {
-    const parsed = parseCreateRequest(await readBody(req));
+    const parsed = parseCreateRequest(await readBody(req), { imageModel: defaultImageModel().id });
     if ("error" in parsed) return ok({ error: parsed.error }, 400);
-    const created = createCarousel(parsed.request);
+    if (parsed.mode === "illustrated") {
+      // без ключа раздела карусель с иллюстрациями не создаётся — а не создаётся и падает
+      const problems = configProblems();
+      if (problems.length) return ok({ error: problems.join(" "), code: "config" }, 400);
+    }
+    const created = createCarousel(parsed.request, {
+      mode: parsed.mode,
+      design: parsed.mode === "illustrated" ? readDesign() : undefined,
+      imageModel: parsed.imageModel,
+      imageResolution: parsed.imageModel ? requestResolution(parsed.imageModel, imageResolution()) : undefined,
+    });
     try {
       updateCarousel(created.id, (c) => {
         attachJob(c, "generate");

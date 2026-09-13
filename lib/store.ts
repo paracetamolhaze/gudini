@@ -395,6 +395,22 @@ export function updateActiveTokens(platform: Platform, tokens: PlatformTokens) {
 }
 
 /**
+ * Обновление токенов конкретного сохранённого аккаунта — не обязательно активного
+ * (карусель по расписанию публикуется в закреплённый аккаунт). Активный синхронизируется.
+ */
+export function updateAccountTokens(platform: Platform, id: string, tokens: PlatformTokens) {
+  const saved = readSaved();
+  const patch: Partial<Settings> = {
+    savedAccounts: {
+      ...saved.savedAccounts,
+      [platform]: (saved.savedAccounts?.[platform] ?? []).map((a) => (a.id === id ? { ...a, tokens } : a)),
+    },
+  };
+  if (saved.activeAccounts?.[platform] === id) (patch as Record<string, unknown>)[TOKENS_KEY[platform]] = tokens;
+  saveSettings(patch);
+}
+
+/**
  * Аккаунт, подключённый до появления списка, переносим в него при первом обращении.
  * Иначе следующее подключение затрёт его молча — ровно та проблема, ради которой список и заводился.
  */

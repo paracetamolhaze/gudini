@@ -2,7 +2,7 @@ import fs from "fs";
 import { NextRequest } from "next/server";
 import { fail, guard, ok, readBody } from "@/lib/carousel/http";
 import { attachJob, CarouselError, isJobPending, slideFilePath, updateCarousel } from "@/lib/carousel/store";
-import { instagramAccountInfo } from "@/lib/carousel/account";
+import { findInstagramAccount, instagramAccountInfo, toPublishAccount } from "@/lib/carousel/account";
 import { needsVerification } from "@/lib/carousel/instagram";
 import { instagramImageProblems } from "@/lib/carousel/jpeg";
 import { composeCaption } from "@/lib/carousel/text";
@@ -15,8 +15,9 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * Публикация в Instagram — только явным действием пользователя после предпросмотра.
- * Проверка «можно ли» и постановка задания идут под одной блокировкой карусели:
- * двойное нажатие и повторный запрос получают отказ, а не вторую публикацию.
+ * Аккаунт закрепляется в момент нажатия. Проверка «можно ли» и постановка задания идут
+ * под одной блокировкой карусели: двойное нажатие и повторный запрос получают отказ,
+ * а не вторую публикацию.
  *
  * action=verify — только проверка исхода уже отправленной публикации, без новой отправки.
  */
@@ -39,8 +40,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       return ok(toClient(c), 202);
     }
 
-    const account = instagramAccountInfo();
-    if (account.problems.length) return ok({ error: account.problems.join(" "), code: "instagram_unavailable" }, 400);
+    const chosen = findInstagramAccount(typeof body.accountId === "string" ? body.accountId : null);
+    const info = instagramAccountInfo(chosen?.id ?? null);
+    if (!chosen || info.problems.length) return ok({ error: info.problems.join(" ") || "Аккаунт Instagram не выбран", code: "instagram_unavailable" }, 400);
+    const account = toPublishAccount(chosen);
 
     const c = updateCarousel(id, (x) => {
       const p = x.publish;
@@ -50,6 +53,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       }
       if (needsVerification(p)) throw new CarouselError("Исход прошлой публикации не подтверждён — сначала нажмите «Проверить статус»", 409, "verify_first");
       if (p.status === "queued" || p.status === "running") throw new CarouselError("Публикация уже выполняется", 409, "publishing");
+      const sc = x.schedule?.status;
+      if (sc === "queued" || sc === "publishing" || sc === "uncertain") throw new CarouselError("Публикация по расписанию уже выполняется", 409, "publishing");
       if (typeof body.revision !== "number" || body.revision !== x.revision) {
         throw new CarouselError("Карусель изменилась после просмотра — обновите страницу и проверьте слайды перед публикацией", 409, "stale_revision");
       }
@@ -57,16 +62,17 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       if (problems.length) throw new CarouselError(`Карусель не готова к публикации: ${problems.join("; ")}`, 400, "not_ready");
       x.slides.forEach((s, i) => {
         const file = slideFilePath(x.id, s.render!.file!);
-        if (!fs.existsSync(file)) throw new CarouselError(`Файл слайда ${i + 1} не найден — запустите рендер заново`, 409, "file_missing");
+        if (!fs.existsSync(file)) throw new CarouselError(`Файл слайда ${i + 1} не найден — запустите сборку заново`, 409, "file_missing");
         const bad = instagramImageProblems(fs.readFileSync(file));
         if (bad.length) throw new CarouselError(`Слайд ${i + 1} не подходит Instagram: ${bad.join(", ")}`, 400, "bad_image");
       });
 
       const caption = composeCaption(x.caption, x.hashtags);
-      // тот же набор слайдов и подпись — созданные раньше контейнеры переиспользуются
+      // тот же набор слайдов, подпись и аккаунт — созданные раньше контейнеры переиспользуются
       const same =
         p.revision === x.revision &&
         p.caption === caption &&
+        p.account?.igUserId === account.igUserId &&
         p.items.length === x.slides.length &&
         p.items.every((it, i) => it.slideId === x.slides[i].id && it.file === x.slides[i].render!.file);
       x.publish = {
@@ -75,6 +81,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         stage: undefined,
         revision: x.revision,
         caption,
+        account,
+        scheduleId: undefined,
+        igUserId: account.igUserId,
+        accountLabel: account.label ?? undefined,
         items: x.slides.map((s, i) => (same ? p.items[i] : { slideId: s.id, file: s.render!.file! })),
         containerId: same ? p.containerId : undefined,
         containerCreatedAt: same ? p.containerCreatedAt : undefined,
@@ -82,8 +92,12 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         error: undefined,
         note: undefined,
         retryable: undefined,
-        log: [...p.log, { at: now, text: p.status === "failed" ? "Повтор публикации поставлен в очередь" : "Публикация поставлена в очередь" }].slice(-60),
+        log: [...p.log, { at: now, text: `${p.status === "failed" ? "Повтор публикации" : "Публикация"} поставлена в очередь, аккаунт ${account.label ?? account.igUserId}` }].slice(-60),
       };
+      if (x.schedule && (x.schedule.status === "scheduled" || x.schedule.status === "missed")) {
+        x.schedule.status = "canceled";
+        x.schedule.history = [...x.schedule.history, { at: now, text: "Снято с расписания: публикация запущена вручную" }].slice(-40);
+      }
       attachJob(x, "publish");
     });
     ensureRunner();

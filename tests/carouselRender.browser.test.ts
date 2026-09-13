@@ -1,6 +1,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { closeBrowser, missingGlyphs, renderSlide } from "../lib/carousel/render";
 import { CAROUSEL_STYLES } from "../lib/carousel/styles";
@@ -115,6 +116,42 @@ test("символ, которого нет в шрифте, — ошибка д
   assert.deepEqual(missingGlyphs(carousel("graphite"), { ...SLIDES[1], body: "Знак ↀ" }), ["ↀ"]);
   const out = await renderSlide(carousel("graphite"), { ...SLIDES[1], body: "Знак ↀ" }, 1, 4);
   assert.equal(out.ok, false);
+});
+
+test("карточка с иллюстрацией: картинка на весь кадр без растяжения, текст поверх, логотип; без картинки — ошибка", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-carousel-render-"));
+  process.env.CAROUSEL_DATA_DIR = dir;
+  const { createCarousel, updateCarousel, imageFilePath, newId } = await import("../lib/carousel/store");
+  const { saveBrandAsset } = await import("../lib/carousel/design");
+  const { DEFAULT_DESIGN } = await import("../lib/carousel/designShared");
+  const { makePng } = await import("./carouselPng");
+  // логотип аккаунта и «иллюстрация» 4:5 другого размера — object-fit: cover, без растяжения
+  const design = saveBrandAsset("logo", makePng(240, 80, 3));
+  const c0 = createCarousel({ idea: "Тест", wishes: "", slideCount: 3, language: "ru", style: "graphite", format: "portrait" }, { mode: "illustrated", design: { ...DEFAULT_DESIGN, ...design, author: "@gudini_demo" }, imageModel: "google/gemini-3.1-flash-image", imageResolution: "2K" });
+  const versionId = newId("v");
+  const slideId = newId("s");
+  const file = `img-${slideId}-${versionId}.png`;
+  fs.mkdirSync(path.dirname(imageFilePath(c0.id, file)), { recursive: true });
+  fs.writeFileSync(imageFilePath(c0.id, file), makePng(640, 800, 2));
+  const c = updateCarousel(c0.id, (x) => {
+    x.slides = [
+      { ...SLIDES[0], id: slideId, image: { brief: "scene", composition: "", textPlacement: "bottom", versions: [{ id: versionId, file, mediaType: "image/png", width: 640, height: 800, bytes: 1, model: "google/gemini-3.1-flash-image", resolution: "2K", kind: "generate", prompt: "p", references: [], cost: 0.1, estimated: false, at: "" }], currentId: versionId, rev: 0, status: "ready", attempts: 1 } },
+      { ...SLIDES[2], id: newId("s"), image: { brief: "scene", composition: "", textPlacement: "top", versions: [{ id: versionId, file, mediaType: "image/png", width: 640, height: 800, bytes: 1, model: "google/gemini-3.1-flash-image", resolution: "2K", kind: "generate", prompt: "p", references: [], cost: 0.1, estimated: false, at: "" }], currentId: versionId, rev: 0, status: "ready", attempts: 1 } },
+      { ...SLIDES[3], id: newId("s"), image: { brief: "scene", composition: "", textPlacement: "bottom", versions: [], rev: 0, status: "none", attempts: 0 } },
+    ];
+  });
+  for (const i of [0, 1]) {
+    const out = await renderSlide(c, c.slides[i], i, 3);
+    assert.ok(out.ok, out.ok ? "" : `слайд ${i + 1}: ${out.error}`);
+    if (out.ok) {
+      assert.deepEqual(jpegInfo(out.buffer), { width: 1080, height: 1350 });
+      assert.deepEqual(instagramImageProblems(out.buffer), []);
+      save(`illustrated-${i + 1}.jpg`, out.buffer);
+    }
+  }
+  const none = await renderSlide(c, c.slides[2], 2, 3);
+  assert.equal(none.ok, false);
+  if (!none.ok) assert.match(none.error, /нет иллюстрации/);
 });
 
 test("разметка в тексте не исполняется: выводится как текст", async () => {

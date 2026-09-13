@@ -1,15 +1,16 @@
 import { getSettings } from "../store";
-import { instagramAccessToken } from "../publish";
-import type { PublishState } from "./types";
+import type { PublishAccount, PublishState } from "./types";
 import { IG_API_VERSION } from "./limits";
 import { CarouselError, getCarousel, mediaQuery, notFound, updateCarousel } from "./store";
-import { instagramAccountInfo } from "./account";
+import { accountAccessToken, findInstagramAccount, instagramAccountInfo, toPublishAccount } from "./account";
 import { needsVerification, publishCarousel, verifyPublication, type PublishCtx } from "./instagram";
+import { syncScheduleWithPublish } from "./schedule";
 
 /**
- * Связка публикации с сайтом: активный аккаунт Instagram из Настроек, продление его токена
- * той же функцией, что у Reels, подписанные ссылки на слайды и сохранение каждого шага
- * в карусель. Реальная сеть — только здесь; логика шагов — в instagram.ts.
+ * Связка публикации с сайтом: закреплённый аккаунт Instagram (тот, что выбран при постановке —
+ * сейчас или в расписании), продление его токена в его собственной записи, подписанные
+ * ссылки на слайды и сохранение каждого шага в карусель. Реальная сеть — только здесь;
+ * логика шагов — в instagram.ts.
  */
 
 function logText(s: PublishState, text: string) {
@@ -31,37 +32,50 @@ export function settlePublish(id: string, message: string): PublishState {
       x.error = message;
     }
     logText(x, message);
+    syncScheduleWithPublish(c);
   }).publish;
 }
 
 export async function runPublishJob(id: string, mode: "publish" | "verify", onStep?: (text: string) => void): Promise<PublishState> {
-  const info = instagramAccountInfo();
-  if (info.problems.length) return settlePublish(id, info.problems.join(" "));
+  const c = getCarousel(id);
+  if (!c) throw notFound();
+  // аккаунт закреплён при постановке; у публикаций, поставленных до появления закрепления, — активный
+  let account: PublishAccount | undefined = c.publish.account;
+  if (!account) {
+    const active = findInstagramAccount(null);
+    if (active) account = toPublishAccount(active);
+  }
+  const info = instagramAccountInfo(account?.id ?? null);
+  if (!account || info.problems.length) return settlePublish(id, info.problems.join(" ") || "Аккаунт Instagram не выбран.");
 
   let token: string;
   try {
-    token = await instagramAccessToken(getSettings().instagramTokens!);
+    token = await accountAccessToken(account);
   } catch (e: any) {
     return settlePublish(id, `Не удалось получить токен Instagram: ${String(e?.message ?? e).slice(0, 200)}`);
   }
 
-  const base = info.publicBaseUrl!.replace(/\/$/, "");
+  const base = (info.publicBaseUrl ?? getSettings().publicBaseUrl ?? "").replace(/\/$/, "");
+  const pinned = account;
   const ctx: PublishCtx = {
     load: () => {
-      const c = getCarousel(id);
-      if (!c) throw notFound();
-      return c.publish;
+      const cur = getCarousel(id);
+      if (!cur) throw notFound();
+      return cur.publish;
     },
     save: (mutate) => {
-      const s = updateCarousel(id, (c) => mutate(c.publish)).publish;
+      const s = updateCarousel(id, (cur) => {
+        mutate(cur.publish);
+        syncScheduleWithPublish(cur);
+      }).publish;
       const last = s.log[s.log.length - 1];
       if (last && onStep) onStep(last.text);
       return s;
     },
     account: {
       token,
-      igUserId: info.igUserId!,
-      graph: `${info.via === "ig" ? "https://graph.instagram.com" : "https://graph.facebook.com"}/${IG_API_VERSION}`,
+      igUserId: pinned.igUserId,
+      graph: `${pinned.via === "ig" ? "https://graph.instagram.com" : "https://graph.facebook.com"}/${IG_API_VERSION}`,
     },
     mediaUrl: (file) => `${base}/api/carousel/public/${id}/${file}?${mediaQuery(id, file)}`,
     deps: {
@@ -72,8 +86,9 @@ export async function runPublishJob(id: string, mode: "publish" | "verify", onSt
     },
   };
 
-  updateCarousel(id, (c) => {
-    c.publish.accountLabel = info.label ?? undefined;
+  updateCarousel(id, (cur) => {
+    cur.publish.account = pinned;
+    cur.publish.accountLabel = pinned.label ?? undefined;
   });
   try {
     return mode === "verify" ? await verifyPublication(ctx) : await publishCarousel(ctx);

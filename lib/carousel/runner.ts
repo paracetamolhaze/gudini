@@ -3,6 +3,8 @@ import type { CarouselJob } from "./types";
 import { acquireRunnerLock, claimJob, findRunnableJob, finishJob, patchJob, releaseRunnerLock, touchRunnerLock } from "./store";
 import { executeJob } from "./jobs";
 import { settlePublish } from "./publishJob";
+import { settleOrphans } from "./spend";
+import { markOrphanInFlight } from "./images";
 
 /**
  * Фоновый обработчик каруселей — отдельный процесс. Его запускает сайт, когда в очереди
@@ -38,6 +40,14 @@ async function main() {
     return;
   }
   console.log(`${stamp()} обработчик каруселей запущен, pid ${PID}`);
+  // Прежний обработчик умер: его платные запросы могли уйти без записанного ответа
+  try {
+    const orphanSpend = settleOrphans("обработчик перезапущен до ответа провайдера — исход запроса неизвестен");
+    const orphanImages = markOrphanInFlight();
+    if (orphanSpend || orphanImages) console.log(`${stamp()} запросов с неизвестным исходом после перезапуска: ${orphanSpend}, слайдов: ${orphanImages}`);
+  } catch (e: any) {
+    console.error(`${stamp()} проверка прерванных запросов: ${String(e?.message ?? e).slice(0, 200)}`);
+  }
   const lockBeat = setInterval(() => {
     try {
       if (!touchRunnerLock(PID)) {

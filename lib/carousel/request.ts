@@ -1,10 +1,16 @@
-import type { CarouselRequest } from "./types";
+import type { CarouselMode, CarouselRequest, ImageModelId } from "./types";
 import { CAROUSEL_LIMITS, IG_LIMITS, isFormat, isLanguage } from "./limits";
 import { DEFAULT_STYLE, isStyleId } from "./styles";
+import { IMAGE_MODELS, isImageModelId } from "./models";
 import { cleanText } from "./text";
 
-/** Проверка формы создания карусели. Ошибка — готовая фраза для пользователя. */
-export function parseCreateRequest(body: any): { request: CarouselRequest } | { error: string } {
+export type ParsedCreate = { request: CarouselRequest; mode: CarouselMode; imageModel?: ImageModelId };
+
+/**
+ * Проверка формы создания карусели. Ошибка — готовая фраза для пользователя.
+ * Новый сценарий — с иллюстрациями; mode="text_cards" оставлен для прежних текстовых карточек.
+ */
+export function parseCreateRequest(body: any, defaults: { imageModel: ImageModelId | null } = { imageModel: null }): ParsedCreate | { error: string } {
   const idea = cleanText(body?.idea, { multiline: true });
   if (idea.length < CAROUSEL_LIMITS.ideaMin) return { error: "Опишите идею карусели — хотя бы несколько слов" };
   if (idea.length > CAROUSEL_LIMITS.ideaMax) return { error: `Идея длиннее ${CAROUSEL_LIMITS.ideaMax} символов — сократите` };
@@ -25,5 +31,13 @@ export function parseCreateRequest(body: any): { request: CarouselRequest } | { 
   const format = body?.format ?? "portrait";
   if (!isFormat(format)) return { error: "Неизвестный формат" };
 
-  return { request: { idea, wishes, slideCount, language, style, format } };
+  const mode: CarouselMode = body?.mode === "text_cards" ? "text_cards" : "illustrated";
+  const request: CarouselRequest = { idea, wishes, slideCount, language, style, format };
+  if (mode === "text_cards") return { request, mode };
+
+  const rawModel = body?.imageModel ?? defaults.imageModel;
+  if (!rawModel) return { error: "Не задана модель изображений (CAROUSEL_IMAGE_MODEL)" };
+  if (!isImageModelId(rawModel)) return { error: `Модель изображений «${String(rawModel).slice(0, 60)}» не поддерживается разделом (доступны: ${Object.values(IMAGE_MODELS).map((m) => m.label).join(", ")})` };
+  request.imageModel = rawModel;
+  return { request, mode, imageModel: rawModel };
 }

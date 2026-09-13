@@ -5,16 +5,19 @@ import { CAROUSEL_LIMITS } from "@/lib/carousel/limits";
 import { cleanText } from "@/lib/carousel/text";
 import { toClient } from "@/lib/carousel/view";
 import { ensureRunner } from "@/lib/carousel/runnerControl";
+import { configProblems } from "@/lib/carousel/config";
 
 export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const TYPES = ["generate", "render", "regenerate_slide", "instruct"] as const;
+const TYPES = ["generate", "render", "regenerate_slide", "instruct", "images", "image"] as const;
+const PAID = new Set(["generate", "regenerate_slide", "instruct", "images", "image"]);
 
 /**
- * Фоновые задания над каруселью: повтор генерации, рендер, перегенерация слайда,
- * правка по текстовому поручению. Публикация — отдельным маршрутом.
+ * Фоновые задания над каруселью: повтор генерации, сборка карточек, перегенерация слайда,
+ * правка по текстовому поручению, недостающие иллюстрации, новая иллюстрация или правка
+ * картинки одного слайда. Публикация — отдельным маршрутом.
  */
 export async function POST(req: NextRequest, { params }: Ctx) {
   const denied = guard(req);
@@ -24,6 +27,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     const body = await readBody(req);
     const type = body.type as (typeof TYPES)[number];
     if (!TYPES.includes(type)) return ok({ error: "Неизвестное задание" }, 400);
+    if (PAID.has(type)) {
+      const problems = configProblems();
+      if (problems.length) return ok({ error: problems.join(" "), code: "config" }, 400);
+    }
 
     const c = updateCarousel(id, (x) => {
       if (x.publish.status === "queued" || x.publish.status === "running") throw new CarouselError("Идёт публикация — дождитесь её окончания", 409, "publishing");
@@ -44,9 +51,20 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       if (!x.slides.length) throw new CarouselError("Сначала дождитесь генерации слайдов", 409, "no_slides");
 
       if (type === "render") attachJob(x, "render");
-      else if (type === "regenerate_slide") {
+      else if (type === "images") {
+        if (x.mode !== "illustrated") throw new CarouselError("У текстовой карусели нет иллюстраций", 400, "bad_mode");
+        const slideIds = Array.isArray(body.slideIds) ? body.slideIds.filter((s: unknown) => x.slides.some((y) => y.id === s)) : [];
+        attachJob(x, "images", { slideIds, includeUncertain: body.includeUncertain === true });
+      } else if (type === "image") {
+        if (x.mode !== "illustrated") throw new CarouselError("У текстовой карусели нет иллюстраций", 400, "bad_mode");
         if (!x.slides.some((s) => s.id === body.slideId)) throw new CarouselError("Слайд не найден — обновите страницу", 404, "slide_missing");
-        attachJob(x, "regenerate_slide", { slideId: body.slideId, hint: cleanText(body.hint, { max: CAROUSEL_LIMITS.hintMax }) });
+        const edit = body.mode === "edit";
+        const instruction = edit ? cleanText(body.instruction, { max: CAROUSEL_LIMITS.instructionMax }) : "";
+        if (edit && instruction.length < 3) throw new CarouselError("Напишите, что изменить в картинке, например «сделай светлее»", 400, "bad_instruction");
+        attachJob(x, "image", { slideId: body.slideId, mode: edit ? "edit" : "regenerate", instruction: edit ? instruction : undefined, hint: edit ? undefined : cleanText(body.hint, { max: CAROUSEL_LIMITS.hintMax }) });
+      } else if (type === "regenerate_slide") {
+        if (!x.slides.some((s) => s.id === body.slideId)) throw new CarouselError("Слайд не найден — обновите страницу", 404, "slide_missing");
+        attachJob(x, "regenerate_slide", { slideId: body.slideId, hint: cleanText(body.hint, { max: CAROUSEL_LIMITS.hintMax }), withImage: body.withImage === true });
       } else {
         const instruction = cleanText(body.instruction, { multiline: true });
         if (instruction.length < 3) throw new CarouselError("Напишите поручение, например «сократи третий слайд»", 400, "bad_instruction");

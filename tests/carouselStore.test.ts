@@ -190,14 +190,14 @@ test("готовность к публикации: нужен актуальн�
   const c = createCarousel(request);
   const s = slides();
   const x = updateCarousel(c.id, (y) => (y.slides = s), { content: true });
-  assert.match(publishReadiness(x).join(), /Слайд 1 не отрендерен/);
+  assert.match(publishReadiness(x).join(), /Слайд 1 не собран/);
   for (let i = 0; i < x.slides.length; i++) {
     const hash = slideHash(x, x.slides[i], i, x.slides.length);
     x.slides[i].render = { hash, file: `slide-${x.slides[i].id}-${hash.slice(0, 12)}.jpg`, at: new Date().toISOString() };
   }
   assert.deepEqual(publishReadiness(x), []);
   x.slides[2].title = "Изменили после рендера";
-  assert.match(publishReadiness(x).join(), /Слайд 3 не отрендерен после изменений/);
+  assert.match(publishReadiness(x).join(), /Слайд 3 не собран после изменений/);
   x.slides[2].title = "Вторая мысль";
   x.caption = "x".repeat(2300);
   assert.match(publishReadiness(x).join(), /Подпись/);

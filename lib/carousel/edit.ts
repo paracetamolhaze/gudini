@@ -1,20 +1,31 @@
-import type { Carousel } from "./types";
+import type { Carousel, DesignSettings } from "./types";
 import { CAROUSEL_LIMITS, HARD_FIELD_MAX } from "./limits";
 import { isStyleId } from "./styles";
+import { isImageModelId } from "./models";
 import { cleanCaption, cleanText, normalizeHashtags } from "./text";
 import { CarouselError } from "./store";
-import { slideHash } from "./templates";
+import { slideContentHash } from "./hash";
 
 function snapshot(c: Carousel) {
-  return JSON.stringify([c.title, c.caption, c.hashtags, c.footer, c.style, c.slides.map((s) => [s.id, s.kicker, s.title, s.body, s.bullets, s.cta])]);
+  return JSON.stringify([
+    c.title,
+    c.caption,
+    c.hashtags,
+    c.footer,
+    c.style,
+    c.imageModel,
+    c.design,
+    c.slides.map((s) => [s.id, s.kicker, s.title, s.body, s.bullets, s.cta, s.image?.brief, s.image?.composition, s.image?.textPlacement, s.image?.currentId]),
+  ]);
 }
 
 /**
  * Ручная правка из редактора. Применяется к карусели, открытой под блокировкой.
  * Ревизия обязательна: правка поверх изменений из другого окна или фонового задания
- * отклоняется, а не затирает их молча.
+ * отклоняется, а не затирает их молча. Текст и выбор версии картинки меняются без
+ * обращения к генератору — рендер карточки пересобирается по новому отпечатку.
  */
-export function applyManualEdit(c: Carousel, body: Record<string, any>): { contentChanged: boolean; renderNeeded: boolean } {
+export function applyManualEdit(c: Carousel, body: Record<string, any>, opts: { design?: DesignSettings } = {}): { contentChanged: boolean; renderNeeded: boolean } {
   if (typeof body.revision !== "number" || body.revision !== c.revision) {
     throw new CarouselError(
       "Карусель изменилась после загрузки страницы (другое окно или фоновое задание). Обновите страницу — несохранённый черновик восстановится.",
@@ -36,6 +47,15 @@ export function applyManualEdit(c: Carousel, body: Record<string, any>): { conte
     if (!isStyleId(body.style)) throw new CarouselError("Неизвестный стиль", 400, "bad_style");
     c.style = body.style;
   }
+  if (body.imageModel !== undefined) {
+    if (!isImageModelId(body.imageModel)) throw new CarouselError("Неизвестная модель изображений", 400, "bad_model");
+    c.imageModel = body.imageModel;
+  }
+  if (body.applyDesign === true) {
+    if (c.mode !== "illustrated") throw new CarouselError("Оформление аккаунта применяется к каруселям с иллюстрациями", 400, "bad_mode");
+    if (!opts.design) throw new CarouselError("Оформление аккаунта не загружено", 500, "no_design");
+    c.design = opts.design;
+  }
 
   if (body.slides !== undefined) {
     if (!Array.isArray(body.slides)) throw new CarouselError("slides — список правок", 400, "bad_slides");
@@ -55,6 +75,46 @@ export function applyManualEdit(c: Carousel, body: Record<string, any>): { conte
         slide.bullets = list.map((b) => cleanText(b, { max: HARD_FIELD_MAX })).filter(Boolean).slice(0, 6);
       }
       if (patch.cta !== undefined && slide.kind === "final") slide.cta = cleanText(patch.cta, { max: HARD_FIELD_MAX });
+
+      const img = slide.image;
+      if (patch.textPlacement !== undefined || patch.imageBrief !== undefined || patch.imageComposition !== undefined || patch.imageVersionId !== undefined) {
+        if (!img) throw new CarouselError(`У слайда ${n} нет иллюстрации`, 400, "no_image");
+        let touched = false;
+        if (patch.textPlacement !== undefined) {
+          if (patch.textPlacement !== "top" && patch.textPlacement !== "bottom") throw new CarouselError("Место текста — top или bottom", 400, "bad_placement");
+          if (img.textPlacement !== patch.textPlacement) {
+            img.textPlacement = patch.textPlacement;
+            touched = true;
+          }
+        }
+        if (patch.imageBrief !== undefined) {
+          const brief = cleanText(patch.imageBrief, { max: 700 });
+          if (brief.length < 10) throw new CarouselError(`Описание иллюстрации слайда ${n} слишком короткое`, 400, "bad_brief");
+          if (brief !== img.brief) {
+            img.brief = brief;
+            touched = true;
+          }
+        }
+        if (patch.imageComposition !== undefined) {
+          const composition = cleanText(patch.imageComposition, { max: 700 });
+          if (composition !== img.composition) {
+            img.composition = composition;
+            touched = true;
+          }
+        }
+        if (patch.imageVersionId !== undefined) {
+          const v = img.versions.find((x) => x.id === patch.imageVersionId);
+          if (!v) throw new CarouselError(`Версия иллюстрации слайда ${n} не найдена`, 404, "version_missing");
+          if (img.currentId !== v.id) {
+            img.currentId = v.id;
+            img.status = "ready";
+            img.error = undefined;
+            touched = true;
+          }
+        }
+        // любая правка слайда делает ответ уже идущей генерации «устаревшим»: он сохранится версией, но текущей не станет
+        if (touched) img.rev += 1;
+      }
     }
   }
 
@@ -76,6 +136,6 @@ export function applyManualEdit(c: Carousel, body: Record<string, any>): { conte
   const total = c.slides.length;
   return {
     contentChanged: snapshot(c) !== before,
-    renderNeeded: c.slides.some((s, i) => !s.render || s.render.hash !== slideHash(c, s, i, total)),
+    renderNeeded: c.slides.some((s, i) => !s.render || s.render.hash !== slideContentHash(c, s, i, total)),
   };
 }

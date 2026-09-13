@@ -6,17 +6,22 @@ import type { Carousel, Slide } from "./types";
 import { FORMATS, LANGUAGES } from "./limits";
 import { getStyle } from "./styles";
 import { buildSlideHtml, fontFaceCss, FIT_SCALES, FONT_FAMILY } from "./templates";
+import { buildIllustratedHtml } from "./illustrated";
+import { DEFAULT_DESIGN } from "./designShared";
+import { readBrandFile } from "./design";
+import { dataUrl } from "./imageFile";
 import { stripEmphasis, typograph } from "./text";
 import { instagramImageProblems, jpegInfo } from "./jpeg";
+import { imageFilePath } from "./store";
 
 /**
  * Рендер карточки: HTML-шаблон → безголовый Chromium → JPEG. Работает только в фоновом
  * обработчике (lib/carousel/runner.ts) и в процесс сайта не попадает.
  *
- * Проверки до снимка: шрифт содержит все символы текста (иначе браузер молча подставил
- * бы системный), встроенные шрифты загрузились, текст не выходит за блок ни по высоте,
- * ни по ширине. Не поместилось — кегль уменьшается ступенями; не помогло — у слайда
- * ошибка, картинки нет. Обрезанный текст в Instagram не уходит.
+ * Два шаблона: текстовые карточки прежних каруселей и карточки с иллюстрацией на весь кадр
+ * (картинка встраивается data:URL, текст — отдельный слой). Проверки до снимка одни: шрифт
+ * содержит все символы, встроенные шрифты загрузились, текст не выходит за блок. Не
+ * поместилось — кегль уменьшается ступенями; не помогло — у слайда ошибка, картинки нет.
  */
 
 const FONT_FILES = {
@@ -50,18 +55,29 @@ function loadFonts() {
   return loaded;
 }
 
-/** Символы текста слайда, которых нет в шрифте своего поля. */
-export function missingGlyphs(c: Pick<Carousel, "style" | "language" | "footer">, slide: Pick<Slide, "kicker" | "title" | "body" | "bullets" | "cta">): string[] {
-  const f = loadFonts().faces;
+type GlyphCarousel = Pick<Carousel, "mode" | "style" | "language" | "footer" | "design">;
+
+/** Шрифт заголовка и подпись внизу — по режиму карточки: цветовой шаблон или оформление аккаунта. */
+function glyphSpec(c: GlyphCarousel): { titleFont: "display" | "condensed"; upper: boolean; footer: string } {
+  if (c.mode === "illustrated") {
+    const d = c.design ?? DEFAULT_DESIGN;
+    return { titleFont: d.titleFont, upper: d.titleFont === "condensed", footer: d.logoFile ? "" : d.author };
+  }
   const style = getStyle(c.style);
-  const titleFont = style.titleFont === "display" ? f.display : f.condensed;
+  return { titleFont: style.titleFont, upper: style.titleUpper, footer: c.footer };
+}
+
+/** Символы текста слайда, которых нет в шрифте своего поля. */
+export function missingGlyphs(c: GlyphCarousel, slide: Pick<Slide, "kicker" | "title" | "body" | "bullets" | "cta">): string[] {
+  const f = loadFonts().faces;
+  const spec = glyphSpec(c);
   const checks: [string, opentype.Font][] = [
-    [style.titleUpper ? slide.title.toUpperCase() : slide.title, titleFont],
+    [spec.upper ? slide.title.toUpperCase() : slide.title, spec.titleFont === "display" ? f.display : f.condensed],
     [slide.kicker.toUpperCase(), f.condensed],
     [slide.body, f.text],
     [slide.bullets.join(" "), f.text],
     [slide.cta, f.textBold],
-    [c.footer, f.textBold],
+    [spec.footer, f.textBold],
     [`0123456789/ ${LANGUAGES[c.language].swipe.toUpperCase()}`, f.condensed],
   ];
   const missing = new Set<string>();
@@ -122,6 +138,8 @@ const FONT_CHECK = `(async () => {
     try { faces = await document.fonts.load(spec, "АБВЁабвё"); } catch (e) {}
     if (!faces.length || faces.some((f) => f.status !== "loaded")) bad.push(name);
   }
+  const art = document.querySelector("img.art");
+  if (art && !(art.complete && art.naturalWidth > 0)) bad.push("illustration");
   return bad;
 })()`;
 
@@ -168,6 +186,26 @@ export async function renderSlide(c: Carousel, slide: Slide, index: number, tota
 
   const { width, height } = FORMATS[c.format];
   const fontCss = loadFonts().css;
+  let html: (scale: number, bignum: boolean) => string;
+  if (c.mode === "illustrated") {
+    const img = slide.image;
+    const version = img?.versions.find((v) => v.id === img.currentId);
+    if (!version) return { ok: false, error: "нет иллюстрации — сгенерируйте картинку слайда" };
+    let art: Buffer;
+    try {
+      art = fs.readFileSync(imageFilePath(c.id, version.file));
+    } catch {
+      return { ok: false, error: "файл иллюстрации не найден — сгенерируйте картинку заново" };
+    }
+    const design = c.design ?? DEFAULT_DESIGN;
+    const logo = readBrandFile(design.logoFile);
+    const artDataUrl = dataUrl(art);
+    const logoDataUrl = logo ? dataUrl(logo) : null;
+    html = (scale) => buildIllustratedHtml({ format: c.format, language: c.language, design, slide, index, total, scale, fontCss, artDataUrl, logoDataUrl });
+  } else {
+    html = (scale, bignum) => buildSlideHtml({ carousel: c, slide, index, total, scale, fontCss, bignum });
+  }
+
   const b = await getBrowser();
   // сеть выключена: страница не может ничего загрузить, даже если в текст попадёт ссылка
   const context = await b.newContext({ viewport: { width, height }, deviceScaleFactor: 1, offline: true, colorScheme: "light" });
@@ -176,15 +214,16 @@ export async function renderSlide(c: Carousel, slide: Slide, index: number, tota
     await page.route("**/*", (route) => (route.request().url().startsWith("data:") ? route.continue() : route.abort()));
     let last: string[] = [];
     for (const scale of FIT_SCALES) {
-      await page.setContent(buildSlideHtml({ carousel: c, slide, index, total, scale, fontCss }), { waitUntil: "load", timeout: 30_000 });
-      const badFonts = (await page.evaluate(FONT_CHECK)) as string[];
-      if (badFonts.length) return { ok: false, error: `шрифты карточки не загрузились: ${badFonts.join(", ")}` };
+      await page.setContent(html(scale, true), { waitUntil: "load", timeout: 30_000 });
+      const bad = (await page.evaluate(FONT_CHECK)) as string[];
+      if (bad.includes("illustration")) return { ok: false, error: "иллюстрация не загрузилась в карточку — сгенерируйте её заново" };
+      if (bad.length) return { ok: false, error: `шрифты карточки не загрузились: ${bad.join(", ")}` };
       const fit = (await page.evaluate(MEASURE)) as { problems: string[]; overlap: boolean };
       last = fit.problems;
       if (last.length) continue;
       if (fit.overlap) {
         // номер позиционирован абсолютно и на раскладку текста не влияет — перемерять не нужно
-        await page.setContent(buildSlideHtml({ carousel: c, slide, index, total, scale, fontCss, bignum: false }), { waitUntil: "load", timeout: 30_000 });
+        await page.setContent(html(scale, false), { waitUntil: "load", timeout: 30_000 });
         await page.evaluate(FONT_CHECK);
       }
       const buffer = await page.screenshot({ type: "jpeg", quality: 90, clip: { x: 0, y: 0, width, height }, animations: "disabled", caret: "hide" });

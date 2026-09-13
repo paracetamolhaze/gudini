@@ -1,4 +1,4 @@
-import { eventCovered, voiceOnlyEvent } from "./audit";
+import { eventCovered, mustShowEvent, voiceOnlyEvent } from "./audit";
 import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
 
 /**
@@ -17,7 +17,7 @@ import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
  * генерации: ролик с поздним началом смотрибелен, а вот кадра с невыполнимым указанием
  * не существует вовсе.
  */
-export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present", "scene-without-visual-task", "explanation-faked-proof", "explanation-hides-event", "repeated-visual-task", "duplicate-visual-tasks", "author-flicker", "author-stretch-explained", "no-visual-tasks"]);
+export const RETRY_WARN_CODES = new Set(["author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present", "scene-without-visual-task", "explanation-faked-proof", "explanation-hides-event", "repeated-visual-task", "duplicate-visual-tasks", "author-flicker", "author-stretch-explained", "no-visual-tasks", "unconfirmed-mechanism", "voice-contradicts-facts", "basis-unverified"]);
 
 /** Нарушения, запрещающие оплату. */
 export function gateIssues(plan: Pick<AiFilmPlan, "issues">): PlanIssue[] {
@@ -35,15 +35,28 @@ export function requiredEvents(events: StoryEvent[] | undefined): StoryEvent[] {
 }
 
 /**
+ * Обязательные К ПОКАЗУ события: контракт минус неподтверждённые механизмы и опровергнутые
+ * справкой утверждения. Раньше «все обязательные показаны» означало только, что сохранён
+ * контракт, даже когда сам контракт выбрал неверные события.
+ */
+export function showableEvents(bible: { events?: StoryEvent[]; researchFacts?: string[] }): StoryEvent[] {
+  const facts = bible.researchFacts ?? [];
+  return requiredEvents(bible.events).filter((e) => mustShowEvent(e, facts));
+}
+
+/**
  * Какие обязательные события ИСХОДНОГО контракта план не показывает. Проверяется по
  * конечным запросам: бит мог остаться в таймлайне, но не попасть ни в один клип.
  */
 export function missingRequired(
-  plan: Pick<AiFilmPlan, "beats" | "shots"> & { bible?: { authorCarried?: string[] } },
+  plan: Pick<AiFilmPlan, "beats" | "shots"> & { bible?: { authorCarried?: string[]; researchFacts?: string[] } },
   required: StoryEvent[],
 ): string[] {
   const carried = new Set(plan.bible?.authorCarried ?? []);
-  return required.filter((e) => !carried.has(e.id) && !eventCovered(e, plan.beats, plan.shots)).map((e) => e.id);
+  const facts = plan.bible?.researchFacts ?? [];
+  return required
+    .filter((e) => mustShowEvent(e, facts) && !carried.has(e.id) && !eventCovered(e, plan.beats, plan.shots))
+    .map((e) => e.id);
 }
 
 /**

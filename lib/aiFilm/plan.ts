@@ -1118,7 +1118,9 @@ export function authorStretchIssues(timeline: TimelineSegment[], duration: numbe
       code: "first-scene-late",
       severity: "warn",
       beatIds: ai[0].beatIds,
-      message: `Первая сцена появляется только на ${first.toFixed(1)} с — начало ролика без картинки не удержит зрителя`,
+      // Не автоматический дефект: если первые фразы честно не показать, вступление с голосом
+      // допустимо. Оценивается вместе с речью, а не закрывается любой картинкой.
+      message: `Первая сцена появляется только на ${first.toFixed(1)} с — оцените вступление вместе с голосом: если первые фразы честно не показать, это допустимо`,
     });
   }
   const gaps: [number, number][] = [];

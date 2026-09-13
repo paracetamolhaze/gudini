@@ -14,7 +14,7 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
 /** 9 — общая процедура режиссуры: причинность, доказательство сцены, состояние, механика, камера. */
-export const STORY_VERSION = 18;
+export const STORY_VERSION = 19;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -104,6 +104,9 @@ export function storySystemPrompt(character: CharacterProfile, universe: Univers
 У каждого события: короткий id; observable — наблюдаемое изменение по-английски; required — обязательно ли оно для понимания истории; номера фраз, где оно звучит; objects — носители изменения с состоянием до и после.
 objects.id — устойчивое короткое имя того, ЧТО меняется. Обычно это предмет (parcel, phone, main-canopy, door), но событием может быть и решение, отказ, передача или смена отношений — тогда id называет их носителя: seat, keys-owner, permission, queue-place. Два похожих предмета — РАЗНЫЕ id, их состояния не смешиваются.
 Не выдумывай ломание, открывание или падение ради того, чтобы «было что показать»: у уступленного места, принятого решения и переданного ключа есть свои наблюдаемые признаки.
+СТАТУС ФАКТА У КАЖДОГО СОБЫТИЯ (basis): "confirmed" — справка это подтверждает, в basisFact приведи её фразу дословно; "told" — есть только в речи автора; "contradicted" — справка говорит иначе, в basisFact приведи её фразу. Без справки всё told.
+МЕХАНИЗМ — кто и как распознал, кто принял решение, кто позвонил, кто сказал пассажирам — при basis told или contradicted изображать нельзя: у такого события показывается только внешне наблюдаемый исход (машина остановилась, дверь открыли, люди подошли), а о механизме говорит голос. Обязательность события для рассказа не делает его обязательным к показу.
+Если речь противоречит справке, историю не исправляй и участников не добавляй: поставь contradicted и оставь конфликт автору.
 
 СТАТУС УТВЕРЖДЕНИЯ СОХРАНЯЕТСЯ В КАДРЕ. Сцена не может быть сильнее текста:
 - обещано на будущее («обещают добавить», «выйдет позже») — показывай объявление или подготовку, а не работающую функцию в руках;
@@ -279,6 +282,7 @@ supportingCharacters: до 6 на ролик, только названные и
 ═══ 11. ${character.name.toUpperCase()} — ГЛАВНОЕ ЛИЦО КАНАЛА, А НЕ ВТОРОЙ ЧЕЛОВЕК В КАДРЕ ═══
 По умолчанию главного героя истории ИГРАЕТ ${character.name}. Это постановка: канал показывает историю силами своего персонажа, как переигранная сцена, а не как найденная запись.
 - Герой истории назван по имени или описан обобщённо («парень», «Каспер», «один чувак») → его роль исполняет ${character.name}. Имя героя запиши в bible.playedByGudini, а отдельным человеком в supportingCharacters его НЕ заводи: в кадре один человек, а не двое.
+- НАЗНАЧЕНИЕ РОЛИ И СОХРАНЕНИЕ ВНЕШНОСТИ — РАЗНЫЕ РЕШЕНИЯ. Если роль требует другого возраста, пола или другой одежды (подросток в худи, пожилой человек, женщина, полицейский в форме), это роль не для ${character.name}: заведи участника в supportingCharacters и опиши его внешность там; ${character.name} в такой сцене либо отсутствует, либо стоит рядом в своём костюме. Ошибка назначения исправляется переназначением, а не переодеванием ${character.name}.
 - ВНЕШНОСТЬ И ВОЗРАСТ ${character.name} НЕ МЕНЯЮТСЯ НИКОГДА. Он играет роль, но остаётся собой: нельзя писать «${character.name} as an elderly inventor» или требовать другого возраста, роста и лица. Если истории нужен человек другого возраста или пола, это ОТДЕЛЬНЫЙ участник в supportingCharacters, и ${character.name} в такой сцене либо не появляется, либо стоит рядом как сам себя.
 - ВО ВСЕХ АНГЛИЙСКИХ ПОЛЯХ (visualAction, keyMoment, motion, stateBefore, stateAfter, camera) этого человека называй «${character.name}», а НЕ именем героя истории. Пиши «${character.name} pulls the reserve handle», а не «Casper pulls the reserve handle»: имя героя в промпте заставляет генератор рисовать какого-то другого человека вместо ${character.name}. Имя героя живёт только в bible.playedByGudini и в русских полях meaning и storyBeat.
 - gudiniVisible следует из того, кто НАЗВАН в кадре: если в scene.who или visualAction есть ${character.name} — true; если в кадре только другой человек (публичное лицо, участник), а ${character.name} не назван — false. Флаг и состав участников — одно решение, а не два.
@@ -312,7 +316,7 @@ purpose: hook | setup | explain | example | reveal | emotion | transition | clim
 {"storyArc": {"understand": "...", "gudiniRole": "...", "beginning": "...", "development": "...", "conflict": "...", "climax": "...", "meaning": "..."},
  "bible": {"storyType": "news|history|philosophy|explainer", "mood": "english", "lighting": "english", "cameraLanguage": "english", "locations": ["english"], "importantObjects": ["english"], "playedByGudini": "имя героя, роль которого исполняет ${character.name}, или пустая строка", "supportingCharacters": [{"name": "...", "function": "opponent|guide|witness|partner|background", "appearance": "english"}], "continuityRules": ["english", "..."],
   "visualTasks": [{"id": "state", "learns": "русский: что зритель узнаёт из картинки", "role": "event|illustration|explanation", "fromPhrase": 1, "toPhrase": 2, "action": "english: one feasible observable action, empty for explanation"}],
-  "events": [{"id": "order", "observable": "english: what the viewer sees change", "required": true, "fromPhrase": 1, "toPhrase": 2, "objects": [{"id": "phone", "before": "english", "after": "english", "role": "change"}]}]},
+  "events": [{"id": "order", "observable": "english: what the viewer sees change", "required": true, "basis": "confirmed|told|contradicted", "basisFact": "фраза из справки или пусто", "fromPhrase": 1, "toPhrase": 2, "objects": [{"id": "phone", "before": "english", "after": "english", "role": "change"}]}]},
  "beats": [{"fromPhrase": 1, "toPhrase": 2, "meaning": "русский, 1 фраза", "storyBeat": "русский: место в истории", "displayMode": "author|full_ai|hybrid", "purpose": "...", "priority": "low|medium|high", "gudiniVisible": false, "eventIds": ["order"], "visualTask": "state", "universeAdaptation": "english: what exactly from the speech is on screen", "visualAction": "english: who, where, what he does, what changes", "keyMoment": "english: the one visible change", "anchorPhrase": "слово из речи этого бита", "hold": "instant|settle|read", "motion": "english", "location": "english", "objects": [{"id": "parcel", "before": "english", "after": "english", "role": "change"}], "scene": {"who": "english", "worn": ["english"], "props": ["english"], "mechanics": "english"}, "stateBefore": "english", "stateAfter": "english", "continuityGroup": null, "continuityRequired": false, "transition": "cut", "shotType": "medium", "camera": "english", "cameraAngle": "eye_level|low_angle|high_angle|overhead|ground_level|over_shoulder|profile", "frameSubject": "english: what fills the frame", "composition": "center|low_space_above|high_space_below|offset_left|offset_right|subject_small_in_wide"}]}
 Для author-битов universeAdaptation/visualAction/keyMoment/anchorPhrase/location/state/objects/scene оставляй пустыми, eventIds пустым списком, visualTask пустой строкой, gudiniVisible=false.`;
 }
@@ -591,7 +595,7 @@ export function renameHeroToCharacter(beats: StoryBeat[], hero: string, characte
   return count;
 }
 
-export function normalizeBible(raw: RawStory, character: CharacterProfile, universe: UniverseProfile): StoryBible {
+export function normalizeBible(raw: RawStory, character: CharacterProfile, universe: UniverseProfile, researchFacts: string[] = []): StoryBible {
   const b = raw.bible ?? {};
   const a = raw.storyArc ?? {};
   const supporting = (Array.isArray(b.supportingCharacters) ? b.supportingCharacters : [])
@@ -614,6 +618,9 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
       fromPhrase: Math.max(1, Math.round(Number(e?.fromPhrase) || 1)),
       toPhrase: Math.max(1, Math.round(Number(e?.toPhrase) || Number(e?.fromPhrase) || 1)),
       objects: objectStates(e?.objects),
+      // статус факта: подтверждение и опровержение требуют цитаты из справки, разбор её сверяет
+      basis: (e?.basis === "confirmed" || e?.basis === "contradicted" ? e.basis : "told") as StoryEvent["basis"],
+      basisFact: str(e?.basisFact),
     }))
     // Битые записи НЕ выбрасываются: молча удалённое обязательное событие превращало
     // непокрытый план в «зелёный». Они доезжают до разбора и там становятся ошибкой контракта.
@@ -658,6 +665,7 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
     storyType,
     eventsDropped: Math.max(0, Math.min(rawEvents.length, 12) - events.length),
     visualTasks,
+    researchFacts: researchFacts.filter(Boolean),
     staging: STAGING_FOR[storyType],
     // кадры новости — реконструкция; происхождение хранится в плане, а не подразумевается
     reconstruction: storyType === "news" || storyType === "history",
@@ -930,6 +938,8 @@ export async function planStory(args: {
   script: string;
   topic?: string;
   researchSummary?: string;
+  /** факты справки по отдельности: доходят до контракта и разбора */
+  researchFacts?: string[];
   character: CharacterProfile;
   universe: UniverseProfile;
   duration: number;
@@ -974,7 +984,7 @@ export async function planStory(args: {
     const tail = raw.slice(-300).replace(/\s+/g, " ");
     throw new Error(`AI Film Story: ответ модели не разобрался как JSON (символов ${raw.length}, конец ответа: ...${tail})`);
   }
-  const bible = normalizeBible(parsed, args.character, args.universe);
+  const bible = normalizeBible(parsed, args.character, args.universe, args.researchFacts ?? []);
   // Задача хранит и секунды речи: по ним разбор ритма отличает объяснение от забытого отрезка.
   for (const t of bible.visualTasks ?? []) {
     const from = phrases.find((p) => p.index === t.fromPhrase);

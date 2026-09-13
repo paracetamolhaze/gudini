@@ -14,6 +14,62 @@ import type { CharacterProfile, FilmShot, ObjectState, PlanIssue, StoryBeat, Sto
 
 const isAi = (b: StoryBeat) => b.displayMode !== "author";
 
+/**
+ * Событие-механизм: система, ИИ, камера, помощник или сама машина что-то распознаёт, решает,
+ * вызывает, объявляет. Такой механизм честно снять нельзя, если справка его не подтверждает:
+ * кадр выдумает, кто и как принял решение. В ролике про робот-такси так появились поворот
+ * линзы к пистолету с красной тревогой и панель, сама играющая объявление, хотя по справке
+ * машину заглушили и о неисправности сказали сотрудники компании.
+ */
+const DEVICE_AGENCY =
+  /\b(?:system|systems|software|algorithm|ai|a\.i\.|artificial intelligence|neural|camera|cameras|sensor|sensors|assistant|autopilot|robot|robotaxi|the car|the cars|the vehicle|the vehicles|the taxi|computer|waymo|tesla)\b[^.;]{0,60}?\b(?:detects?|detected|recogni[sz]es?|recogni[sz]ed|registers?|registered|identif(?:y|ies|ied)|decides?|decided|triggers?|triggered|activates?|activated|alerts?|alerted|announces?|announced|notif(?:y|ies|ied)|calls?|called|contacts?|contacted|locks?|locked|chooses?|chose|selects?|selected|plans?|planned|prepares?|prepared|tricks?|tricked|deceives?|deceived|lies|lied|tells?|told|warns?|warned|reports?|reported|flags?|flagged|launches?|launched|initiates?|initiated)\b/i;
+/** Видимая реакция устройства, которой в кадре берутся доказывать механизм. */
+const DEVICE_REACTION = /\b(?:swivels?|swivel(?:l)?ing|blinks?|blinking|glows?|glowing|lights? up|flashes|flashing|beeps?|scans?|scanning|indicator|alert|alarm|warning light|red light)\b/i;
+/** Роль, которая по возрасту или полу не для постоянного персонажа. */
+const ROLE_OTHER_PERSON = /подрост|\bteen|ребён|ребен|мальчик|девоч|девуш|женщин|\bgirl|\bwoman|\bboy\b|\bchild|\bkid\b|elderly|старик|пожил|старуш|\d{1,2}-летн/i;
+
+const stemsOf = (t: string) => new Set(t.toLowerCase().replace(/ё/g, "е").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4).map((w) => w.slice(0, 5)));
+
+/** Есть ли цитата в справке: большинство её значимых слов встречается в одном из фактов. */
+export function factMatches(quote: string, facts: string[]): boolean {
+  const q = stemsOf(quote);
+  if (q.size < 3) return false;
+  return facts.some((f) => {
+    const fs = stemsOf(f);
+    let common = 0;
+    for (const w of q) if (fs.has(w)) common++;
+    return common / q.size >= 0.5;
+  });
+}
+
+/** Событие приписывает действие системе, а не человеку. */
+export function mechanismEvent(e: Pick<StoryEvent, "observable" | "objects">): boolean {
+  return DEVICE_AGENCY.test(`${e.observable}. ${e.objects.map((o) => `${o.id.replace(/[-_]+/g, " ")} ${o.before} ${o.after}`).join(". ")}`);
+}
+
+/**
+ * Статус факта после сверки со справкой: «подтверждено» и «опровергнуто» требуют цитаты,
+ * которая есть в справке; без неё событие считается рассказом автора.
+ */
+export function effectiveBasis(e: Pick<StoryEvent, "basis" | "basisFact">, facts: string[]): "confirmed" | "told" | "contradicted" {
+  const b = e.basis ?? "told";
+  if (b === "told") return "told";
+  return facts.length && factMatches(e.basisFact ?? "", facts) ? b : "told";
+}
+
+/**
+ * Обязательно ли событие к ПОКАЗУ. Обязательность для рассказа и обязательность показа —
+ * разные вещи: неподтверждённый механизм и опровергнутое справкой утверждение показывать нельзя,
+ * даже если без них история не рассказывается. Их несёт голос, а видимый исход — отдельное событие.
+ */
+export function mustShowEvent(e: StoryEvent, facts: string[]): boolean {
+  if (!e.required || !e.id || !e.objects.length) return false;
+  const basis = effectiveBasis(e, facts);
+  if (basis === "contradicted") return false;
+  if (basis !== "confirmed" && mechanismEvent(e)) return false;
+  return true;
+}
+
 /** Слова состояния, у которых есть направление: обратно они не отыгрываются. */
 const DAMAGED = /\b(?:torn|shredded|ripped|broken|smashed|cracked|burnt|burned|spilled|empty|collapsed|deflated)\b/i;
 const INTACT = /\b(?:intact|whole|unopened|sealed|new|full|folded|packed|closed)\b/i;
@@ -301,7 +357,60 @@ export function auditPlan(
   // Обязательные события. Проверяется ПОСЛЕ нормализации, группировки и сокращения бюджета:
   // именно там события пропадали незаметно.
   const carried = new Set(bible.authorCarried ?? []);
-  const missing = events.filter((e) => e.required && e.objects.length && !carried.has(e.id) && !eventCovered(e, beats, shots));
+  const facts = bible.researchFacts ?? [];
+  // Статус факта, дошедший от справки до контракта. Заявленное «подтверждено» без цитаты из
+  // справки не считается: событие остаётся рассказом автора.
+  const unverified = events.filter((e) => e.id && e.basis && e.basis !== "told" && effectiveBasis(e, facts) === "told");
+  if (unverified.length) {
+    out.push({
+      code: "basis-unverified",
+      severity: "warn",
+      beatIds: [],
+      eventIds: unverified.map((e) => e.id),
+      message: `Статус без цитаты из справки не подтверждён, событие считается рассказом автора: ${unverified.map((e) => `${e.id} (${e.basis})`).join(", ")}`,
+    });
+  }
+  const mechanisms = events.filter((e) => e.required && e.id && mechanismEvent(e) && effectiveBasis(e, facts) !== "confirmed");
+  if (mechanisms.length) {
+    out.push({
+      code: "unconfirmed-mechanism",
+      severity: "warn",
+      beatIds: [],
+      eventIds: mechanisms.map((e) => e.id),
+      message:
+        `Механизм не подтверждён справкой и к показу не обязателен: ${mechanisms.map((e) => `${e.id} (${e.observable})`).join("; ")} — ` +
+        `кто и как распознал, решил или сказал, говорит голос; в кадре допустим только внешне наблюдаемый исход`,
+    });
+  }
+  const contradicted = events.filter((e) => e.id && effectiveBasis(e, facts) === "contradicted");
+  if (contradicted.length) {
+    out.push({
+      code: "voice-contradicts-facts",
+      severity: "warn",
+      beatIds: [],
+      eventIds: contradicted.map((e) => e.id),
+      message: `Речь противоречит справке, конфликт не исправляется автоматически и участники не добавляются: ${contradicted.map((e) => `${e.id} — справка: «${e.basisFact}»`).join("; ")}`,
+    });
+  }
+  // Сцена, изображающая неподтверждённый механизм или опровергнутое утверждение: запрет.
+  const suspect = new Set([...mechanisms, ...contradicted].map((e) => e.id));
+  const stagedText = (b: StoryBeat) => `${b.visualAction} ${b.keyMoment} ${b.motion} ${b.scene?.mechanics ?? ""}`;
+  add(
+    "invented-mechanism",
+    shown
+      .filter((b) => (b.eventIds ?? []).some((id) => suspect.has(id)) || (mechanisms.length > 0 && DEVICE_AGENCY.test(stagedText(b))))
+      .filter((b) => DEVICE_AGENCY.test(stagedText(b)) || DEVICE_REACTION.test(stagedText(b)))
+      .map((b) => b.id),
+    "Сцена изображает механизм, которого справка не подтверждает: поворот камеры, тревога, объявление системы — это выдуманное доказательство; покажите внешний исход или оставьте голосу",
+    "block",
+  );
+  add(
+    "staged-contradicted-claim",
+    shown.filter((b) => (b.eventIds ?? []).some((id) => contradicted.some((e) => e.id === id))).map((b) => b.id),
+    "Сцена ставит утверждение, которое справка опровергает — такой кадр не снимается, конфликт решает автор",
+    "block",
+  );
+  const missing = events.filter((e) => mustShowEvent(e, facts) && !carried.has(e.id) && !eventCovered(e, beats, shots));
   if (missing.length) {
     out.push({
       code: "event-not-covered",
@@ -644,12 +753,24 @@ export function auditPlan(
       if (foreign.length) recostumed.push(b.id);
     }
   }
+  // Ошибка назначения роли, а не повод переодеть персонажа: участник в другой одежде — отдельный
+  // человек. Прежняя формулировка «роль играется в своём костюме» толкала второй заход одевать
+  // пятнадцатилетнего подростка в куртку персонажа.
   add(
     "costume-conflict",
     recostumed,
-    `Сцена переодевает ${character.name}: блок персонажа требует постоянный костюм в каждом кадре — роль играется в своём костюме`,
+    `Роль назначена неверно: участник в чужой одежде — отдельный персонаж (supportingCharacters), а не ${character.name} в его костюме; ${character.name} в такой сцене либо отсутствует, либо стоит рядом в своём костюме`,
     "block",
   );
+  // Роль другого возраста или пола тоже не для постоянного персонажа, какой бы костюм ни стоял.
+  if (ROLE_OTHER_PERSON.test(bible.playedByGudini ?? "")) {
+    add(
+      "role-miscast",
+      shown.filter((b) => b.gudiniVisible).map((b) => b.id),
+      `Роль «${bible.playedByGudini}» требует другого возраста или пола: её играет отдельный участник, а не ${character.name}`,
+      "block",
+    );
+  }
 
   // Визуальные задачи всей истории. Судятся, когда планировщик их составил: сцена без задачи —
   // заполнитель, две сцены с одной задачей — одно и то же понимание с другого ракурса, сцена

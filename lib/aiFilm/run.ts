@@ -7,7 +7,7 @@ import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
 import { planStory, reconcileEventRefs, STORY_VERSION } from "./story";
 import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
-import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, requiredEvents, retryIssues, authorCarriedEvents } from "./criteria";
+import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, retryIssues, authorCarriedEvents, showableEvents } from "./criteria";
 import { generateGroups } from "./generate";
 import { loadCharacterProfile } from "./character";
 import { loadUniverseProfile } from "./universe";
@@ -105,6 +105,8 @@ export async function planFilm(args: {
   script: string;
   topic?: string;
   researchSummary?: string;
+  /** факты справки по отдельности: по ним разбор сверяет статус событий контракта */
+  researchFacts?: string[];
   character: ReturnType<typeof loadCharacterProfile>;
   universe: ReturnType<typeof loadUniverseProfile>;
   duration: number;
@@ -117,7 +119,7 @@ export async function planFilm(args: {
   const { character, universe, duration, cfg } = args;
   const ask = (retryNote?: string) =>
     planStory({
-      words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary,
+      words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary, researchFacts: args.researchFacts,
       character, universe, duration, coverage: args.coverage, retryNote, onCall: args.onCall,
     });
   let story = await ask();
@@ -132,7 +134,8 @@ export async function planFilm(args: {
   // не пускается к оплате: раньше исправление искало строки предупреждений регулярными
   // выражениями, а ворота смотрели только на issues, и известная склейка внутри кадра
   // проходила мимо ворот. Теперь набор один — criteria.ts.
-  const required = requiredEvents(story.bible.events);
+  // обязательные к показу: контракт минус неподтверждённые механизмы и опровергнутые утверждения
+  const required = showableEvents(story.bible);
   plan = withVisualTaskIssue(plan, story.bible);
   candidates.first = plan;
   const first = retryIssues(plan);
@@ -200,13 +203,14 @@ export async function runAiFilmStage(args: {
   if (request === "plan") {
     args.setStep("AI-фильм: разбор истории", 26);
     const research = await args.research.catch(() => null);
-    const summary = research ? research.facts.slice(0, 8).map((f) => f.text).filter(Boolean).join("; ") : "";
+    const facts = research ? research.facts.slice(0, 8).map((f) => f.text).filter(Boolean) : [];
+    const summary = facts.join("; ");
     // Ответы планировщика сохраняются рядом с планом ДО разбора: упавший разбор стоит
     // столько же, сколько удачный, и без текста ответа причину падения искать нечем.
     const callsDir = path.join(dir, "ai-film", "story-calls");
     let callNo = 0;
     const { plan } = await planFilm({
-      words, script: project.script ?? "", topic: project.topic, researchSummary: summary,
+      words, script: project.script ?? "", topic: project.topic, researchSummary: summary, researchFacts: facts,
       character, universe, duration, coverage, cfg,
       onStep: (step, progress) => args.setStep(step, progress),
       onCall: ({ system, user, raw, retry }) => {
@@ -265,7 +269,7 @@ export async function runAiFilmStage(args: {
   }
   // Обязательные события сверяются ещё раз по конечным запросам этого же плана: план
   // мог быть собран старым кодом, а событие потеряться на группировке или редьюсере.
-  const lost = missingRequired(plan, requiredEvents(plan.bible.events));
+  const lost = missingRequired(plan, showableEvents(plan.bible));
   if (lost.length) {
     throw new Error(`AI-фильм: обязательные события не попали ни в один запрос Veo: ${lost.join(", ")}. Соберите план заново. Veo не вызывался`);
   }

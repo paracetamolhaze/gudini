@@ -192,6 +192,16 @@ test("обязательное событие без перехода — пор
   assert.deepEqual(showableEvents(bible).map((e) => e.id), ["surrounded-stop"]);
 });
 
+test("второму заходу не возвращают силой событие без перехода", async () => {
+  const { preserveRequired } = await import("../lib/aiFilm/criteria");
+  const waiting = ev("waiting", "the teens remain seated calmly inside the stopped car", [{ id: "car-doors", before: "unlocked", after: "held closed", role: "keep" }]);
+  const fixed = [{ ...surrounded }];
+  // первый заход обещал «ожидание» без изменения; второй его убрал — и оно не возвращается
+  assert.deepEqual(preserveRequired([waiting, surrounded], fixed).map((e) => e.id), ["surrounded-stop"]);
+  // настоящее обязательство, снятое вторым заходом, возвращается по-прежнему
+  assert.deepEqual(preserveRequired([fire, surrounded], fixed).map((e) => e.id).sort(), ["fire-out-window", "surrounded-stop"]);
+});
+
 test("границы правила: документальная новость, вымышленная история, условный пример", () => {
   const fable = ev("guard-decides", "the tower guard system decides to lock the gate and sound the alarm", [
     { id: "gate", before: "open", after: "locked with the alarm sounding", role: "change" },

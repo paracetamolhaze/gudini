@@ -96,6 +96,10 @@ export function authorCarriedEvents(bible: {
 export function preserveRequired(original: StoryEvent[] | undefined, next: StoryEvent[] | undefined): StoryEvent[] {
   const out = [...(next ?? [])];
   for (const was of requiredEvents(original)) {
+    // Обязательство без перехода — порча контракта, а не обязательство: второй заход получает
+    // замечание «опишите, что меняется, или снимите обязательность», и возвращать ему тот же
+    // дефект силой нельзя. Так «ожидание» без изменения оставалось запретом в обоих кандидатах.
+    if (!was.objects.some((o) => o.role === "change" || (o.role !== "keep" && o.after.trim() && o.before.trim() !== o.after.trim()))) continue;
     // То же обязательство под другим именем возвращать нельзя: переименованное событие
     // добавлялось вторым, и одно из двух оставалось непоказанным навсегда. Совпадением
     // считается тот же предмет с тем же обещанным результатом.

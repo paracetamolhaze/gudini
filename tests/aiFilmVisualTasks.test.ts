@@ -127,3 +127,17 @@ test("обязательное для понимания не обязатель
   assert.deepEqual(authorCarriedEvents(plain), []);
   assert.ok(auditPlan(beats, plain, character).map((i) => i.code).includes("event-not-covered"));
 });
+
+test("объяснение без learns не выбрасывается: его роль решает ритм", () => {
+  const bible = normalizeBible(
+    { bible: { storyType: "explainer", visualTasks: [
+      { id: "place", learns: "где всё происходит", role: "illustration", fromPhrase: 1, toPhrase: 1, action: "a wide view" },
+      { id: "law", role: "explanation", fromPhrase: 2, toPhrase: 3 },
+      { id: "junk", role: "illustration", fromPhrase: 4, toPhrase: 4, action: "something" },
+    ] } } as any,
+    character,
+    universe,
+  );
+  assert.deepEqual((bible.visualTasks ?? []).map((t) => t.id), ["place", "law"]);
+  assert.equal(bible.visualTasks![1].role, "explanation");
+});

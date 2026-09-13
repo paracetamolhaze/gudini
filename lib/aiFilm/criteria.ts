@@ -1,4 +1,4 @@
-import { eventCovered } from "./audit";
+import { eventCovered, voiceOnlyEvent } from "./audit";
 import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
 
 /**
@@ -17,7 +17,7 @@ import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
  * генерации: ролик с поздним началом смотрибелен, а вот кадра с невыполнимым указанием
  * не существует вовсе.
  */
-export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present", "scene-without-visual-task", "explanation-staged", "repeated-visual-task", "duplicate-visual-tasks", "author-flicker", "no-visual-tasks"]);
+export const RETRY_WARN_CODES = new Set(["first-scene-late", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present", "scene-without-visual-task", "explanation-faked-proof", "explanation-hides-event", "repeated-visual-task", "duplicate-visual-tasks", "author-flicker", "author-stretch-explained", "no-visual-tasks"]);
 
 /** Нарушения, запрещающие оплату. */
 export function gateIssues(plan: Pick<AiFilmPlan, "issues">): PlanIssue[] {
@@ -47,9 +47,11 @@ export function missingRequired(
 }
 
 /**
- * Обязательные события, чьи реплики планировщик сам отдал объяснению. Их несёт голос автора:
- * требовать под них сцену значит снова получить выдуманный штамп или документ. Считается по
- * номерам фраз: событие целиком лежит внутри объяснений.
+ * Обязательные события, чьи реплики планировщик сам отдал объяснению И которые честно не снять:
+ * право, статус, сумма, причина. Их несёт голос автора — требовать под них сцену значит снова
+ * получить выдуманный штамп. Действие с предметом (разрыв купола, вскрытие посылки, передача
+ * ключа) голосу не отдаётся, как бы речь его ни называла: обязательность для рассказа и
+ * обязательность показа — разные вещи, и метка «объяснение» вторую не снимает.
  */
 export function authorCarriedEvents(bible: {
   events?: StoryEvent[];
@@ -62,7 +64,7 @@ export function authorCarriedEvents(bible: {
   }
   if (!explained.size) return [];
   return (bible.events ?? [])
-    .filter((e) => e.required && e.id)
+    .filter((e) => e.required && e.id && voiceOnlyEvent(e))
     .filter((e) => {
       for (let i = e.fromPhrase; i <= Math.min(e.toPhrase, e.fromPhrase + 500); i++) if (!explained.has(i)) return false;
       return true;

@@ -85,11 +85,16 @@ test("визуальные задачи: заполнитель, повтор п
     { id: "place-again", learns: "насколько большая мастерская и где она стоит", role: "illustration", fromPhrase: 4, toPhrase: 4, action: "a wide view of the workshop" },
   ];
   const got = auditPlan(
-    [beat("B1", 0, 6, { visualTask: "place" }), beat("B2", 6, 12, { visualTask: "place" }), beat("B3", 12, 18, { visualTask: "price" }), beat("B4", 18, 24)],
+    [
+      beat("B1", 0, 6, { visualTask: "place" }),
+      beat("B2", 6, 12, { visualTask: "place" }),
+      beat("B3", 12, 18, { visualTask: "price", visualAction: "a clerk stamps the invoice on the counter", keyMoment: "the stamp lands on the invoice" }),
+      beat("B4", 18, 24),
+    ],
     { ...bible, visualTasks: tasks },
     character,
   ).map((i) => i.code);
-  for (const code of ["repeated-visual-task", "explanation-staged", "scene-without-visual-task", "duplicate-visual-tasks"]) {
+  for (const code of ["repeated-visual-task", "explanation-faked-proof", "scene-without-visual-task", "duplicate-visual-tasks"]) {
     assert.ok(got.includes(code), `${code}: ${got.join(",")}`);
   }
   // одна непрерывная сцена в цепочке клипов повтором не считается
@@ -140,4 +145,95 @@ test("объяснение без learns не выбрасывается: его
   );
   assert.deepEqual((bible.visualTasks ?? []).map((t) => t.id), ["place", "law"]);
   assert.equal(bible.visualTasks![1].role, "explanation");
+});
+
+test("метка «объяснение» не снимает показ события с предметом", async () => {
+  const { authorCarriedEvents } = await import("../lib/aiFilm/criteria");
+  const { voiceOnlyEvent } = await import("../lib/aiFilm/audit");
+  const bible = normalizeBible({ bible: { storyType: "explainer" } } as any, character, universe);
+  const physical = [
+    { id: "tear", observable: "the main canopy tears open above him", required: true, fromPhrase: 2, toPhrase: 3, objects: [{ id: "main-canopy", before: "intact and inflated", after: "torn along a seam", role: "change" as const }] },
+    { id: "delivery", observable: "the courier hands over the parcel", required: true, fromPhrase: 2, toPhrase: 3, objects: [{ id: "parcel", before: "in the courier hands", after: "in his hands", role: "change" as const }] },
+    { id: "sign", observable: "the device screen shows a signed confirmation", required: true, fromPhrase: 2, toPhrase: 3, objects: [{ id: "hardware-wallet", before: "screen showing an unsigned prompt", after: "screen showing a signed confirmation", role: "change" as const }] },
+    { id: "keys", observable: "the keys pass to the buyer", required: true, fromPhrase: 2, toPhrase: 3, objects: [{ id: "keys-owner", before: "the seller", after: "the buyer", role: "change" as const }] },
+  ];
+  const voiced = [
+    { id: "denied", observable: "the cemetery tax exemption is denied because the club is registered as an ordinary LLC", required: true, fromPhrase: 2, toPhrase: 3, objects: [{ id: "exemption", before: "requested", after: "denied", role: "change" as const }] },
+    { id: "farm-status", observable: "the parcel is classified as farmland for tax purposes", required: true, fromPhrase: 2, toPhrase: 3, objects: [{ id: "land-status", before: "taxed as golf course", after: "taxed as farmland", role: "change" as const }] },
+  ];
+  for (const e of physical) assert.equal(voiceOnlyEvent(e), false, e.id);
+  for (const e of voiced) assert.equal(voiceOnlyEvent(e), true, e.id);
+  const tasks: VisualTask[] = [{ id: "why", learns: "почему так вышло", role: "explanation", fromPhrase: 2, toPhrase: 3, action: "" }];
+  // разрыв купола, объявленный объяснением, остаётся обязательным к показу и получает своё замечание
+  const hidden = { ...bible, events: [physical[0]], visualTasks: tasks };
+  assert.deepEqual(authorCarriedEvents(hidden), []);
+  const codes = auditPlan([beat("B1", 0, 6, { visualTask: "why", visualAction: "a wide view of the airfield" })], hidden, character).map((i) => i.code);
+  assert.ok(codes.includes("explanation-hides-event"), codes.join(","));
+  assert.ok(codes.includes("event-not-covered"), codes.join(","));
+  // отказ в льготе под объяснением честно уходит голосу
+  assert.deepEqual(authorCarriedEvents({ ...bible, events: [voiced[0]], visualTasks: tasks }), ["denied"]);
+});
+
+test("две сцены одной задачи допустимы, когда вторая добавляет новое", () => {
+  const bible = normalizeBible({ bible: { storyType: "explainer" } } as any, character, universe);
+  const tasks: VisualTask[] = [{ id: "grave", learns: "могила стоит прямо у лунки на поле", role: "event", fromPhrase: 1, toPhrase: 2, action: "a grave marker stands beside the flagged hole" }];
+  const withTasks = { ...bible, visualTasks: tasks };
+  // общий план и деталь: разные решающие моменты, не повтор
+  const develops = auditPlan(
+    [
+      beat("B1", 0, 6, { visualTask: "grave", shotType: "wide", keyMoment: "the grave marker stands on the fairway a few meters from the flagged hole", frameSubject: "the marker and the hole together" }),
+      beat("B2", 6, 12, { visualTask: "grave", shotType: "close", keyMoment: "the engraved name on the marker with the golf flag blurred behind it", frameSubject: "the engraved face of the marker" }),
+    ],
+    withTasks,
+    character,
+  ).map((i) => i.code);
+  assert.ok(!develops.includes("repeated-visual-task"), develops.join(","));
+  // тот же момент с другого ракурса: повтор
+  const repeats = auditPlan(
+    [
+      beat("B1", 0, 6, { visualTask: "grave", cameraAngle: "eye_level", keyMoment: "the grave marker stands on the fairway beside the flagged hole", frameSubject: "the grave marker beside the flagged hole" }),
+      beat("B2", 6, 12, { visualTask: "grave", cameraAngle: "high_angle", keyMoment: "the grave marker standing on the fairway beside the flagged hole", frameSubject: "the grave marker beside the flagged hole" }),
+    ],
+    withTasks,
+    character,
+  ).map((i) => i.code);
+  assert.ok(repeats.includes("repeated-visual-task"), repeats.join(","));
+});
+
+test("под объяснение допустима помогающая иллюстрация, но не выдуманное доказательство", () => {
+  const bible = normalizeBible({ bible: { storyType: "explainer" } } as any, character, universe);
+  const tasks: VisualTask[] = [{ id: "tax-sum", learns: "сколько вышло налога", role: "explanation", fromPhrase: 1, toPhrase: 2, action: "" }];
+  const withTasks = { ...bible, visualTasks: tasks };
+  const helps = auditPlan(
+    [beat("B1", 0, 6, { visualTask: "tax-sum", visualAction: "a wide view of the fairways stretching to the horizon under flat daylight", keyMoment: "the sheer size of the grounds is visible in one frame" })],
+    withTasks,
+    character,
+  ).map((i) => i.code);
+  assert.ok(!helps.some((c) => c.startsWith("explanation-")), helps.join(","));
+  const fakes = auditPlan(
+    [beat("B1", 0, 6, { visualTask: "tax-sum", visualAction: "a clerk lays a tax bill on the desk and points at the printed amount", keyMoment: "the printed amount on the tax bill" })],
+    withTasks,
+    character,
+  ).map((i) => i.code);
+  assert.ok(fakes.includes("explanation-faked-proof"), fakes.join(","));
+});
+
+test("присутствие персонажа следует из того, кто назван в кадре", async () => {
+  const { reconcileParticipants } = await import("../lib/aiFilm/story");
+  const bible = { supportingCharacters: [{ name: "Estate clerk", function: "witness" as const, appearance: "a man in a grey suit" }] };
+  const beats = [
+    beat("B1", 0, 6, { gudiniVisible: true, visualAction: "Donald Trump walks slowly along the driveway toward the clubhouse entrance, seen from behind", scene: { who: "Donald Trump on the driveway", worn: ["a dark suit"] } }),
+    beat("B2", 6, 12, { gudiniVisible: true, visualAction: "Gudini as Donald Trump stands on the green beside the marker", scene: { who: "Gudini beside the marker" } }),
+    beat("B3", 12, 18, { gudiniVisible: true, visualAction: "he sits at the desk and opens the folder", scene: { who: "him at the desk" } }),
+    beat("B4", 18, 24, { gudiniVisible: false, visualAction: "Gudini opens the box on the table", scene: { who: "Gudini at the table" } }),
+    beat("B5", 24, 30, { gudiniVisible: true, visualAction: "the Estate clerk stamps the folder", scene: { who: "the Estate clerk at the desk" } }),
+    beat("B6", 30, 36, { gudiniVisible: true, visualAction: "a granite marker with Ivana Trump" + String.fromCharCode(39) + "s name sits in the grass, no one in frame", scene: { who: "" } }),
+  ];
+  const changed = reconcileParticipants(beats, bible as any, "Gudini");
+  assert.deepEqual(beats.map((b) => b.gudiniVisible), [false, true, true, true, false, true], JSON.stringify(beats.map((b) => [b.id, b.gudiniVisible])));
+  assert.equal(changed, 3);
+  // костюм публичного лица больше не читается как переодевание персонажа
+  const full = normalizeBible({ bible: { storyType: "news" } } as any, character, universe);
+  const codes = auditPlan([beats[0]], full, character).map((i) => i.code);
+  assert.ok(!codes.includes("costume-conflict"), codes.join(","));
 });

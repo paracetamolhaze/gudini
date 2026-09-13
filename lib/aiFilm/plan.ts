@@ -1150,7 +1150,14 @@ export function authorStretchIssues(timeline: TimelineSegment[], duration: numbe
     });
   }
   if (told.length) {
-    out.push({ code: "author-stretch-explained", severity: "warn", beatIds: [], message: `Длинные авторские куски отданы объяснению: ${fmt(told)}` });
+    // Метка «объяснение» не оправдывает любую пустую середину автоматически: вопрос остаётся,
+    // нет ли иллюстрации, которая помогла бы пониманию, не изображая доказательства.
+    out.push({
+      code: "author-stretch-explained",
+      severity: "warn",
+      beatIds: [],
+      message: `Длинные авторские куски отданы объяснению: ${fmt(told)}. Проверьте, нет ли иллюстрации, которая помогает пониманию без доказательства — место, обстановка, масштаб; если нет, оставьте автору`,
+    });
   }
   // Авторский кусок между двумя сценами короче двух секунд не читается: лицо только мелькает.
   const flicker = gaps.filter(([a, b]) => a > 1e-6 && b < duration - 1e-6 && b - a < MIN_AUTHOR_PIECE_SECONDS);

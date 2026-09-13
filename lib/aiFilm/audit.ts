@@ -663,24 +663,58 @@ export function auditPlan(
       shown.filter((b) => !b.visualTask || !byId.has(b.visualTask)).map((b) => b.id),
       "Сцена не решает ни одной визуальной задачи истории — это заполнитель: привяжите её к задаче или отдайте отрезок автору",
     );
+    // Под объяснение можно поставить иллюстрацию, которая помогает пониманию: голос называет сумму
+    // налога поверх кадра с полем. Нельзя ставить выдуманное доказательство — документ, штамп,
+    // чиновника, экран с цифрами: такой кадр утверждает то, чего речь не показывала.
     add(
-      "explanation-staged",
-      shown.filter((b) => byId.get(b.visualTask ?? "")?.role === "explanation").map((b) => b.id),
-      "Сцена поставлена на объяснение, для которого честной картинки нет — такой отрезок несёт автор",
+      "explanation-faked-proof",
+      shown
+        .filter((b) => byId.get(b.visualTask ?? "")?.role === "explanation")
+        .filter((b) => PROOF_PROPS.test(`${b.visualAction} ${b.keyMoment} ${b.motion} ${(b.scene?.props ?? []).join(" ")} ${b.scene?.mechanics ?? ""}`))
+        .map((b) => b.id),
+      "Под объяснение поставлено выдуманное доказательство: документ, штамп, чиновник или цифры — иллюстрация помогает пониманию, но не изображает то, чего речь не показывала",
     );
+    // Объяснение не оправдывает пропуск показываемого события: разрыв купола, вскрытие посылки или
+    // передача ключа остаются обязательными к показу, даже если их реплики отданы объяснению.
+    // Голосу отдаётся только исход, который честно не снять: право, статус, сумма, причина.
+    const explainedPhrases = new Set<number>();
+    for (const t of tasks) {
+      if (t.role !== "explanation") continue;
+      for (let i = t.fromPhrase; i <= Math.min(t.toPhrase, t.fromPhrase + 500); i++) explainedPhrases.add(i);
+    }
+    const hidden = events.filter((e) => {
+      if (!e.required || !e.id || voiceOnlyEvent(e)) return false;
+      for (let i = e.fromPhrase; i <= Math.min(e.toPhrase, e.fromPhrase + 500); i++) if (!explainedPhrases.has(i)) return false;
+      return true;
+    });
+    if (hidden.length) {
+      out.push({
+        code: "explanation-hides-event",
+        severity: "warn",
+        beatIds: [],
+        eventIds: hidden.map((e) => e.id),
+        message: `Показываемое событие отдано объяснению: ${hidden.map((e) => `${e.id} (${e.observable})`).join("; ")} — это действие с предметом, его нужно показать, а не рассказать`,
+      });
+    }
     const firstFor = new Map<string, StoryBeat>();
     const repeats: string[] = [];
     for (const b of shown) {
       if (!b.visualTask) continue;
       const prev = firstFor.get(b.visualTask);
-      if (!prev) firstFor.set(b.visualTask, b);
+      if (!prev) {
+        firstFor.set(b.visualTask, b);
+        continue;
+      }
       // одна непрерывная сцена, разложенная на клипы цепочки, повтором не считается
-      else if (!(prev.continuityGroup && prev.continuityGroup === b.continuityGroup)) repeats.push(b.id);
+      if (prev.continuityGroup && prev.continuityGroup === b.continuityGroup) continue;
+      // Две сцены одной задачи допустимы, когда вторая добавляет новое: общий план и деталь вместе
+      // раскрывают один смысл. Повтор — когда решающий момент тот же, а меняется только ракурс.
+      if (sameLearning(`${prev.keyMoment} ${prev.frameSubject}`, `${b.keyMoment} ${b.frameSubject}`)) repeats.push(b.id);
     }
     add(
       "repeated-visual-task",
       repeats,
-      "Несколько сцен решают одну и ту же визуальную задачу — другой ракурс не даёт зрителю нового понимания, оставьте одну",
+      "Сцена повторяет решающий момент предыдущей сцены той же задачи — другой ракурс не даёт зрителю нового понимания, оставьте одну или покажите новое",
     );
     const pictured = tasks.filter((t) => t.role !== "explanation");
     const twins: string[] = [];
@@ -709,6 +743,31 @@ export function auditPlan(
   return out;
 }
 
+
+/**
+ * Исход, который честно не снять: право, статус, сумма, причина, решение ведомства. Только такое
+ * событие можно отдать голосу автора. Всё, что меняет предмет — купол, посылку, экран, ключ в
+ * руке, — остаётся обязательным к показу, как бы речь его ни называла.
+ */
+const VOICE_ONLY_OUTCOME =
+  /\b(?:tax(?:es|ed|ation)?|exempt(?:ion|ed)?|status|register(?:ed|ation)?|legal(?:ly)?|illegal(?:ly)?|law(?:ful)?|ownership|classif(?:ied|ication)|denied|denial|approv(?:ed|al)|granted|reject(?:ed|ion)|price|cost|sum|amount|dollars?|percent|rate|fee|fine|penalt(?:y|ies)|ruling|verdict|licen[cs]e|permit(?:ted)?|entitled|qualif(?:y|ies|ied)|because|reason|savings?|worth|valued?|debt|loan|interest|budget|revenue|profit|loss|deduction|liabilit(?:y|ies))\b/i;
+const PHYSICAL_CHANGE =
+  /\b(?:tears?|torn|rips?|opens?|opened|unpacks?|unwraps?|pulls?|drops?|falls?|jumps?|lands|landed|landing|throws?|breaks?|broken|snaps?|deploys?|inflates?|collapses?|catches?|hits?|slams?|spills?|pours?|cuts?|lifts?|pushes?|closes?|closed|clicks?|presses?|taps?|types?|hands?|handed|pass(?:es|ed)?|changes? hands|slides?|swings?|kicks?|rolls?|crashes?|bursts?|shreds?|flips?|grabs?|releases?|launches?|climbs?|runs?|walks?|screen|display|lights? up|turns? on|turns? off|signs?|signed|stamps?|stamped)\b/i;
+
+/** Проверка на документ, штамп, чиновника и цифры в кадре под объяснением. */
+const PROOF_PROPS =
+  /\b(?:documents?|paperwork|papers|forms?|stamps?|stamped|seals?|certificates?|contracts?|invoices?|receipts?|tax bill|ledger|signature|signs the|official|clerk|inspector|notary|court|verdict|figures? (?:on|printed)|numbers? (?:on|printed)|amount (?:on|printed))\b/i;
+
+/**
+ * Можно ли отдать событие голосу автора: все его носители абстрактны (статус, право, сумма) и
+ * ни в наблюдаемом изменении, ни в состояниях нет физического действия с предметом.
+ */
+export function voiceOnlyEvent(e: Pick<StoryEvent, "observable" | "objects">): boolean {
+  const all = `${e.observable} ${e.objects.map((o) => `${o.id.replace(/[-_]+/g, " ")} ${o.before} ${o.after}`).join(" ")}`;
+  if (PHYSICAL_CHANGE.test(all)) return false;
+  if (!e.objects.length) return VOICE_ONLY_OUTCOME.test(e.observable);
+  return e.objects.every((o) => VOICE_ONLY_OUTCOME.test(`${o.id.replace(/[-_]+/g, " ")} ${o.before} ${o.after}`));
+}
 
 /** Одно ли понимание описывают две задачи: почти все значимые слова совпадают по основе. */
 export function sameLearning(a: string, b: string): boolean {

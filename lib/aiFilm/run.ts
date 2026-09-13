@@ -5,7 +5,7 @@ import type { Project } from "../store";
 import type { StoryResearchPack } from "../storyResearch";
 import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
-import { planStory, reconcileEventRefs, STORY_VERSION } from "./story";
+import { planStory, planPatch, applyPatch, storyFromRaw, scopeFromIssues, reconcileEventRefs, STORY_VERSION } from "./story";
 import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
 import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, retryIssues, authorCarriedEvents, showableEvents } from "./criteria";
 import { generateGroups } from "./generate";
@@ -161,7 +161,20 @@ export async function planFilm(args: {
           .join("\n") +
         `\nСостояние предмета после сцены пиши теми же словами, что и after у события.`
       : "";
-    const retry = await ask(issueLines(first).map((w) => `- ${w}`).join("\n") + contract);
+    // Ограниченная корректировка: модель получает первый план целиком и замечания, возвращает
+    // только изменения. Всё незатронутое сохраняется по построению, изменения вне области
+    // отбрасываются, затем весь план проходит проверки заново.
+    const scope = scopeFromIssues(first, story.beats, story.bible, story.raw, story.phrases.length, character.name);
+    const patch = await planPatch({
+      words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary,
+      first: story.raw, remarks: [...issueLines(first), ...(contract ? [contract.trim()] : [])],
+      character, universe, duration, coverage: args.coverage, onCall: args.onCall,
+      complete: args.complete ? (a) => args.complete!({ ...a, retry: true }) : undefined,
+    });
+    const patched = applyPatch(story.raw, patch, scope);
+    for (const l of patched.applied) console.log(`   корректировка: ${l}`);
+    for (const l of patched.rejected) console.warn(`   корректировка отклонена: ${l}`);
+    const retry = storyFromRaw(patched.raw, { words: args.words, phrases: story.phrases, duration, character, universe, researchFacts: args.researchFacts });
     // Обязательный набор первого захода возвращается силой: снять обязательность вместо
     // постановки сцены модель не может — это делало проверку зелёной, не показав события.
     const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events), authorCarried: story.bible.authorCarried };

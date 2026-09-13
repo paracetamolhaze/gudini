@@ -318,6 +318,8 @@ export type StoryBeat = {
   suggestedDuration: number;
   /** почему бит переведён в author редьюсером (если переведён) */
   reduced?: string;
+  /** индекс бита в ответе модели: адрес сцены для ограниченной корректировки */
+  sourceIndex?: number;
 };
 
 /**

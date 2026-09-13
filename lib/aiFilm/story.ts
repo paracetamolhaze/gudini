@@ -3,6 +3,7 @@ import type { Word } from "../transcribe";
 import { characterBlock } from "./character";
 import { universePlannerBlock, type UniverseProfile } from "./universe";
 import { STAGING_FOR } from "./types";
+import { isDocumentary, mustShowEvent } from "./audit";
 import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose, Priority, ShotType, TransitionIntent, StoryType, CameraAngle, Composition, HoldKind, ObjectState, SceneState, StoryEvent, VisualTask } from "./types";
 
 /**
@@ -14,7 +15,7 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
 /** 9 — общая процедура режиссуры: причинность, доказательство сцены, состояние, механика, камера. */
-export const STORY_VERSION = 20;
+export const STORY_VERSION = 21;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -353,7 +354,24 @@ type RawBeat = {
   scene?: unknown;
 };
 
-type RawStory = { storyArc?: Partial<StoryBible["storyArc"]>; bible?: any; beats?: RawBeat[] };
+export type RawStory = { storyArc?: Partial<StoryBible["storyArc"]>; bible?: any; beats?: RawBeat[]; visualTasks?: unknown; events?: unknown };
+
+/**
+ * Ограниченная корректировка: второй заход возвращает не новый план, а изменения к первому.
+ * Сцена адресуется парой фраз из первого плана, событие и задача — идентификатором.
+ * Связанные изменения вне замечаний объявляются в related с причиной, иначе не применяются.
+ */
+export type RawPatch = {
+  bible?: { playedByGudini?: unknown; supportingCharacters?: unknown };
+  events?: { update?: any[]; add?: any[]; remove?: unknown[] };
+  visualTasks?: { update?: any[]; add?: any[]; remove?: unknown[] };
+  beats?: { replace?: RawBeat[]; add?: RawBeat[]; remove?: { fromPhrase: number; toPhrase: number }[] };
+  related?: { target?: unknown; why?: unknown }[];
+  note?: string;
+};
+
+/** Что второму заходу разрешено менять: адреса сцен, событий и задач из замечаний, роли. */
+export type PatchScope = { beats: Set<string>; events: Set<string>; tasks: Set<string>; roles: boolean; phraseCount: number; characterName?: string };
 
 const str = (v: unknown, d = "") => (typeof v === "string" && v.trim() ? v.trim() : d);
 const arr = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
@@ -705,18 +723,18 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
   if (!phrases.length) return [];
   const n = phrases.length;
   const clamp = (v: number) => Math.max(1, Math.min(n, Math.round(Number(v) || 1)));
-  const items: { from: number; to: number; e: RawBeat }[] = [];
+  const items: { from: number; to: number; e: RawBeat; idx?: number }[] = [];
   let cursor = 1;
-  for (const e of raw ?? []) {
+  (raw ?? []).forEach((e, idx) => {
+    if (cursor > n) return;
     let from = clamp(e.fromPhrase);
     let to = clamp(e.toPhrase);
     if (to < from) to = from;
     if (from !== cursor) from = cursor;
-    if (from > n) break;
     if (to < from) to = from;
-    items.push({ from, to, e });
+    items.push({ from, to, e, idx });
     cursor = to + 1;
-  }
+  });
   if (!items.length) items.push({ from: 1, to: n, e: { fromPhrase: 1, toPhrase: n, displayMode: "author" } });
   if (cursor <= n) items[items.length - 1].to = n;
 
@@ -791,6 +809,7 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
       composition: (COMPOSITIONS as string[]).includes(String(e.composition)) ? (e.composition as Composition) : "center",
       suggestedDuration: Math.round((end - start) * 10) / 10,
       ...(reduced ? { reduced } : {}),
+      ...(it.idx != null ? { sourceIndex: it.idx } : {}),
     };
   });
 
@@ -953,7 +972,7 @@ export async function planStory(args: {
   onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
   /** подмена самого вызова модели: нужна проверкам разбора ответа, в конвейере не используется */
   complete?: (a: { system: string; user: string }) => Promise<string>;
-}): Promise<{ bible: StoryBible; beats: StoryBeat[]; phrases: Phrase[] }> {
+}): Promise<{ bible: StoryBible; beats: StoryBeat[]; phrases: Phrase[]; raw: RawStory }> {
   const phrases = phrasesFromWords(args.words);
   if (phrases.length < 2) throw new Error("AI-фильм: в речи меньше двух фраз — не из чего строить историю");
   const list = phrases.map((p) => `${p.index}. [${p.start.toFixed(1)}–${p.end.toFixed(1)} с] ${p.text}`).join("\n");
@@ -987,6 +1006,15 @@ export async function planStory(args: {
     const tail = raw.slice(-300).replace(/\s+/g, " ");
     throw new Error(`AI Film Story: ответ модели не разобрался как JSON (символов ${raw.length}, конец ответа: ...${tail})`);
   }
+  return storyFromRaw(parsed, { ...args, phrases });
+}
+
+/** От разобранного ответа модели к библии и битам: общий путь первого захода и корректировки. */
+export function storyFromRaw(
+  parsed: RawStory,
+  args: { words: Word[]; phrases: Phrase[]; duration: number; character: CharacterProfile; universe: UniverseProfile; researchFacts?: string[] },
+): { bible: StoryBible; beats: StoryBeat[]; phrases: Phrase[]; raw: RawStory } {
+  const { phrases } = args;
   const bible = normalizeBible(parsed, args.character, args.universe, args.researchFacts ?? []);
   // Задача хранит и секунды речи: по ним разбор ритма отличает объяснение от забытого отрезка.
   for (const t of bible.visualTasks ?? []) {
@@ -1004,7 +1032,351 @@ export async function planStory(args: {
   renameHeroToCharacter(beats, bible.playedByGudini, args.character.name);
   reconcileParticipants(beats, bible, args.character.name);
   reconcileEventRefs(bible, beats);
-  return { bible, beats, phrases };
+  return { bible, beats, phrases, raw: parsed };
+}
+
+/** Ответ модели в одной форме: списки контракта под bible, биты массивом. */
+export function canonicalRaw(first: RawStory): RawStory {
+  const raw: RawStory = JSON.parse(JSON.stringify(first ?? {}));
+  raw.bible = raw.bible && typeof raw.bible === "object" ? raw.bible : {};
+  if (!Array.isArray(raw.bible.events)) raw.bible.events = Array.isArray(raw.events) ? raw.events : [];
+  if (!Array.isArray(raw.bible.visualTasks)) raw.bible.visualTasks = Array.isArray(raw.visualTasks) ? raw.visualTasks : [];
+  delete raw.events;
+  delete raw.visualTasks;
+  raw.beats = Array.isArray(raw.beats) ? raw.beats : [];
+  return raw;
+}
+
+/** Диапазоны фраз битов ответа в том виде, в каком их читает beatsFromRaw. */
+export function rawBeatRanges(rawBeats: RawBeat[], n: number): ({ from: number; to: number } | null)[] {
+  const clamp = (v: number) => Math.max(1, Math.min(n, Math.round(Number(v) || 1)));
+  const out: ({ from: number; to: number } | null)[] = [];
+  let cursor = 1;
+  for (const e of rawBeats) {
+    if (cursor > n) {
+      out.push(null);
+      continue;
+    }
+    let from = clamp(e.fromPhrase);
+    let to = clamp(e.toPhrase);
+    if (to < from) to = from;
+    if (from !== cursor) from = cursor;
+    if (to < from) to = from;
+    out.push({ from, to });
+    cursor = to + 1;
+  }
+  return out;
+}
+
+const rangeKey = (r: { from: number; to: number }) => `${r.from}-${r.to}`;
+
+/**
+ * Применить изменения второго захода к первому ответу. Незатронутые сцены, события, задачи,
+ * участники и статусы фактов сохраняются по построению: в результате они те же объекты, что
+ * в первом ответе. Изменение вне замечаний применяется только с объявленной причиной, иначе
+ * отбрасывается и попадает в список отклонённых.
+ */
+export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope): { raw: RawStory; applied: string[]; rejected: string[] } {
+  const raw = canonicalRaw(first);
+  const applied: string[] = [];
+  const rejected: string[] = [];
+  const related = new Map<string, string>();
+  for (const r of patch?.related ?? []) {
+    const target = str(r?.target);
+    if (target) related.set(target, str(r?.why, "причина не названа"));
+  }
+  const allowed = (kind: string, key: string, inScope: boolean): boolean => {
+    if (inScope) return true;
+    const why = related.get(key);
+    if (why) {
+      applied.push(`${kind} ${key}: связанное изменение, причина: ${why}`);
+      return true;
+    }
+    rejected.push(`${kind} ${key}: вне области замечаний, причина не объявлена`);
+    return false;
+  };
+
+  // роли и участники: только когда замечание было про них
+  if (patch?.bible && (patch.bible.playedByGudini !== undefined || patch.bible.supportingCharacters !== undefined)) {
+    if (scope.roles) {
+      if (patch.bible.playedByGudini !== undefined) raw.bible.playedByGudini = patch.bible.playedByGudini;
+      if (patch.bible.supportingCharacters !== undefined) raw.bible.supportingCharacters = patch.bible.supportingCharacters;
+      applied.push("роль и участники изменены по замечанию");
+    } else {
+      rejected.push("роль и участники: замечаний к ролям не было");
+    }
+  }
+
+  // сцены — первыми: по ним видно, на какие события и задачи имеет право ссылаться заход
+  const n = scope.phraseCount;
+  const beats: RawBeat[] = raw.beats!;
+  const ranges = () => rawBeatRanges(beats, n);
+  const keyOf = (b: RawBeat) => `${Math.round(Number(b?.fromPhrase) || 0)}-${Math.round(Number(b?.toPhrase) || 0)}`;
+  const touched = { events: new Set<string>(), tasks: new Set<string>() };
+  const noteRefs = (b: RawBeat) => {
+    for (const id of arr(b.eventIds)) touched.events.add(slugId(id));
+    if (str(b.visualTask)) touched.tasks.add(slugId(b.visualTask));
+  };
+  const findIndex = (key: string) => ranges().findIndex((r) => r && rangeKey(r) === key);
+  // Персонаж канала в сцене — решение о ролях. Если в первом плане его не было, корректировка
+  // без замечания о ролях не вправе поставить его в кадр, даже внутри сцены из замечаний: так
+  // «Gudini and a second teenager» вернулся бы через замену сцены о посадке.
+  const nameOf = scope.characterName ?? "";
+  const mentions = (b: RawBeat | undefined) => {
+    if (!nameOf || !b) return false;
+    const text = `${(b as any)?.scene?.who ?? ""} ${b.visualAction ?? ""} ${b.motion ?? ""} ${b.keyMoment ?? ""}`;
+    return new RegExp("(?:^|[^A-Za-z])" + nameOf.replace(/[^A-Za-z0-9 ]/g, "") + "(?![A-Za-z])", "i").test(text);
+  };
+  const characterInFirst = beats.some((b) => b.displayMode !== "author" && mentions(b));
+  const introducesCharacter = (b: RawBeat, was?: RawBeat) => !scope.roles && mentions(b) && !(was ? mentions(was) : characterInFirst);
+
+  for (const r of patch?.beats?.remove ?? []) {
+    const key = `${Math.round(Number(r?.fromPhrase) || 0)}-${Math.round(Number(r?.toPhrase) || 0)}`;
+    const at = findIndex(key);
+    if (at < 0) {
+      rejected.push(`сцена ${key}: в первом плане такой нет`);
+      continue;
+    }
+    if (!allowed("сцена", key, scope.beats.has(key))) continue;
+    const rg = ranges()[at]!;
+    beats[at] = { fromPhrase: rg.from, toPhrase: rg.to, displayMode: "author" };
+    applied.push(`сцена ${key} снята, отрезок отдан автору`);
+  }
+  for (const b of patch?.beats?.replace ?? []) {
+    const key = keyOf(b);
+    const at = findIndex(key);
+    if (at < 0) {
+      rejected.push(`сцена ${key}: в первом плане такой нет, для новой сцены есть add`);
+      continue;
+    }
+    if (!allowed("сцена", key, scope.beats.has(key))) continue;
+    if (introducesCharacter(b, beats[at])) {
+      rejected.push(`сцена ${key}: ставит ${nameOf} в кадр, где его не было, без замечания о ролях`);
+      continue;
+    }
+    const rg = ranges()[at]!;
+    beats[at] = { ...b, fromPhrase: rg.from, toPhrase: rg.to };
+    noteRefs(b);
+    applied.push(`сцена ${key} заменена`);
+  }
+  for (const b of patch?.beats?.add ?? []) {
+    const from = Math.round(Number(b?.fromPhrase) || 0);
+    const to = Math.round(Number(b?.toPhrase) || 0);
+    const key = `${from}-${to}`;
+    if (!(from >= 1 && to >= from && to <= n)) {
+      rejected.push(`сцена ${key}: диапазон фраз вне речи`);
+      continue;
+    }
+    const rs = ranges();
+    const overlapping = beats.map((x, i) => ({ x, i, r: rs[i] })).filter(({ r }) => r && r.from <= to && r.to >= from);
+    const inScope = overlapping.some(({ r }) => scope.beats.has(rangeKey(r!)));
+    if (!allowed("сцена", key, inScope)) continue;
+    const ai = overlapping.filter(({ x }) => x.displayMode === "full_ai" || x.displayMode === "hybrid");
+    if (ai.length) {
+      rejected.push(`сцена ${key}: пересекает сцену ${ai.map(({ r }) => rangeKey(r!)).join(", ")} — сначала снимите или замените её`);
+      continue;
+    }
+    if (introducesCharacter(b)) {
+      rejected.push(`сцена ${key}: ставит ${nameOf} в кадр, которого в первом плане не было, без замечания о ролях`);
+      continue;
+    }
+    // авторский бит режется вокруг новой сцены, соседние сцены не трогаются
+    const pieces: RawBeat[] = [];
+    for (const { x, r } of overlapping) {
+      if (r!.from < from) pieces.push({ ...x, fromPhrase: r!.from, toPhrase: from - 1 });
+      if (r!.to > to) pieces.push({ ...x, fromPhrase: to + 1, toPhrase: r!.to });
+    }
+    const keep = beats.filter((_, i) => !overlapping.some((o) => o.i === i));
+    beats.splice(0, beats.length, ...keep, ...pieces, { ...b, fromPhrase: from, toPhrase: to });
+    beats.sort((a, c) => (Number(a.fromPhrase) || 0) - (Number(c.fromPhrase) || 0));
+    noteRefs(b);
+    applied.push(`сцена ${key} добавлена`);
+  }
+
+  // события
+  const events: any[] = raw.bible.events;
+  for (const idRaw of patch?.events?.remove ?? []) {
+    const id = slugId(idRaw);
+    const at = events.findIndex((e) => slugId(e?.id) === id);
+    if (at < 0) {
+      rejected.push(`событие ${id}: в контракте такого нет`);
+      continue;
+    }
+    if (!allowed("событие", id, scope.events.has(id))) continue;
+    events.splice(at, 1);
+    applied.push(`событие ${id} удалено из контракта`);
+  }
+  const mergeEvent = (e: any, kind: "update" | "add") => {
+    const id = slugId(e?.id);
+    if (!id) {
+      rejected.push("событие без идентификатора");
+      return;
+    }
+    const at = events.findIndex((x) => slugId(x?.id) === id);
+    if (kind === "add" && at >= 0) {
+      rejected.push(`событие ${id}: уже есть, для правки есть update`);
+      return;
+    }
+    if (kind === "update" && at < 0) {
+      rejected.push(`событие ${id}: в контракте такого нет, для нового есть add`);
+      return;
+    }
+    if (!allowed("событие", id, scope.events.has(id) || touched.events.has(id))) return;
+    const prev = at >= 0 ? events[at] : {};
+    const merged = { ...prev, ...e, id };
+    // статус факта не повышается до «подтверждено» без цитаты из справки
+    if (merged.basis === "confirmed" && prev.basis !== "confirmed" && !str(merged.basisFact)) {
+      merged.basis = prev.basis ?? "told";
+      merged.basisFact = prev.basisFact ?? "";
+      rejected.push(`событие ${id}: статус «подтверждено» без цитаты не принят`);
+    }
+    if (at >= 0) events[at] = merged;
+    else events.push(merged);
+    applied.push(`событие ${id} ${kind === "add" ? "добавлено" : "изменено"}`);
+  };
+  for (const e of patch?.events?.update ?? []) mergeEvent(e, "update");
+  for (const e of patch?.events?.add ?? []) mergeEvent(e, "add");
+
+  // задачи
+  const tasks: any[] = raw.bible.visualTasks;
+  for (const idRaw of patch?.visualTasks?.remove ?? []) {
+    const id = slugId(idRaw);
+    const at = tasks.findIndex((t) => slugId(t?.id) === id);
+    if (at < 0) {
+      rejected.push(`задача ${id}: в плане такой нет`);
+      continue;
+    }
+    if (!allowed("задача", id, scope.tasks.has(id))) continue;
+    tasks.splice(at, 1);
+    applied.push(`задача ${id} удалена`);
+  }
+  const mergeTask = (t: any, kind: "update" | "add") => {
+    const id = slugId(t?.id);
+    if (!id) {
+      rejected.push("задача без идентификатора");
+      return;
+    }
+    const at = tasks.findIndex((x) => slugId(x?.id) === id);
+    if (kind === "add" && at >= 0) {
+      rejected.push(`задача ${id}: уже есть, для правки есть update`);
+      return;
+    }
+    if (kind === "update" && at < 0) {
+      rejected.push(`задача ${id}: в плане такой нет, для новой есть add`);
+      return;
+    }
+    if (!allowed("задача", id, scope.tasks.has(id) || touched.tasks.has(id))) return;
+    if (at >= 0) tasks[at] = { ...tasks[at], ...t, id };
+    else tasks.push({ ...t, id });
+    applied.push(`задача ${id} ${kind === "add" ? "добавлена" : "изменена"}`);
+  };
+  for (const t of patch?.visualTasks?.update ?? []) mergeTask(t, "update");
+  for (const t of patch?.visualTasks?.add ?? []) mergeTask(t, "add");
+
+  return { raw, applied, rejected };
+}
+
+/**
+ * Второй заход как ограниченная корректировка: модель получает первый план целиком и
+ * замечания, возвращает только изменения. Прежний второй заход переписывал план заново и
+ * вместе с одним недостатком менял решения, которые были верны: участников, статус фактов,
+ * отсутствие выдуманных механизмов.
+ */
+export async function planPatch(args: {
+  words: Word[];
+  script: string;
+  topic?: string;
+  researchSummary?: string;
+  first: RawStory;
+  remarks: string[];
+  character: CharacterProfile;
+  universe: UniverseProfile;
+  duration: number;
+  coverage: { target: number; max: number };
+  onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
+  complete?: (a: { system: string; user: string }) => Promise<string>;
+}): Promise<RawPatch> {
+  const phrases = phrasesFromWords(args.words);
+  const list = phrases.map((p) => `${p.index}. [${p.start.toFixed(1)}–${p.end.toFixed(1)} с] ${p.text}`).join("\n");
+  const user =
+    `${args.topic ? `Тема ролика: ${args.topic}\n` : ""}` +
+    `${args.researchSummary ? `Справка по теме (факты, чтобы не выдумывать): ${args.researchSummary.slice(0, 1500)}\n\n` : ""}` +
+    `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}\n\n` +
+    `ТВОЙ ПЕРВЫЙ ПЛАН НА ЭТУ РЕЧЬ, ЦЕЛИКОМ:\n${JSON.stringify(canonicalRaw(args.first))}\n\n` +
+    `ЗАМЕЧАНИЯ К НЕМУ:\n${args.remarks.map((r) => `- ${r}`).join("\n")}\n\n` +
+    `ЗАДАЧА: исправь только то, к чему есть замечания, и верни ТОЛЬКО ИЗМЕНЕНИЯ, а не новый план.\n` +
+    `- Сцены, события и задачи без замечаний не переписывай: они сохранятся как есть.\n` +
+    `- Участники, playedByGudini, статусы фактов (basis) и отсутствие сцен с неподтверждённым механизмом сохраняются; менять роли можно только по замечанию о ролях.\n` +
+    `- Если исправление требует связанных изменений в других сценах или событиях, перечисли их в related с причиной: без этого они не применяются.\n` +
+    `- Сцена адресуется парой fromPhrase/toPhrase из твоего плана. Новая сцена (add) может занять только фразы авторских битов; чтобы изменить существующую сцену, используй replace с полным описанием бита.\n` +
+    `- Событие и задача адресуются id. В update и add отдавай объект целиком.\n` +
+    `Формат ответа, только JSON:\n` +
+    `{"events": {"update": [], "add": [], "remove": []}, "visualTasks": {"update": [], "add": [], "remove": []}, ` +
+    `"beats": {"replace": [], "add": [], "remove": [{"fromPhrase": 1, "toPhrase": 2}]}, ` +
+    `"bible": {"playedByGudini": "", "supportingCharacters": []}, "related": [{"target": "id или fromPhrase-toPhrase", "why": "почему это изменение необходимо"}], "note": "коротко, что исправлено"}\n` +
+    `Поле bible включай только при замечании о ролях. Пустые списки можно опускать.`;
+  const system = storySystemPrompt(args.character, args.universe, args.coverage);
+  const raw = args.complete
+    ? await args.complete({ system, user })
+    : await mediaComplete({ model: STORY_MODEL, maxTokens: 16000, stage: "AI Film Story", reasoning: "off", system, user });
+  args.onCall?.({ system, user, raw, retry: true });
+  try {
+    return parseJson<RawPatch>(raw, "AI Film Story");
+  } catch {
+    const tail = raw.slice(-300).replace(/\s+/g, " ");
+    throw new Error(`AI Film Story: изменения второго захода не разобрались как JSON (символов ${raw.length}, конец ответа: ...${tail})`);
+  }
+}
+
+/** Область корректировки из замечаний: адреса сцен, событий и задач, право менять роли. */
+export function scopeFromIssues(
+  issues: { code: string; beatIds: string[]; eventIds?: string[] }[],
+  beats: StoryBeat[],
+  bible: Pick<StoryBible, "visualTasks" | "events" | "storyType" | "researchFacts">,
+  raw: RawStory,
+  phraseCount: number,
+  characterName?: string,
+): PatchScope {
+  const ranges = rawBeatRanges(canonicalRaw(raw).beats ?? [], phraseCount);
+  const scope: PatchScope = { beats: new Set(), events: new Set(), tasks: new Set(), roles: false, phraseCount, characterName };
+  const ROLE_CODES = new Set(["role-miscast", "costume-conflict", "hero-flag-mismatch"]);
+  for (const i of issues) {
+    if (ROLE_CODES.has(i.code)) scope.roles = true;
+    for (const id of i.eventIds ?? []) scope.events.add(id);
+    for (const bid of i.beatIds) {
+      const b = beats.find((x) => x.id === bid);
+      if (!b) continue;
+      const r = b.sourceIndex != null ? ranges[b.sourceIndex] : null;
+      if (r) scope.beats.add(rangeKey(r));
+      for (const id of b.eventIds ?? []) scope.events.add(id);
+      if (b.visualTask) scope.tasks.add(b.visualTask);
+    }
+  }
+  // сцены, которые заявляют событие из замечаний: их можно править, чтобы событие засчиталось
+  for (const b of beats) {
+    if (b.displayMode === "author" || !(b.eventIds ?? []).some((id) => scope.events.has(id))) continue;
+    const r = b.sourceIndex != null ? ranges[b.sourceIndex] : null;
+    if (r) scope.beats.add(rangeKey(r));
+    if (b.visualTask) scope.tasks.add(b.visualTask);
+  }
+  // задачи над фразами событий из замечаний: чтобы объяснение можно было переоформить в сцену.
+  // Авторские отрезки открываются только под события, которые обязаны быть показаны: под
+  // неподтверждённый механизм и опровергнутое утверждение сцену ставить нельзя, и приглашать
+  // туда корректировку незачем.
+  const facts = bible.researchFacts ?? [];
+  const documentary = isDocumentary({ storyType: bible.storyType ?? "news" });
+  for (const e of bible.events ?? []) {
+    if (!scope.events.has(e.id)) continue;
+    for (const t of bible.visualTasks ?? []) {
+      if (t.fromPhrase <= e.toPhrase && t.toPhrase >= e.fromPhrase) scope.tasks.add(t.id);
+    }
+    if (!mustShowEvent(e, facts, documentary)) continue;
+    for (const [idx, r] of ranges.entries()) {
+      const rb = canonicalRaw(raw).beats?.[idx];
+      if (r && rb && rb.displayMode === "author" && r.from <= e.toPhrase && r.to >= e.fromPhrase) scope.beats.add(rangeKey(r));
+    }
+  }
+  return scope;
 }
 
 /**

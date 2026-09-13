@@ -1131,6 +1131,11 @@ export function authorStretchIssues(timeline: TimelineSegment[], duration: numbe
   }
   if (duration > cursor + 1e-6) gaps.push([cursor, duration]);
   const fmt = (g: [number, number][]) => g.map(([a, b]) => `${a.toFixed(1)}–${b.toFixed(1)} с`).join(", ");
+  // Авторские биты внутри куска: адрес для ограниченной корректировки, иначе второму заходу
+  // некуда поставить сцену, не переписывая соседей.
+  const beatsIn = (g: [number, number][]) => [
+    ...new Set(g.flatMap(([a, b]) => timeline.filter((s) => s.mode === "author" && s.start >= a - 1e-6 && s.end <= b + 1e-6).flatMap((s) => s.beatIds))),
+  ];
   // Длинный авторский кусок — повод поискать отдельную визуальную задачу, но не повод ставить
   // заполнитель. Раньше замечание гнало во второй заход при любом содержании отрезка, и под
   // правовые и числовые утверждения появлялись пустая карточка, выдуманный штамп и безликий
@@ -1145,7 +1150,7 @@ export function authorStretchIssues(timeline: TimelineSegment[], duration: numbe
     out.push({
       code: "author-stretch-long",
       severity: "warn",
-      beatIds: [],
+      beatIds: beatsIn(open),
       message:
         `Длинные куски без сцен (больше ${MAX_AUTHOR_STRETCH_SECONDS} с): ${fmt(open)}. Проверьте, есть ли в них отдельная визуальная задача, ` +
         `которой ещё нет в плане; если честной картинки нет, отметьте отрезок как объяснение, а не ставьте заполнитель`,
@@ -1157,7 +1162,7 @@ export function authorStretchIssues(timeline: TimelineSegment[], duration: numbe
     out.push({
       code: "author-stretch-explained",
       severity: "warn",
-      beatIds: [],
+      beatIds: beatsIn(told),
       message: `Длинные авторские куски отданы объяснению: ${fmt(told)}. Проверьте, нет ли иллюстрации, которая помогает пониманию без доказательства — место, обстановка, масштаб; если нет, оставьте автору`,
     });
   }
@@ -1167,7 +1172,7 @@ export function authorStretchIssues(timeline: TimelineSegment[], duration: numbe
     out.push({
       code: "author-flicker",
       severity: "warn",
-      beatIds: [],
+      beatIds: beatsIn(flicker),
       message: `Авторский кусок между сценами короче ${MIN_AUTHOR_PIECE_SECONDS} с мелькает: ${fmt(flicker)} — продлите соседнюю сцену или отдайте автору больше`,
     });
   }

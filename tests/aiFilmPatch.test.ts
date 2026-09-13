@@ -163,21 +163,33 @@ test("корректировка чинит только замечания: р�
   assert.equal(gateIssues(after).length, 0, JSON.stringify(gateIssues(after).map((i) => i.code)));
 });
 
-test("связанное изменение применяется только с объявленной причиной, новая сцена не ложится поверх сцены", () => {
+test("связанное изменение принимается только по существу связи, а не по наличию объяснения", () => {
   const first = firstAnswer();
   const { story, plan } = build(first);
   const scope = scopeFromIssues(plan.issues, story.beats, story.bible, first, phrases.length, character.name);
   const replaced = scene(2, 2, { visualTask: "fire", eventIds: ["fire-out-window"], visualAction: "Teen Passenger 2 fires the toy pistol out of the window", keyMoment: "the pistol fires", scene: { who: "Teen Passenger 2" }, objects: [{ id: "toy-pistol", before: "held inside the car", after: "fired out of the open window", role: "change" }] });
+  // без объявления — отклонено
   const silent = applyPatch(first, { beats: { replace: [replaced] } }, scope);
-  assert.ok(
-    silent.rejected.some((l) => l.startsWith("сцена 2-2")),
-    `${silent.rejected.join(" | ")} || область: ${[...scope.beats].join(",")} || замечания: ${JSON.stringify(plan.issues.map((i) => [i.code, i.beatIds, i.eventIds ?? []]))}`,
+  assert.ok(silent.rejected.some((l) => l.startsWith("сцена 2-2")), silent.rejected.join(" | "));
+  // объяснение есть, но связи с замечанием нет: стрельба не касается развязки — отклонено
+  const excused = applyPatch(first, { beats: { replace: [replaced] }, related: [{ target: "2-2", for: "reveal-toy", why: "стреляет тот же подросток, что держал пистолет в развязке" }] }, scope);
+  assert.ok(excused.rejected.some((l) => l.startsWith("сцена 2-2") && /не связано/.test(l)), excused.rejected.join(" | "));
+  // объяснение без указания замечания — отклонено
+  const vague = applyPatch(first, { beats: { replace: [replaced] }, related: [{ target: "2-2", why: "так лучше" }] }, scope);
+  assert.ok(vague.rejected.some((l) => l.startsWith("сцена 2-2") && /какому замечанию/.test(l)), vague.rejected.join(" | "));
+  // соседняя сцена той же цепочки: авторский бит 4-4 рядом с 5-5 из замечаний — принято
+  const neighbour = applyPatch(
+    first,
+    { beats: { replace: [{ fromPhrase: 4, toPhrase: 4, displayMode: "author" }] }, related: [{ target: "4-4", for: "5-5", why: "ожидание начинается с объявления, границу нужно сдвинуть" }] },
+    scope,
   );
-  const declared = applyPatch(first, { beats: { replace: [replaced] }, related: [{ target: "2-2", why: "стреляет тот же подросток, что держал пистолет в развязке" }] }, scope);
-  assert.ok(declared.applied.some((l) => l.startsWith("сцена 2-2")), declared.applied.join(" | "));
-  // новая сцена поверх существующей AI-сцены отклоняется, поверх авторского бита — режет его
-  const onTop = applyPatch(first, { beats: { add: [scene(3, 3, { visualTask: "camera", eventIds: [], visualAction: "x", keyMoment: "y" })] }, related: [{ target: "3-3", why: "проверка наложения" }] }, scope);
-  assert.ok(onTop.rejected.some((l) => /пересекает сцену 3-3/.test(l)), onTop.rejected.join(" | "));
+  assert.ok(neighbour.applied.some((l) => l.startsWith("сцена 4-4")), [...neighbour.applied, ...neighbour.rejected].join(" | "));
+  // роли через related не меняются
+  const roles = applyPatch(first, { bible: { playedByGudini: "подросток" }, related: [{ target: "bible", for: "reveal-toy", why: "нужно" }] }, scope);
+  assert.ok(roles.rejected.some((l) => l.startsWith("роль и участники")), roles.rejected.join(" | "));
+  // новая сцена поверх существующей AI-сцены отклоняется даже внутри области
+  const onTop = applyPatch(first, { beats: { add: [scene(5, 5, { visualTask: "waiting", eventIds: [], visualAction: "x", keyMoment: "y" })] } }, scope);
+  assert.ok(onTop.rejected.some((l) => /пересекает сцену 5-5/.test(l)), onTop.rejected.join(" | "));
   assert.deepEqual(rawBeatRanges(canonicalRaw(first).beats!, phrases.length).map((r) => r && `${r.from}-${r.to}`), ["1-1", "2-2", "3-3", "4-4", "5-5", "6-6"]);
 });
 

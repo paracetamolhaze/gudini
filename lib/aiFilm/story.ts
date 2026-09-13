@@ -366,7 +366,8 @@ export type RawPatch = {
   events?: { update?: any[]; add?: any[]; remove?: unknown[] };
   visualTasks?: { update?: any[]; add?: any[]; remove?: unknown[] };
   beats?: { replace?: RawBeat[]; add?: RawBeat[]; remove?: { fromPhrase: number; toPhrase: number }[] };
-  related?: { target?: unknown; why?: unknown }[];
+  /** связанное изменение: что меняется, какому замечанию служит (for), почему без него нельзя */
+  related?: { target?: unknown; for?: unknown; why?: unknown }[];
   note?: string;
 };
 
@@ -1080,20 +1081,60 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
   const raw = canonicalRaw(first);
   const applied: string[] = [];
   const rejected: string[] = [];
-  const related = new Map<string, string>();
+  const related = new Map<string, { for: string; why: string }>();
   for (const r of patch?.related ?? []) {
     const target = str(r?.target);
-    if (target) related.set(target, str(r?.why, "причина не названа"));
+    if (target) related.set(target, { for: str(r?.for), why: str(r?.why, "причина не названа") });
   }
-  const allowed = (kind: string, key: string, inScope: boolean): boolean => {
-    if (inScope) return true;
-    const why = related.get(key);
-    if (why) {
-      applied.push(`${kind} ${key}: связанное изменение, причина: ${why}`);
-      return true;
+  // Связь изменения с замечанием проверяется по существу, а не по наличию объяснения: изменение
+  // должно служить пункту из области (for) и быть с ним связано — тем же событием, той же
+  // задачей или соседней фразой. Объяснение само по себе ничего не разрешает.
+  const firstBeats = canonicalRaw(first).beats ?? [];
+  const firstRanges = rawBeatRanges(firstBeats, scope.phraseCount);
+  const forBeat = (key: string) => {
+    const i = firstRanges.findIndex((r) => r && rangeKey(r) === key);
+    return i >= 0 ? { beat: firstBeats[i], range: firstRanges[i]! } : null;
+  };
+  type Link = { range?: { from: number; to: number }; events?: string[]; task?: string; eventId?: string; taskId?: string; phrases?: { from: number; to: number } };
+  const connected = (target: string, link: Link): boolean => {
+    if (scope.beats.has(target)) {
+      const fb = forBeat(target);
+      if (!fb) return false;
+      const ev = arr(fb.beat.eventIds).map(slugId);
+      const task = slugId(fb.beat.visualTask);
+      if (link.range && (Math.abs(link.range.from - fb.range.to) <= 1 || Math.abs(link.range.to - fb.range.from) <= 1)) return true;
+      if (link.eventId && ev.includes(link.eventId)) return true;
+      if (link.taskId && task === link.taskId) return true;
+      if (link.events?.some((e) => ev.includes(e))) return true;
+      if (link.task && task === link.task) return true;
+      return false;
     }
-    rejected.push(`${kind} ${key}: вне области замечаний, причина не объявлена`);
+    if (scope.events.has(target)) {
+      if (link.events?.includes(target) || link.eventId === target) return true;
+      const e = (canonicalRaw(first).bible.events as any[]).find((x) => slugId(x?.id) === target);
+      if (e && link.phrases && link.phrases.from <= Number(e.toPhrase) && link.phrases.to >= Number(e.fromPhrase)) return true;
+      return false;
+    }
+    if (scope.tasks.has(target)) return link.task === target || link.taskId === target;
     return false;
+  };
+  const allowed = (kind: string, key: string, inScope: boolean, link: Link = {}): boolean => {
+    if (inScope) return true;
+    const rel = related.get(key);
+    if (!rel) {
+      rejected.push(`${kind} ${key}: вне области замечаний, связанное изменение не объявлено`);
+      return false;
+    }
+    if (!rel.for) {
+      rejected.push(`${kind} ${key}: связанное изменение без указания, какому замечанию оно служит`);
+      return false;
+    }
+    if (!connected(rel.for, link)) {
+      rejected.push(`${kind} ${key}: объявлено связанным с «${rel.for}», но не связано с ним ни событием, ни задачей, ни соседством`);
+      return false;
+    }
+    applied.push(`${kind} ${key}: связанное изменение ради «${rel.for}», причина: ${rel.why}`);
+    return true;
   };
 
   // роли и участники: только когда замечание было про них
@@ -1137,7 +1178,8 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
       rejected.push(`сцена ${key}: в первом плане такой нет`);
       continue;
     }
-    if (!allowed("сцена", key, scope.beats.has(key))) continue;
+    const rg0 = ranges()[at]!;
+    if (!allowed("сцена", key, scope.beats.has(key), { range: rg0, events: arr(beats[at].eventIds).map(slugId), task: slugId(beats[at].visualTask) })) continue;
     const rg = ranges()[at]!;
     beats[at] = { fromPhrase: rg.from, toPhrase: rg.to, displayMode: "author" };
     applied.push(`сцена ${key} снята, отрезок отдан автору`);
@@ -1149,7 +1191,7 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
       rejected.push(`сцена ${key}: в первом плане такой нет, для новой сцены есть add`);
       continue;
     }
-    if (!allowed("сцена", key, scope.beats.has(key))) continue;
+    if (!allowed("сцена", key, scope.beats.has(key), { range: ranges()[at]!, events: arr(b.eventIds).map(slugId), task: slugId(b.visualTask) })) continue;
     if (introducesCharacter(b, beats[at])) {
       rejected.push(`сцена ${key}: ставит ${nameOf} в кадр, где его не было, без замечания о ролях`);
       continue;
@@ -1170,7 +1212,7 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
     const rs = ranges();
     const overlapping = beats.map((x, i) => ({ x, i, r: rs[i] })).filter(({ r }) => r && r.from <= to && r.to >= from);
     const inScope = overlapping.some(({ r }) => scope.beats.has(rangeKey(r!)));
-    if (!allowed("сцена", key, inScope)) continue;
+    if (!allowed("сцена", key, inScope, { range: { from, to }, events: arr(b.eventIds).map(slugId), task: slugId(b.visualTask) })) continue;
     const ai = overlapping.filter(({ x }) => x.displayMode === "full_ai" || x.displayMode === "hybrid");
     if (ai.length) {
       rejected.push(`сцена ${key}: пересекает сцену ${ai.map(({ r }) => rangeKey(r!)).join(", ")} — сначала снимите или замените её`);
@@ -1202,7 +1244,7 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
       rejected.push(`событие ${id}: в контракте такого нет`);
       continue;
     }
-    if (!allowed("событие", id, scope.events.has(id))) continue;
+    if (!allowed("событие", id, scope.events.has(id), { eventId: id })) continue;
     events.splice(at, 1);
     applied.push(`событие ${id} удалено из контракта`);
   }
@@ -1221,8 +1263,9 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
       rejected.push(`событие ${id}: в контракте такого нет, для нового есть add`);
       return;
     }
-    if (!allowed("событие", id, scope.events.has(id) || touched.events.has(id))) return;
     const prev = at >= 0 ? events[at] : {};
+    const ph = { from: Math.round(Number(e?.fromPhrase ?? prev.fromPhrase) || 0), to: Math.round(Number(e?.toPhrase ?? prev.toPhrase) || 0) };
+    if (!allowed("событие", id, scope.events.has(id) || touched.events.has(id), { eventId: id, phrases: ph })) return;
     const merged = { ...prev, ...e, id };
     // статус факта не повышается до «подтверждено» без цитаты из справки
     if (merged.basis === "confirmed" && prev.basis !== "confirmed" && !str(merged.basisFact)) {
@@ -1246,7 +1289,7 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
       rejected.push(`задача ${id}: в плане такой нет`);
       continue;
     }
-    if (!allowed("задача", id, scope.tasks.has(id))) continue;
+    if (!allowed("задача", id, scope.tasks.has(id), { taskId: id })) continue;
     tasks.splice(at, 1);
     applied.push(`задача ${id} удалена`);
   }
@@ -1265,7 +1308,9 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
       rejected.push(`задача ${id}: в плане такой нет, для новой есть add`);
       return;
     }
-    if (!allowed("задача", id, scope.tasks.has(id) || touched.tasks.has(id))) return;
+    const prevT = at >= 0 ? tasks[at] : {};
+    const phT = { from: Math.round(Number(t?.fromPhrase ?? prevT.fromPhrase) || 0), to: Math.round(Number(t?.toPhrase ?? prevT.toPhrase) || 0) };
+    if (!allowed("задача", id, scope.tasks.has(id) || touched.tasks.has(id), { taskId: id, phrases: phT })) return;
     if (at >= 0) tasks[at] = { ...tasks[at], ...t, id };
     else tasks.push({ ...t, id });
     applied.push(`задача ${id} ${kind === "add" ? "добавлена" : "изменена"}`);
@@ -1307,13 +1352,13 @@ export async function planPatch(args: {
     `ЗАДАЧА: исправь только то, к чему есть замечания, и верни ТОЛЬКО ИЗМЕНЕНИЯ, а не новый план.\n` +
     `- Сцены, события и задачи без замечаний не переписывай: они сохранятся как есть.\n` +
     `- Участники, playedByGudini, статусы фактов (basis) и отсутствие сцен с неподтверждённым механизмом сохраняются; менять роли можно только по замечанию о ролях.\n` +
-    `- Если исправление требует связанных изменений в других сценах или событиях, перечисли их в related с причиной: без этого они не применяются.\n` +
+    `- Если исправление требует связанных изменений в других сценах или событиях, перечисли их в related: target — что меняется, for — какое замечание это обслуживает (id события, задачи или fromPhrase-toPhrase сцены из замечаний), why — почему без этого исправление невозможно. Принимается только изменение, связанное с этим замечанием: то же событие или задача, либо соседняя сцена. Объяснение само по себе ничего не разрешает, роли через related не меняются.\n` +
     `- Сцена адресуется парой fromPhrase/toPhrase из твоего плана. Новая сцена (add) может занять только фразы авторских битов; чтобы изменить существующую сцену, используй replace с полным описанием бита.\n` +
     `- Событие и задача адресуются id. В update и add отдавай объект целиком.\n` +
     `Формат ответа, только JSON:\n` +
     `{"events": {"update": [], "add": [], "remove": []}, "visualTasks": {"update": [], "add": [], "remove": []}, ` +
     `"beats": {"replace": [], "add": [], "remove": [{"fromPhrase": 1, "toPhrase": 2}]}, ` +
-    `"bible": {"playedByGudini": "", "supportingCharacters": []}, "related": [{"target": "id или fromPhrase-toPhrase", "why": "почему это изменение необходимо"}], "note": "коротко, что исправлено"}\n` +
+    `"bible": {"playedByGudini": "", "supportingCharacters": []}, "related": [{"target": "id или fromPhrase-toPhrase", "for": "пункт из замечаний", "why": "почему без этого исправление невозможно"}], "note": "коротко, что исправлено"}\n` +
     `Поле bible включай только при замечании о ролях. Пустые списки можно опускать.`;
   const system = storySystemPrompt(args.character, args.universe, args.coverage);
   const raw = args.complete

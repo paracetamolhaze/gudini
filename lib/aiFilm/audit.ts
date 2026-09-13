@@ -88,7 +88,7 @@ export function isDocumentary(bible: Pick<StoryBible, "storyType">): boolean {
 }
 
 /** Слова состояния, у которых есть направление: обратно они не отыгрываются. */
-const DAMAGED = /\b(?:torn|shredded|ripped|broken|smashed|cracked|burnt|burned|spilled|empty|collapsed|deflated)\b/i;
+const DAMAGED = /\b(?:torn|shredded|ripped|broken|smashed|cracked|burnt|burned|spilled|collapsed|deflated)\b/i;
 const INTACT = /\b(?:intact|whole|unopened|sealed|new|full|folded|packed|closed)\b/i;
 
 /** Просьбы к генератору показать читаемый текст — он их не выполняет. */
@@ -526,10 +526,11 @@ export function auditPlan(
     "В одной сцене больше трёх действий подряд — генератор выполнит первое и смажет остальные",
   );
 
-  // Герой в кадре, но действие про него молчит, или наоборот.
+  // Участник может быть назван в расстановке, а действие описано через его руки.
+  const characterInScene = new RegExp(`(?<![\\p{L}\\p{N}])${character.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu");
   add(
     "hero-flag-mismatch",
-    shown.filter((b) => b.visualAction.length > 0 && b.gudiniVisible !== b.visualAction.includes(character.name)).map((b) => b.id),
+    shown.filter((b) => b.visualAction.length > 0 && b.gudiniVisible !== characterInScene.test(`${b.scene?.who ?? ""} ${b.visualAction} ${b.motion ?? ""}`)).map((b) => b.id),
     `Флаг присутствия ${character.name} в кадре расходится с текстом действия`,
   );
 
@@ -696,21 +697,27 @@ export function auditPlan(
       const declared = (b.stateBefore ?? "").split(/[;,]/);
       // Из описания камеры берутся только прямые заявления о первом кадре.
       const claimed = (b.camera ?? "").split(/[;,]/).filter((c) => INITIAL_CLAIM.test(c));
-      const initial = [...declared, ...claimed]
+      const initialClauses = [...declared, ...claimed]
         .map((c) => c.trim())
-        .filter((c) => c && !PROCESS.test(c))
-        .join("; ");
+        .filter((c) => c && !PROCESS.test(c));
+      const initial = initialClauses.join("; ");
       if (!initial) continue;
       // Слова места и реквизита в счёт не идут: «beside the workbench» в описании камеры
       // говорит, где стоит камера, а не что предмет уже поднят над верстаком.
-      const scenery = [o.id, b.location, ...(b.scene?.props ?? []), ...(b.scene?.worn ?? []), b.scene?.who ?? ""];
+      // Participants can be the distinguishing destination of a handover. Removing their
+      // names would reduce "held by the courier" to "held" and match the sender's grip.
+      const scenery = [o.id, b.location, ...(b.scene?.props ?? []), ...(b.scene?.worn ?? [])];
       // Противоречием считается только ПОЛНОЕ заявление конечного состояния. Одно общее
       // слово ловило исправные сцены: «phone closed, cover screen lit» в начале кадра
       // совпадало с «visible lit cover display» лишь словом «lit», и раскрытие складного
       // телефона запрещалось к оплате.
       const decisive = decisiveWords(o.before, o.after, scenery);
-      const said = stateTokens(initial).words;
-      const claimsAfter = decisive.size > 0 && [...decisive].every((w) => said.has(w));
+      // Do not combine separate subjects: "woman holds envelope; courier's hand empty"
+      // does not say that the courier already holds the envelope.
+      const claimsAfter = decisive.size > 0 && initialClauses.some((clause) => {
+        const said = stateTokens(clause).words;
+        return [...decisive].every((w) => said.has(w));
+      });
       if (claimsAfter && !stateReached(o.before, initial, o.after, scenery)) {
         mixed.push(`${b.id}/${o.id}`);
       }

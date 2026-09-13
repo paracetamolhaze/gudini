@@ -72,9 +72,9 @@ test("новость: наблюдательная постановка, рек�
 
 test("узнаваемого публичного человека собой не подменяют — правило стоит в промпте планировщика", () => {
   const prompt = storySystemPrompt(character, universe, { target: 0.45, max: 0.55 });
-  assert.match(prompt, /главного героя истории ИГРАЕТ Gudini/);
-  assert.match(prompt, /широко узнаваемый публичный человек/);
-  assert.match(prompt, /Его показывают им самим/);
+  assert.match(prompt, /Gudini не обязан быть в каждом кадре и не заменяет всех людей/);
+  assert.match(prompt, /Публичное лицо показывается собой/);
+  assert.match(prompt, /playedByGudini заполняй только если роль действительно исполняет Gudini/);
 });
 
 test("план ругается на длинные куски без сцен и на поздний старт", () => {

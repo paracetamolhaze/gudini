@@ -128,7 +128,7 @@ test("кандидат выбирается по тяжести, а не по ч
   // потерянное обязательное событие тяжелее любого числа предупреждений
   const lost: AiFilmPlan = { ...base, issues: [], shots: [], beats: base.beats.map((b) => ({ ...b, eventIds: [] })) };
   // потерянные обязательства идут первыми, запреты считаются по событиям, а не по строкам
-  assert.deepEqual(planRank(lost, required).slice(0, 2), [2, 0]);
+  assert.deepEqual(planRank(lost, required).slice(0, 3), [1, 2, 0]);
   assert.ok(betterPlan(twoWarnings, lost, required));
   assert.equal(missingRequired(base, required).length, 0);
 

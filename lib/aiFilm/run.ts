@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { randomUUID } from "node:crypto";
 import type { Word } from "../transcribe";
 import type { Project } from "../store";
 import type { StoryResearchPack } from "../storyResearch";
@@ -117,17 +118,32 @@ export async function planFilm(args: {
   onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
   /** подмена вызова модели по заходам: продолжить прерванный прогон от сохранённого ответа; в конвейере не задаётся */
   complete?: (a: { system: string; user: string; retry: boolean }) => Promise<string>;
-}): Promise<{ plan: AiFilmPlan; story: Awaited<ReturnType<typeof planStory>>; retried: boolean; accepted: boolean; candidates: { first: AiFilmPlan; retry?: AiFilmPlan } }> {
+}): Promise<{ plan: AiFilmPlan; story: Awaited<ReturnType<typeof planStory>>; retried: boolean; accepted: boolean; candidates: { first: AiFilmPlan; retry?: AiFilmPlan }; correction: { kind: "none" | "format" | "patch" | "failed"; applied: string[]; rejected: string[] } }> {
   const { character, universe, duration, cfg } = args;
+  let capturedFirst = "";
   const ask = (retryNote?: string) =>
     planStory({
       words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary, researchFacts: args.researchFacts,
-      character, universe, duration, coverage: args.coverage, retryNote, onCall: args.onCall,
+      character, universe, duration, coverage: args.coverage, budgetUsd: cfg.budgetUsd, retryNote,
+      onCall: (call) => { if (!call.retry) capturedFirst = call.raw; args.onCall?.(call); },
       // подмена вызова модели: даёт продолжить прерванный прогон от сохранённого ответа тем же
       // кодом — первый заход из файла, второй к модели; в конвейере не задаётся
       complete: args.complete ? (a) => args.complete!({ ...a, retry: Boolean(retryNote) }) : undefined,
     });
-  let story = await ask();
+  let formatRepaired = false;
+  const correction: { kind: "none" | "format" | "patch" | "failed"; applied: string[]; rejected: string[] } = { kind: "none", applied: [], rejected: [] };
+  let story: Awaited<ReturnType<typeof planStory>>;
+  try {
+    story = await ask();
+  } catch (error) {
+    // Repair only a received, malformed model response. Authentication, transport, budget,
+    // input and compiler failures are not retried as if they were creative mistakes.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!capturedFirst || !/AI Film Story:.*(?:JSON|структур|биты)/i.test(message)) throw error;
+    formatRepaired = true;
+    correction.kind = "format";
+    story = await ask(`Ошибка формата ответа: ${message.split("(символов")[0]}. Верни полный JSON по схеме, сохрани содержание восстановимых полей. Никаких рассуждений вне JSON.\nПолученный ответ:\n${capturedFirst}`);
+  }
   // Какие обязательные события несёт голос автора, решает первый ответ: во втором заходе под
   // давлением списка нарушений модель могла бы отдать объяснению то, что обязана показать.
   story.bible.authorCarried = authorCarriedEvents(story.bible);
@@ -144,9 +160,9 @@ export async function planFilm(args: {
   plan = withVisualTaskIssue(plan, story.bible);
   candidates.first = plan;
   const first = retryIssues(plan);
-  let retried = false;
+  let retried = formatRepaired;
   let accepted = false;
-  if (first.length) {
+  if (first.length && !formatRepaired) {
     console.warn(`AI-фильм: план нарушил требования (${issueLines(first).join("; ")}) — второй заход`);
     args.onStep?.("AI-фильм: правка плана", 29);
     retried = true;
@@ -165,39 +181,53 @@ export async function planFilm(args: {
     // только изменения. Всё незатронутое сохраняется по построению, изменения вне области
     // отбрасываются, затем весь план проходит проверки заново.
     const scope = scopeFromIssues(first, story.beats, story.bible, story.raw, story.phrases.length, character.name);
-    const patch = await planPatch({
-      words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary,
-      first: story.raw, remarks: [...issueLines(first), ...(contract ? [contract.trim()] : [])],
-      character, universe, duration, coverage: args.coverage, onCall: args.onCall,
-      complete: args.complete ? (a) => args.complete!({ ...a, retry: true }) : undefined,
-    });
-    const patched = applyPatch(story.raw, patch, scope);
-    for (const l of patched.applied) console.log(`   корректировка: ${l}`);
-    for (const l of patched.rejected) console.warn(`   корректировка отклонена: ${l}`);
-    const retry = storyFromRaw(patched.raw, { words: args.words, phrases: story.phrases, duration, character, universe, researchFacts: args.researchFacts });
-    // Обязательный набор первого захода возвращается силой: снять обязательность вместо
-    // постановки сцены модель не может — это делало проверку зелёной, не показав события.
-    const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events), authorCarried: story.bible.authorCarried };
-    // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
-    // событие в сцене и забывает переписать его в bible.events.
-    reconcileEventRefs(retryBible, retry.beats);
-    const retryPlan = withVisualTaskIssue(buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg }), retryBible);
-    candidates.retry = retryPlan;
-    // Выбор по тяжести и сохранённым событиям, а не по числу строк.
-    const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };
-    if (betterPlan(retryPlan, plan, required)) {
-      story = { ...retry, bible: retryBible };
-      plan = retryPlan;
-      accepted = true;
-      console.log(
-        `AI-фильм: второй заход принят — запретов ${blockingWeight(retryPlan)} (было ${was.blocks}), ` +
-          `потеряно обязательных ${missingRequired(retryPlan, required).length} (было ${was.lost})`,
-      );
-    } else {
-      console.warn("AI-фильм: второй заход не лучше первого, остаётся первый план");
+    try {
+      const patch = await planPatch({
+        words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary, researchFacts: args.researchFacts,
+        first: story.raw, remarks: [...issueLines(first), ...(contract ? [contract.trim()] : [])],
+        character, universe, duration, coverage: args.coverage, budgetUsd: cfg.budgetUsd, scope, onCall: args.onCall,
+        complete: args.complete ? (a) => args.complete!({ ...a, retry: true }) : undefined,
+      });
+      const patched = applyPatch(story.raw, patch, scope);
+      correction.kind = "patch";
+      correction.applied = patched.applied;
+      correction.rejected = patched.rejected;
+      for (const l of patched.applied) console.log(`   корректировка: ${l}`);
+      for (const l of patched.rejected) console.warn(`   корректировка отклонена: ${l}`);
+      const retry = storyFromRaw(patched.raw, { words: args.words, phrases: story.phrases, duration, character, universe, researchFacts: args.researchFacts });
+      // Обязательный набор первого захода возвращается силой: снять обязательность вместо
+      // постановки сцены модель не может — это делало проверку зелёной, не показав события.
+      const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events), authorCarried: story.bible.authorCarried };
+      // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
+      // событие в сцене и забывает переписать его в bible.events.
+      reconcileEventRefs(retryBible, retry.beats);
+      const retryPlan = withVisualTaskIssue(buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg }), retryBible);
+      candidates.retry = retryPlan;
+      // Выбор по тяжести и сохранённым событиям, а не по числу строк.
+      const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };
+      if (betterPlan(retryPlan, plan, required)) {
+        story = { ...retry, bible: retryBible };
+        plan = retryPlan;
+        accepted = true;
+        console.log(
+          `AI-фильм: второй заход принят — запретов ${blockingWeight(retryPlan)} (было ${was.blocks}), ` +
+            `потеряно обязательных ${missingRequired(retryPlan, required).length} (было ${was.lost})`,
+        );
+      } else {
+        console.warn("AI-фильм: второй заход не лучше первого, остаётся первый план");
+      }
+    } catch (error) {
+      correction.kind = "failed";
+      // A paid correction must not destroy the usable first result. Existing blockers remain;
+      // this warning does not permit an invalid plan to reach Veo or cause another model call.
+      const message = "Корректировка не завершена; сохранён первый план и его проверки";
+      console.warn(`${message}: ${error instanceof Error ? error.message : String(error)}`);
+      plan = { ...plan, issues: [...(plan.issues ?? []), {
+        code: "correction-failed", severity: "warn", beatIds: [], message,
+      }], warnings: [...plan.warnings, message] };
     }
   }
-  return { plan, story, retried, accepted, candidates };
+  return { plan, story, retried, accepted, candidates, correction };
 }
 
 export async function runAiFilmStage(args: {
@@ -225,9 +255,14 @@ export async function runAiFilmStage(args: {
     const summary = facts.join("; ");
     // Ответы планировщика сохраняются рядом с планом ДО разбора: упавший разбор стоит
     // столько же, сколько удачный, и без текста ответа причину падения искать нечем.
-    const callsDir = path.join(dir, "ai-film", "story-calls");
+    const callsDir = path.join(dir, "ai-film", "story-calls", `${Date.now()}-${randomUUID().slice(0, 8)}`);
+    fs.mkdirSync(callsDir, { recursive: true });
+    fs.writeFileSync(path.join(callsDir, "input.json"), JSON.stringify({
+      words, script: project.script ?? "", topic: project.topic, researchSummary: summary,
+      researchFacts: facts, duration, coverage, cfg,
+    }, null, 2), "utf8");
     let callNo = 0;
-    const { plan } = await planFilm({
+    const result = await planFilm({
       words, script: project.script ?? "", topic: project.topic, researchSummary: summary, researchFacts: facts,
       character, universe, duration, coverage, cfg,
       onStep: (step, progress) => args.setStep(step, progress),
@@ -241,6 +276,11 @@ export async function runAiFilmStage(args: {
         } catch {}
       },
     });
+    const { plan } = result;
+    fs.writeFileSync(path.join(callsDir, "candidates.json"), JSON.stringify({
+      ...result.candidates, retried: result.retried, accepted: result.accepted, correction: result.correction,
+      selectedKey: plan.key, blocking: gateIssues(plan),
+    }, null, 2), "utf8");
     fs.writeFileSync(path.join(dir, PLAN_FILE), JSON.stringify(plan, null, 2), "utf8");
     const s = plan.stats;
     console.log(

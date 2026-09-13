@@ -17,7 +17,7 @@ import type { AiFilmPlan, PlanIssue, StoryEvent } from "./types";
  * генерации: ролик с поздним началом смотрибелен, а вот кадра с невыполнимым указанием
  * не существует вовсе.
  */
-export const RETRY_WARN_CODES = new Set(["author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present", "scene-without-visual-task", "explanation-faked-proof", "explanation-hides-event", "repeated-visual-task", "duplicate-visual-tasks", "author-flicker", "author-stretch-explained", "no-visual-tasks", "unconfirmed-mechanism", "voice-contradicts-facts", "basis-unverified", "time-of-day-jump"]);
+export const RETRY_WARN_CODES = new Set(["hero-flag-mismatch", "author-stretch-long", "anchor-outside-shot", "beat-multiple-events", "scene-out-of-order", "change-without-cause", "prop-asserts-end-state", "hold-outside-window", "absent-before-but-present", "scene-without-visual-task", "explanation-faked-proof", "explanation-hides-event", "repeated-visual-task", "duplicate-visual-tasks", "author-flicker", "author-stretch-explained", "no-visual-tasks", "unconfirmed-mechanism", "voice-contradicts-facts", "basis-unverified", "time-of-day-jump"]);
 
 /** Нарушения, запрещающие оплату. */
 export function gateIssues(plan: Pick<AiFilmPlan, "issues">): PlanIssue[] {
@@ -126,13 +126,18 @@ export function preserveRequired(original: StoryEvent[] | undefined, next: Story
  * но с двумя предупреждениями.
  */
 export function planRank(plan: AiFilmPlan, required: StoryEvent[]): number[] {
+  const lost = missingRequired(plan, required).length;
+  const blocked = blockingWeight(plan);
   return [
+    // A candidate ready for generation always wins over a blocked one. Among blocked
+    // candidates retain the existing preference for preserving the story's obligations.
+    Number(lost > 0 || blocked > 0),
     // Потерянные обязательства идут ПЕРВЫМИ и считаются по событиям, а не по строкам:
     // одно сообщение «не показаны» может нести и два события, и пять. Второй заход
     // выигрывал у первого, потеряв ещё три обязательных события, потому что число
     // сообщений уменьшилось на одно.
-    missingRequired(plan, required).length,
-    blockingWeight(plan),
+    lost,
+    blocked,
     retryIssues(plan).length,
     (plan.issues ?? []).length,
     -Math.round((plan.stats?.coverage ?? 0) * 1000),

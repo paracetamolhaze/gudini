@@ -43,6 +43,16 @@ const plan = {
   stats: { estimatedCost: 1.2, aiSeconds: 8, speechSeconds: 20 },
 } as NonNullable<AiFilmState["plan"]>;
 
+test("provider safety refusal is saved as a blocking plan result without losing prior output", async () => {
+  const p = project({ aiFilm: { request: "generate", status: "planned", plan }, processedVideo: "out.mp4" });
+  const result = await finish(p, { error: "[VEO_FILTERED] Google refused. You will not be charged." }, true);
+  const saved = store.getProject(p.id)!;
+  assert.equal(saved.aiFilm?.status, "failed");
+  assert.equal(saved.aiFilm?.plan?.key, plan.key);
+  assert.ok(saved.aiFilm?.plan?.issues?.some(i => i.code === "provider-refused" && i.severity === "block"));
+  assert.equal(saved.processedVideo, "out.mp4");
+});
+
 function project(patch: Partial<Project> = {}): Project {
   return {
     id: "style-lifecycle",

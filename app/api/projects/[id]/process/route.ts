@@ -25,6 +25,10 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     if (request === "generate" && !project.aiFilm?.plan) {
       return NextResponse.json({ error: "Сначала соберите план фильма и подтвердите его" }, { status: 400 });
     }
+    if (request === "generate") {
+      const blocking = (project.aiFilm?.plan?.issues ?? []).filter(i => i.severity === "block");
+      if (blocking.length) return NextResponse.json({ error: blocking.map(i => i.message).join(". ") }, { status: 409 });
+    }
     project = updateProject(id, { aiFilm: { ...(project.aiFilm ?? {}), request, error: undefined } })!;
   }
 

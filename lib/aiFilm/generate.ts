@@ -5,7 +5,7 @@ import { probeDuration, runFfmpeg } from "../ffmpeg";
 import { ledger, recordFlat, reserveBudget, releaseBudget } from "../costLedger";
 import { shotKey, debrandPrompt } from "./plan";
 import { mimeFor } from "./character";
-import { startVeo, waitVeo, downloadGcs, uploadGcs, veoBody, VeoOperationError, isThirdPartyContentError, VEO_BUCKET, type VeoReference, type VeoRequest } from "./veo";
+import { startVeo, waitVeo, downloadGcs, uploadGcs, veoBody, VeoOperationError, VeoFilteredError, isThirdPartyContentError, VEO_BUCKET, type VeoReference, type VeoRequest } from "./veo";
 import type { AiFilmPlan, AiFilmShotResult, CharacterProfile, ContinuityGroup, FilmShot, GroupClip } from "./types";
 
 /**
@@ -85,6 +85,16 @@ export async function runPool<T>(tasks: (() => Promise<T>)[], n: number): Promis
 
 type RawRecord = { key: string; request: unknown; operation?: string; response?: unknown; file?: string; duration?: number; error?: string; terminalError?: boolean; debranded?: boolean; startedAt?: string; finishedAt?: string; failedAt?: string };
 
+function priorRefusal(dir: string, shot: FilmShot, key: string): VeoFilteredError | null {
+  let saved: RawRecord;
+  try { saved = JSON.parse(fs.readFileSync(path.join(filmDir(dir), RAW_DIR, `${shot.id}-${key}.json`), "utf8")); }
+  catch { return null; }
+  if (saved.key === key && saved.terminalError && /\[VEO_FILTERED\]|фильтр безопасности/.test(saved.error ?? "")) {
+    return new VeoFilteredError(`Сцена ${shot.id} уже отклонена: ${saved.error}`, saved.response);
+  }
+  return null;
+}
+
 export async function generateShot(args: {
   dir: string;
   projectId: string;
@@ -96,6 +106,8 @@ export async function generateShot(args: {
   onProgress?: (msg: string) => void;
 }): Promise<AiFilmShotResult> {
   const { dir, shot, key } = args;
+  const refused = priorRefusal(dir, shot, key);
+  if (refused) throw refused;
   const rawDir = path.join(filmDir(dir), RAW_DIR);
   fs.mkdirSync(rawDir, { recursive: true });
   const rawJson = path.join(rawDir, `${shot.id}-${key}.json`);
@@ -137,10 +149,12 @@ export async function generateShot(args: {
     }
   };
   let debranded = false;
+  let acceptedCost: ReturnType<typeof recordFlat> | undefined;
   // Google отклоняет имена чужих персонажей либо при отправке, либо уже внутри операции
   // (операция завершается отказом через ~15 с). В обоих случаях денег это не стоит, и
   // сцена один раз уходит повторно с описаниями вместо имён.
   const debrandOrThrow = (e: unknown) => {
+    if (e instanceof VeoFilteredError) throw e;
     if (debranded || !isThirdPartyContentError(e)) throw e;
     const stripped = debrandPrompt(req.prompt, args.plan.bible, args.plan.character?.name);
     if (stripped === req.prompt) throw e;
@@ -163,7 +177,7 @@ export async function generateShot(args: {
         }
         write({ key, request: veoBody(req), operation, debranded, startedAt: new Date().toISOString() });
         // считаем сразу: операция принята — деньги, скорее всего, уже списаны
-        recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: shot.cost, estimated: true });
+        acceptedCost = recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: shot.cost, estimated: true });
         // The accepted call is now in the ledger; do not also count its reservation
         // while the other groups are waiting to start.
         release();
@@ -183,8 +197,9 @@ export async function generateShot(args: {
     write({ key, request: veoBody(req), operation, response: result.raw, file: path.relative(dir, file), duration: dur, debranded, finishedAt: new Date().toISOString() });
     return { shotId: shot.id, key, gcsUri: result.gcsUri, file: path.relative(dir, file), operation, veoSeconds: shot.veoSeconds, cost: shot.cost, createdAt: new Date().toISOString() };
   } catch (e) {
-    write({ key, request: veoBody(req), operation, error: String((e as any)?.message ?? e), terminalError: e instanceof VeoOperationError, failedAt: new Date().toISOString() });
-    if (operation) recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: 0, estimated: true, failed: true });
+    write({ key, request: veoBody(req), operation, response: e instanceof VeoFilteredError ? e.response : undefined, error: String((e as any)?.message ?? e), terminalError: e instanceof VeoOperationError, failedAt: new Date().toISOString() });
+    if (e instanceof VeoFilteredError && e.notCharged && acceptedCost) acceptedCost.markNotCharged();
+    else if (operation) recordFlat({ stage: "AI Film Generation", provider: "google", model: shot.model, cost: 0, estimated: true, failed: true });
     throw new Error(`AI-фильм, shot ${shot.id} (${shot.mode}, ${shot.veoSeconds} с): ${String((e as any)?.message ?? e)}`);
   } finally {
     release();
@@ -294,6 +309,17 @@ export async function generateGroups(args: {
   onProgress?: GenerateProgress;
 }): Promise<{ clips: GroupClip[]; spent: number; generated: number; cached: number }> {
   const { dir, plan, character } = args;
+  // Check the whole approved plan before starting any new groups or uploading references.
+  for (const group of plan.groups) {
+    let sourceKey: string | null = null;
+    for (const id of group.shotIds) {
+      const shot = plan.shots.find(s => s.id === id)!;
+      const key = shotKey(shot, character.refHash, sourceKey);
+      const refused = priorRefusal(dir, shot, key);
+      if (refused) throw refused;
+      sourceKey = key;
+    }
+  }
   const spentBefore = ledger().filter((e) => e.stage === "AI Film Generation").reduce((sum, e) => sum + e.estimatedCost, 0);
   const cache = loadCache(dir);
   const needRefs = plan.shots.some((s) => s.useReferences);

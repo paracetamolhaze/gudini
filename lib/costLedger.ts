@@ -264,8 +264,8 @@ export function recordFlat(args: {
   cost: number;
   estimated?: boolean;
   failed?: boolean;
-}): void {
-  record({
+}): { markNotCharged: () => void } {
+  const entry: CostEntry = {
     stage: args.stage,
     provider: args.provider,
     model: args.model,
@@ -277,7 +277,14 @@ export function recordFlat(args: {
     estimatedCost: args.cost,
     estimated: args.estimated ?? true,
     failed: args.failed,
-  });
+  };
+  record(entry);
+  return { markNotCharged: () => {
+    entry.estimatedCost = 0;
+    entry.providerReportedCost = 0;
+    entry.estimated = false;
+    entry.failed = true;
+  } };
 }
 
 export type StageTotal = {

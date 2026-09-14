@@ -90,55 +90,19 @@ export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): Vali
   const videos = plan.events.filter((e) => e.type === "EXTERNAL_VIDEO").length;
   const images = plan.events.filter((e) => e.type === "EXTERNAL_IMAGE").length;
   const s = plan.stats;
-  // ТЕМП — ЭТО ОШИБКА, А НЕ ЗАМЕЧАНИЕ.
-  // Валидатор знал и про покрытие 36%, и про 23.8с подряд без визуала, и всё
-  // равно пропускал ролик в рендер. Так вышел статичный ролик, который никто
-  // не остановил.
+  // Coverage is diagnostic, never a reason to add unrelated pictures.
   if (s.externalCoverage < PACING.minExternalCoverage) {
-    errors.push(
-      `покрытие визуалом ${(s.externalCoverage * 100).toFixed(0)}% ниже минимума ${(PACING.minExternalCoverage * 100).toFixed(0)}%`,
-    );
-  } else if (s.externalCoverage < T.target_external_coverage - 0.1) {
-    warnings.push(`покрытие ${(s.externalCoverage * 100).toFixed(0)}% ниже цели ${(T.target_external_coverage * 100).toFixed(0)}%`);
+    warnings.push(`Смысловые картинки занимают ${(s.externalCoverage * 100).toFixed(0)}% ролика; остальные участки оставлены автору`);
   }
-  if (s.maxARollGap > PACING.maxARollGap) {
-    errors.push(`подряд ${s.maxARollGap.toFixed(1)}с без визуала — предел ${PACING.maxARollGap}с`);
-  }
-  const byStart = [...plan.events].sort((a, b) => a.start - b.start);
-  const first = byStart[0];
-  if (!first) {
-    errors.push("в плане нет ни одной вставки");
-  } else if (first.start > PACING.firstVisualBy) {
-    errors.push(`первая картинка на ${first.start.toFixed(1)}с — позже ${PACING.firstVisualBy}с, начало ролика статично`);
-  }
-  // сверху только картинки
+  if (!plan.events.length) warnings.push("Подходящих смысловых вставок нет — оставлен автор");
   for (const e of plan.events) {
-    if (e.type !== "EXTERNAL_IMAGE") errors.push(`${e.assetId}: движущаяся вставка (${e.type}) — разрешены только картинки`);
-  }
-  // после первой картинки дорожка непрерывна: допустим зазор не больше одного кадра
-  for (let i = 1; i < byStart.length; i++) {
-    const gap = byStart[i].start - byStart[i - 1].end;
-    if (gap > 1 / 30 + 0.001) errors.push(`пустой верх ${gap.toFixed(2)}с между ${byStart[i - 1].assetId} и ${byStart[i].assetId}`);
-  }
-  if (first && plan.duration - byStart[byStart.length - 1].end > 1 / 30 + 0.001) {
-    errors.push(`пустой верх в конце: последняя картинка кончается на ${byStart[byStart.length - 1].end.toFixed(1)}с из ${plan.duration.toFixed(1)}`);
-  }
-  // покрытие после вступления не ниже 98%
-  if (first) {
-    const after = plan.duration - first.start;
-    const covered = byStart.reduce((n, e) => n + (e.end - e.start), 0);
-    if (after > 0 && covered / after < 0.98) {
-      errors.push(`после вступления картинка есть лишь ${((covered / after) * 100).toFixed(0)}% времени — нужно ≥ 98%`);
+    if (e.type !== "EXTERNAL_IMAGE") errors.push(`${e.assetId}: разрешены только картинки`);
+    if (!Number.isFinite(e.start) || !Number.isFinite(e.end) || e.start < 0 || e.end <= e.start || e.end > plan.duration + 0.01) {
+      errors.push(`${e.assetId}: некорректные границы вставки`);
     }
-  }
-  // вставки не должны стоять одним комом: считаем разброс по таймлайну
-  if (plan.events.length >= 3) {
-    const mid = plan.events.map((e) => (e.start + e.end) / 2);
-    const span = Math.max(...mid) - Math.min(...mid);
-    if (span < plan.duration * 0.5) {
-      errors.push(
-        `все вставки собраны в отрезке ${span.toFixed(1)}с из ${plan.duration.toFixed(0)}с — остальной ролик без визуала`,
-      );
+    const asset = known.get(e.assetId);
+    if (asset && (asset.beatScores?.[e.beatId] ?? 0) < 2) {
+      errors.push(`${e.assetId}: нет сильного соответствия блоку ${e.beatId}`);
     }
   }
   if (s.videoShare < T.preferred_video_share - 0.15 && videos + images > 0) {
@@ -170,7 +134,7 @@ export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): Vali
  * с жёстким покрытием 31% выглядел готовым, а на деле дал двадцать четыре
  * секунды подряд одного лица.
  *
- * Не готова — это не предупреждение: рендерить нечего, нужно доискать материал.
+ * Это диагностика медиатеки: низкое покрытие не запрещает осмысленный редкий монтаж.
  */
 export function packReady(pack: StoryAssetPackV2): { ok: boolean; reasons: string[]; status: "READY" | "NEEDS_MORE_MEDIA" } {
   const T = taste();
@@ -228,24 +192,15 @@ export function packDistribution(
   const visual = beats.filter((b) => b.visualNeed !== "NONE");
   const per = duration / Math.max(1, visual.length);
   const best = (b: { id: string }) => pack.coverage.find((c) => c.beatId === b.id)?.bestScore ?? 0;
-  // Честным считаем блок с оценкой 2 и выше. Для блоков-обстановки (CONTEXT) и общих
-  // понятий (GENERAL) кадр-обстановка с оценкой 1 — тоже честное покрытие: под фразу
-  // «они составляют весь рынок» в объяснении про растение годится фото растения, и
-  // требовать «точно про этот блок» там нечего. Для события и участника (EXACT_EVENT,
-  // ENTITY) обстановка провала не закрывает — это чужой кадр под конкретный факт.
-  const lenient = (b: { visualNeed: string }) => b.visualNeed === "CONTEXT" || b.visualNeed === "GENERAL";
-  const covered = visual.map((b) => best(b) >= 2 || (lenient(b) && best(b) >= 1));
-  // Дыра — блок, под который нет ВООБЩЕ ничего: уплотнение после режиссёра ставит
-  // в слабый блок (оценка 1) карточку-обстановку, и экран не пустует. Проект
-  // «Мстителей» упирался в два соседних слабых блока при 80% сильного покрытия.
-  const anything = visual.map((b) => best(b) >= 1);
+  // Only relevant images count. Weak topical context does not cover a story beat.
+  const covered = visual.map(b => best(b) >= 2);
 
   const firstIdx = covered.indexOf(true);
   const firstExternalVisualAt = firstIdx < 0 ? duration : Number((firstIdx * per).toFixed(2));
 
   let run = 0;
   let maxRun = 0;
-  for (const c of anything) {
+  for (const c of covered) {
     run = c ? 0 : run + 1;
     maxRun = Math.max(maxRun, run);
   }
@@ -272,7 +227,7 @@ export function packDistribution(
  *
  * Если материала не хватает на приемлемый темп, режиссёр всё равно не сможет
  * его создать — он выбирает из того, что есть. Платить за подтверждение
- * очевидного не нужно: возвращаем NEEDS_MORE_MEDIA и идём доискивать материал.
+ * возвращаем NEEDS_MORE_MEDIA как замечание; сам по себе темп не блокирует рендер.
  */
 export function montagePreflight(
   pack: StoryAssetPackV2,

@@ -4,6 +4,8 @@ import { refineMontage, beatStarts } from "../lib/montageRefine";
 import { taste } from "../lib/montageTaste";
 import type { MontagePlan } from "../lib/creativeDirector";
 import type { Word } from "../lib/transcribe";
+// Keep the semantic montage regressions in the existing npm test entry point.
+import "./montageEditorial.test";
 
 /**
  * Регрессия на план режиссёра с проекта Хендерсона: 10 карточек, две по 6.3 с подряд
@@ -98,74 +100,27 @@ test("Refine: начало блоков находится по речи; кор
   for (let i = 1; i < starts.length; i++) assert.ok(starts[i]! > starts[i - 1]!, "начала возрастают");
 });
 
-test("Refine: 16-секундное зависание и портреты подряд превращаются в трек из коротких карточек", () => {
-  const T = taste();
-  const { plan, notes, slots } = refineMontage({ montage: director, pack, beats, needs, words, duration, personNames: ["Jordan Henderson"] });
-  assert.equal(slots.length, 6, "все шесть визуальных блоков получили отрезки");
-  const ev = [...plan.events].sort((a, b) => a.start - b.start);
-  assert.ok(ev.length > director.events.length, `карточек стало больше: ${notes.join("; ")}`);
-  assert.ok(Math.abs(ev[0].start - T.first_visual_by) < 0.01, `первая карточка ровно к концу наезда: ${ev[0].start} vs ${T.first_visual_by}`);
-  for (const e of ev) {
-    // на крошечной медиатеке (9 кадров) части не из чего набрать: запасной пул
-    // включается только для отрезков длиннее 8 с — короче держится одна карточка
-    assert.ok(e.end - e.start <= 8.05, `карточка ${e.assetId} длиной ${(e.end - e.start).toFixed(1)}с`);
-    assert.ok(e.end - e.start >= T.min_visual_duration - 0.01, `карточка ${e.assetId} короче минимума`);
-    assert.ok(e.quote.trim().split(/\s+/).length >= 2, "цитата речи есть");
+test("Refine: long placements are trimmed without manufacturing extra cards", () => {
+  const starts = beatStarts(beats, words);
+  const selected: MontagePlan = { ...director, events: [
+    { ...director.events[2], start: starts[3]!, end: starts[3]! + 16 },
+    { ...director.events[3], beatId: "b5", start: starts[5]!, end: duration },
+  ] };
+  const { plan, slots } = refineMontage({ montage: selected, pack, beats, needs, words, duration });
+  assert.equal(slots.length, 7, "author-only beat supplies a real boundary too");
+  assert.equal(plan.events.length, 2);
+  for (const e of plan.events) {
+    assert.ok(e.end - e.start <= taste().max_visual_duration + 0.01);
+    assert.ok(e.quote.split(/\s+/).length >= 2);
   }
-  const longest = Math.max(...ev.map((e) => e.end - e.start));
-  assert.ok(longest < 16, "16-секундного зависания больше нет");
-  const ids = ev.map((e) => e.assetId);
-  assert.equal(new Set(ids).size, ids.length, "материал не повторяется");
-  for (let i = 1; i < ev.length; i++) assert.ok(ev[i].start - ev[i - 1].end <= 0.05, "трек непрерывный");
-  assert.ok(Math.abs(ev[ev.length - 1].end - duration) < 0.05, "трек до конца ролика");
+  assert.equal(plan.events[1].beatId, "b5");
+  assert.ok(plan.events[0].end < plan.events[1].start, "intentional gap remains");
+  assert.ok(plan.events.at(-1)!.end <= starts[6]!, "no picture over the author-only ending");
 });
 
-test("Refine: выбор режиссёра закрепляется за блоком с лучшей оценкой, гипс попадает на «в гипсе»", () => {
-  const { plan } = refineMontage({ montage: director, pack, beats, needs, words, duration, personNames: ["Jordan Henderson"] });
-  const cast = plan.events.find((e) => e.assetId === "cast")!;
-  const medics = plan.events.find((e) => e.assetId === "medics")!;
-  assert.equal(cast.beatId, "b5", "гипс — на блоке про гипс, хотя режиссёр писал b4");
-  assert.equal(medics.beatId, "b3", "медики — на носилках");
-  const spoken = words.filter((w) => w.end > cast.start && w.start < cast.end).map((w) => w.word.toLowerCase());
-  assert.ok(spoken.some((w) => /гипсе/.test(w)), `под гипсом говорят: ${spoken.join(" ")}`);
-});
-
-test("Refine: короткий блок-событие занимает время у соседа, а не исчезает", () => {
-  // «на носилках» длится 1.5 с между двумя длинными блоками
-  const w: Word[] = [];
-  let tt = 0.5;
-  const add = (sentence: string, gapAfter: number) => {
-    for (const x of sentence.split(/\s+/)) {
-      w.push({ word: x, start: tt, end: tt + 0.3 });
-      tt += 0.4;
-    }
-    tt += gapAfter;
-  };
-  add("Спотыкается и неудачно падает на руку и потом долго лежит на газоне", 0.2); // ~5.4 с
-  add("уносят с поля на носилках", 0.2); // ~1.9 с
-  add("Тренер подтвердил что всё серьёзно и чемпионат для него закончился", 0.2); // ~5 с
-  const dur = tt + 0.5;
-  const bts = [
-    { id: "x8", text: "Спотыкается и неудачно падает на руку.", visualNeed: "EXACT_EVENT" },
-    { id: "x9", text: "В итоге его уносят с поля на носилках.", visualNeed: "EXACT_EVENT" },
-    { id: "x10", text: "Тренер подтвердил, что всё серьёзно.", visualNeed: "CONTEXT" },
-  ];
-  const nds = bts.map((b) => ({ beatId: b.id, intent: "EXACT_EVENT", entities: [], visualDescription: b.text }));
-  const pk: any = {
-    ...pack,
-    assets: [
-      asset("ground", "Player lies on the ground after a fall", { x8: 3 }),
-      asset("stretcher", "Medical staff carrying player on a stretcher", { x9: 3 }),
-      asset("coach", "Coach at press conference", { x10: 2 }),
-    ],
-  };
-  const plan: MontagePlan = { ...director, duration: dur, events: [] };
-  const { plan: out, slots } = refineMontage({ montage: plan, pack: pk, beats: bts, needs: nds, words: w, duration: dur });
-  const T = taste();
-  const s9 = slots.find((s) => s.beatId === "x9");
-  assert.ok(s9, "блок с носилками не исчез");
-  assert.ok(s9!.end - s9!.start >= T.min_visual_duration - 0.01, `отрезок носилок ${(s9!.end - s9!.start).toFixed(2)}с`);
-  const stretcher = out.events.find((e) => e.assetId === "stretcher")!;
-  assert.ok(stretcher, "носилки в плане");
-  assert.ok(/носилках/.test(stretcher.quote), `цитата под носилками: ${stretcher.quote}`);
+test("Refine: a misplaced choice is not moved into a different story beat", () => {
+  const starts = beatStarts(beats, words);
+  const selected = { ...director, events: [{ ...director.events[2], start: starts[5]!, end: duration }] };
+  const { plan } = refineMontage({ montage: selected, pack, beats, needs, words, duration });
+  assert.equal(plan.events.length, 0, "medics selected after their spoken beat are dropped");
 });

@@ -48,6 +48,7 @@ const domainOf = (u: string) => {
  * непригодны, и пакет прошлой версии переиспользовать нельзя.
  */
 export const PACK_VERSION = 5;
+export const MATCH_VERSION = 2;
 
 /**
  * Темы, где иллюстрация с сайта лучше кадра из чужого ролика: объяснение, история,
@@ -176,6 +177,8 @@ export function resetStages(): void {
 export type AssetKind = "VIDEO_SEGMENT" | "IMAGE";
 
 export type PackAsset = {
+  /** Same visible information across different files and camera angles. */
+  visualFamily?: string;
   id: string;
   kind: AssetKind;
   /** файл, готовый к монтажу (уже вырезанный сегмент или картинка) */
@@ -217,6 +220,7 @@ export type BeatCoverage = {
 };
 
 export type StoryAssetPackV2 = {
+  matchVersion?: number;
   storyId: string;
   version: number;
   /** отпечаток входных данных: по нему видно, устарел ли пакет */
@@ -350,7 +354,31 @@ export function scoreCandidate(
 }
 
 /** Запрос под конкретный блок: контекст истории + что нужно показать. */
+export function illustrationSubject(description: string): string {
+  return description.split(/,|\b(?:without|not presented|clearly used|used as|used for)\b/i)[0]
+    .replace(/\b(?:a|an|the|of|with|generic|illustrative|still|close-up|product|photograph|photography|photo|image|picture|view|shot)\b/gi, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+/** General objects explain a concept; they need not come from an article about the incident. */
+export function verifyNeedImageSource(
+  candidate: { title: string; description?: string; sourceUrl: string },
+  research: StoryResearchPack,
+  need: MediaResearchNeed,
+): { ok: boolean; reasons: string[] } {
+  if (need.intent !== "GENERAL") return verifySource(candidate, research);
+  const subject = [...new Set(illustrationSubject(need.visualDescription).toLowerCase().match(/[a-z]{3,}/g) ?? [])];
+  const hay = `${candidate.title} ${candidate.description ?? ""} ${candidate.sourceUrl}`.toLowerCase();
+  const hits = subject.filter(word => hay.includes(word)).length;
+  const ok = subject.length > 0 && hits >= Math.min(2, subject.length);
+  return { ok, reasons: ok ? [] : ["источник не показывает нужный предмет или понятие"] };
+}
+
 export function beatQueries(r: StoryResearchPack, need: MediaResearchNeed): string[] {
+  if (need.intent === "GENERAL") {
+    const subject = illustrationSubject(need.visualDescription);
+    return [subject, `${subject} close up photo`].filter(q => q.length > 3);
+  }
   const year = r.eventYear ? String(r.eventYear) : "";
   const ents = need.entities.length ? need.entities.join(" ") : r.entities[0]?.name ?? "";
   const event = r.entities.find((e) => e.type === "EVENT")?.name ?? "";
@@ -735,12 +763,13 @@ const MATCH_SYSTEM = `Ты — ассистент монтажёра. Тебе �
 Один материал может подходить НЕСКОЛЬКИМ блокам — так и укажи, не выбирай один.
 Материал не «занимается» блоком навсегда: расстановкой займётся режиссёр.
 
-ВАЖНО О ПРОИСХОЖДЕНИИ: все материалы уже прошли проверку источника — они относятся
-ИМЕННО К ЭТОЙ истории. Для новостного события кадр стадиона, трибун, скамейки или
-команды — это обстановка ЭТОГО матча, а не случайный сток; для фильма постер,
-кадр из трейлера или промо-фото актёра — это материал самого фильма. Поэтому для
-блока CONTEXT такой кадр — оценка 2 или 3, а не 1.
-Для блока ENTITY портрет или крупный план названного участника — оценка 3.
+Проверка источника означает лишь тематическую пригодность. Она НЕ доказывает,
+что на изображении именно это событие. Заголовок статьи не делает её картинку
+изображением описанного действия. Оценивай только то, что ВИДНО на кадре.
+Совпадение объекта/бренда/человека без нужного действия — максимум 1.
+Автомобиль не объясняет распознавание оружия, обман, передачу координат или задержание.
+Портрет участника получает 3 только при знакомстве с ним; при рассказе о его действии
+нужно само действие или конкретная поясняющая деталь. Обстановку не повышай за тематику.
 
 Ставь 0, если на кадре другая команда, другие люди, другой инцидент или другой турнир.
 Оценку 3 для EXACT_EVENT не ставь, если на кадре не происходит именно описанное действие.
@@ -751,10 +780,16 @@ PERSON — виден участник вне события;
 CONTEXT — обстановка.
 
 У каждого блока после тире указано, какой кадр под него нужен («нужен кадр: …») — сравнивай
-материал прежде всего с этим описанием, а текст блока используй как контекст.
+материал с этим описанием И текстом. Если описание потребности слишком общее,
+не позволяй ему подменять смысл речи. 2–3 означает: зритель узнаёт что-то полезное
+именно о сказанном. Лучше 0 и лицо автора, чем декоративная карточка.
+
+visualFamily — короткий общий ключ ОДИНАКОВОЙ информации: разные фотографии
+автомобиля снаружи получают один ключ, салон — другой, камера — третий.
+Для портретов разных названных людей ключи разные. Это группировка смысла, не ракурса.
 
 Отвечай компактно и СТРОГО валидным JSON. Пары с оценкой 0 не перечисляй:
-{"items":[{"a":1,"role":"EVENT","factIds":["f1"],"scores":{"3":3,"7":2}}]}
+{"items":[{"a":1,"role":"EVENT","visualFamily":"toy-gel-blaster","factIds":["f1"],"scores":{"3":3,"7":2}}]}
 где ключ "a" — номер материала, ключи внутри scores — номера блоков.`;
 
 /** Сопоставляет материалы с блоками сценария одним вызовом. */
@@ -816,6 +851,7 @@ export async function matchToBeats(
       }
       return {
         ...a,
+        visualFamily: String(info.visualFamily ?? a.id).trim().toLowerCase().slice(0, 100) || a.id,
         role: (["EVENT", "PERSON", "CONTEXT"] as const).includes(info.role) ? info.role : "CONTEXT",
         beatScores,
         compatibleBeatIds: Object.keys(beatScores),
@@ -883,6 +919,13 @@ export async function buildAssetPack(
   const fingerprint = packFingerprint(research, beats, needs);
   const existing = reusablePack(dir, fingerprint);
   if (existing) {
+    if (existing.matchVersion !== MATCH_VERSION) {
+      console.log("Медиатека: переоцениваем смысл готовых картинок без повторного поиска и скачивания");
+      const assets = await matchToBeats(existing.assets, beats, research, needs);
+      const updated = { ...existing, assets, ...computeCoverage(assets, beats), matchVersion: MATCH_VERSION };
+      fs.writeFileSync(path.join(dir, "story-asset-pack.json"), JSON.stringify(updated, null, 2), "utf8");
+      return updated;
+    }
     console.log(
       `Медиатека уже собрана для этих данных (отпечаток ${fingerprint}): ` +
         `${existing.assets.length} материалов. Повторная сборка не нужна и не оплачивается.`,
@@ -1164,7 +1207,7 @@ export async function buildAssetPack(
           stages.imageResults++;
           const key = im.imageUrl.split("?")[0];
           if (seenImage.has(key)) return;
-          const src = verifySource({ title: im.title, description: im.description, sourceUrl: im.url }, research);
+          const src = verifyNeedImageSource({ title: im.title, description: im.description, sourceUrl: im.url }, research, need);
           if (!src.ok) {
             if (src.reasons.some((r) => /соревновании|год не совпадает/.test(r))) stages.wrongEventRejected++;
             return;
@@ -1307,12 +1350,12 @@ export async function buildAssetPack(
   const empty = ordered.filter((n) => foundForNeed.get(n.beatId) === false);
   if (empty.length && assets.length < T.max_total_assets) {
     const title = research.entities.find((e) => e.type === "EVENT")?.name || research.entities[0]?.name || research.topic;
-    console.log(`  добор: блоков без материала ${empty.length} — общие кадры темы «${title}»`);
+    console.log(`  добор: блоков без материала ${empty.length} — уточняем нужные детали`);
     for (const need of empty) {
       const gist = need.visualDescription.split(" ").slice(0, 6).join(" ");
       await processNeed(need, {
         imagesOnly: true,
-        queries: [`${gist} ${title}`, `${title} official still`, `${title} poster`],
+        queries: need.intent === "GENERAL" ? beatQueries(research, need) : [`${gist} ${title}`],
       }).catch((e) => console.log(`  добор ${need.beatId}: ${String(e?.message ?? e).slice(0, 100)}`));
     }
   }
@@ -1336,7 +1379,7 @@ export async function buildAssetPack(
         const ents = need.entities.slice(0, 2).join(" ");
         await processNeed(need, {
           imagesOnly: true,
-          queries: [gist, `${gist} photo`, ents ? `${ents} ${gist}` : `${gist} illustration`],
+          queries: need.intent === "GENERAL" ? beatQueries(research, need) : [gist, `${gist} photo`, ents ? `${ents} ${gist}` : `${gist} illustration`],
         }).catch((e) => console.log(`  вторая волна ${need.beatId}: ${String(e?.message ?? e).slice(0, 100)}`));
       }
       const fresh = assets.slice(before);
@@ -1362,6 +1405,7 @@ export async function buildAssetPack(
   const { coverage, coverageRatio, hardCoverageRatio, uniqueScenes } = computeCoverage(usable, beats);
 
   const pack: StoryAssetPackV2 = {
+    matchVersion: MATCH_VERSION,
     storyId: research.storyId,
     version: PACK_VERSION,
     fingerprint,

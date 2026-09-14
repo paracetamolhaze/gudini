@@ -87,7 +87,7 @@ export function directorPlanKey(args: {
       story: research.storyId ?? research.canonicalEvent,
       facts: research.facts.map((f) => f.id),
       beats,
-      pack: [pack.fingerprint ?? "", pack.createdAt ?? "", pack.assets.map((a) => [a.id, a.compatibleBeatIds, a.role, a.beatScores ?? null])],
+      pack: [pack.fingerprint ?? "", pack.createdAt ?? "", pack.assets.map((a) => [a.id, a.compatibleBeatIds, a.role, a.beatScores ?? null, a.visualFamily ?? null])],
       words: words.map((w) => [w.word, Math.round(w.start * 100), Math.round(w.end * 100)]),
       duration: Math.round(duration * 100),
       cuts: speechCuts.map((c) => Math.round(c * 100)),
@@ -153,42 +153,14 @@ export async function runMontageV3(args: {
   const { research, script, words, duration, dir, speechCuts = [] } = args;
   const warnings: string[] = [];
 
-  const packFile = path.join(dir, "story-asset-pack.json");
   const { beats, needs, beatsReused, pack, packReused } = args.prepared ?? (await prepareLibrary(research, script, dir));
 
   const ready = packReady(pack);
   if (!ready.ok) warnings.push(...ready.reasons);
 
-  // Режиссёр не создаёт материал, он выбирает из имеющегося. Если распределение
-  // заведомо даёт статичное начало или долгий провал, платить за подтверждение
-  // очевидного не нужно — сначала доискиваем материал.
+  // Sparse but relevant media is useful; missing pictures leave the author on screen.
   const pre = montagePreflight(pack, beats, duration);
-  // Строгость проверки темпа не должна ронять монтаж, когда материал есть: если хоть
-  // что-то нашлось под половину блоков, режиссёр работает с тем, что есть (негодные
-  // карточки он не ставит по правилу 10), а замечание уходит в журнал. Останов —
-  // только когда медиатека действительно пустая.
-  if (!pre.ok && pack.coverageRatio >= 0.5) {
-    const note = `Медиатека слабее нормы: ${pre.reasons.join("; ")} — монтаж продолжен с тем, что найдено`;
-    warnings.push(note);
-    console.warn(note);
-  } else if (!pre.ok) {
-    // Медиатека, не прошедшая проверку темпа, не должна переиспользоваться: после
-    // провала два запуска подряд брали её из кэша и падали за секунду, не собрав
-    // ничего заново. Файл остаётся рядом для разбора, следующий запуск соберёт новую.
-    try {
-      fs.renameSync(packFile, path.join(dir, "story-asset-pack.failed.json"));
-    } catch {}
-    const err: any = new Error(
-      `Медиатеки не хватает на приемлемый темп: ${pre.reasons.join("; ")}. Режиссёр не запускался` +
-        (packReused
-          ? "; медиатека была взята из кэша и сброшена — следующий запуск соберёт её заново."
-          : "; сборка медиатеки уже оплачена, следующий запуск соберёт её заново."),
-    );
-    err.status = "NEEDS_MORE_MEDIA";
-    err.distribution = pre.distribution;
-    err.uncoveredBeats = pack.coverage.filter((c) => c.bestScore < 2).map((c) => c.beatId);
-    throw err;
-  }
+  if (!pre.ok) warnings.push(...pre.reasons);
 
   const planKey = directorPlanKey({ research, beats, pack, words, duration, speechCuts });
   const savedPlan = loadDirectorPlan(dir, planKey);
@@ -197,8 +169,7 @@ export async function runMontageV3(args: {
   const directed = savedPlan ?? (await directMontage(research, beats, pack, words, duration, speechCuts));
   if (!directed) throw new Error("Режиссёр монтажа не вернул план");
 
-  // Уплотнение по блокам: режиссёр отдаёт валидный, но грубый темп (вставки по 6 с
-  // подряд, 16 с на одной картинке). Детерминированно, без второго вызова.
+  // Validate relevance and trim at meaning boundaries; no automatic visual filler.
   const refined = refineMontage({
     montage: directed,
     pack,
@@ -206,9 +177,10 @@ export async function runMontageV3(args: {
     needs,
     words,
     duration,
+    speechCuts,
     personNames: research.entities.filter((e) => e.type === "PERSON").map((e) => e.name),
   });
-  for (const n of refined.notes) console.log("Уплотнение: " + n);
+  for (const n of refined.notes) console.log("Редактура: " + n);
   const montage = refined.plan;
 
   const check = validateMontage(montage, pack);

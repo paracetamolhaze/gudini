@@ -53,8 +53,8 @@ export async function generateDraftForCandidate(candidateId: string, opts: { for
       refs: { candidateId },
     });
   } catch (err) {
+    // FAILED with the reason on the candidate; JOB_FAILED is audited by the worker after the last attempt.
     await setCandidateStatus(candidateId, "FAILED", `writer: ${errorMessage(err)}`);
-    await audit("POST_VALIDATION_FAILED", `Writer не смог создать текст: ${errorMessage(err)}`, { candidateId }, null, "error");
     throw err;
   }
 

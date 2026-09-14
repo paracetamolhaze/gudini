@@ -15,7 +15,7 @@ import {
 } from "../../db/repos/candidates.js";
 import { enqueue, PRIORITY } from "../../queue/queues.js";
 import { audit } from "../audit.js";
-import { errorMessage } from "../../shared/logger.js";
+import { errorMessage, logger } from "../../shared/logger.js";
 import { analyzeSourcePost } from "./analyzer.js";
 import { priorityFromAnalysis, scoreCandidate } from "./scoring.js";
 import { checkFacts, summarizeFactCheck } from "../facts/factChecker.js";
@@ -67,8 +67,9 @@ export async function analyzeSourcePostById(sourcePostId: string): Promise<Analy
     model = r.model;
     promptVersion = r.promptVersion;
   } catch (err) {
+    // Left FAILED for the job retry; the worker records JOB_FAILED with the reason after the last attempt.
     await setSourcePostStatus(post.id, "FAILED");
-    await audit("CANDIDATE_REJECTED", `Анализ не удался для поста @${post.author_username}: ${errorMessage(err)}`, { sourceId: post.source_id, sourcePostId: post.id }, null, "error");
+    logger().warn({ sourcePostId: post.id, err: errorMessage(err) }, "analysis failed");
     throw err;
   }
 

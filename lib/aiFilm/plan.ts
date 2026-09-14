@@ -529,6 +529,7 @@ export function shotPrompt(args: {
   // там, где смысл сцены — шарнир, кнопка или место контакта.
   const subject = frameSubject(beat);
   lines.push(`Framing: ${ratio}, ${shot} shot${subject ? ` on ${subject}` : ""}. ${compositionLine(subject, beat.composition)}`);
+  lines.push("Fill the entire image edge to edge with the scene. No letterboxing, pillarboxing, black bars, borders, or inset landscape frame.");
   // В кадре должно быть ровно столько, чтобы событие читалось: иногда это весь предмет
   // целиком, иногда — место контакта крупно. Прежнее безусловное «всё названное целиком
   // в кадре» спорило с крупной деталью и заставляло отъезжать от самого важного.

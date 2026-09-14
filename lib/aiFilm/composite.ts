@@ -19,6 +19,13 @@ export const FILM_FPS = 30;
 
 export type Overlay = { segment: TimelineSegment; clip: GroupClip };
 
+/** Shared by rendering and frame review so both see the same crop. */
+export function clipSpatialFilter(mode: TimelineSegment["mode"]): string {
+  return mode === "full_ai"
+    ? `scale=${FILM_W}:${FILM_H}:force_original_aspect_ratio=increase,crop=${FILM_W}:${FILM_H},setsar=1`
+    : `${CARD_FILTER},setsar=1`;
+}
+
 /** С какой секунды клипа группы начинается материал окна. */
 export function clipOffset(seg: TimelineSegment, group: { start: number }): number {
   return seg.clipIn ?? Math.max(0, seg.start - group.start);
@@ -80,10 +87,7 @@ export function compositeFilter(fit: string, overlays: Overlay[], plan: AiFilmPl
     const inputIdx = firstInput + k;
     const offset = clipOffset(o.segment, group);
     const len = o.segment.end - o.segment.start;
-    const scaled =
-      o.segment.mode === "full_ai"
-        ? `scale=${FILM_W}:${FILM_H}:force_original_aspect_ratio=increase,crop=${FILM_W}:${FILM_H},setsar=1`
-        : `${CARD_FILTER},setsar=1`;
+    const scaled = clipSpatialFilter(o.segment.mode);
     const pos = o.segment.mode === "full_ai" ? "0:0" : `${CARD.x}:${CARD.y}`;
     chain +=
       `;[${inputIdx}:v]${scaled},fps=${FILM_FPS},trim=start=${offset.toFixed(3)}:duration=${len.toFixed(3)},` +

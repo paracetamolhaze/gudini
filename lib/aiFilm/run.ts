@@ -10,6 +10,7 @@ import { planStory, planPatch, applyPatch, storyFromRaw, scopeFromIssues, reconc
 import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
 import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, retryIssues, authorCarriedEvents, showableEvents } from "./criteria";
 import { generateGroups } from "./generate";
+import { reviewGeneratedClips } from "./clipReview";
 import { loadCharacterProfile } from "./character";
 import { loadUniverseProfile } from "./universe";
 import { veoConfigured } from "./veo";
@@ -407,5 +408,7 @@ export async function runAiFilmStage(args: {
     onProgress: (msg, f) => args.setStep(`AI-фильм: ${msg}`, 28 + Math.round(f * 9)),
   });
   console.log(`AI-фильм: shots сгенерировано ${gen.generated}, из кэша ${gen.cached}, потрачено в этом запуске $${gen.spent.toFixed(2)}`);
+  await reviewGeneratedClips({ dir, plan, clips: gen.clips, script: project.script ?? "", words,
+    onProgress: message => args.setStep(`AI-фильм: ${message}`, 38) });
   return { kind: "film", plan, clips: gen.clips, spent: gen.spent, generated: gen.generated, cached: gen.cached };
 }

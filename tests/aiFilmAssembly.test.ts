@@ -9,6 +9,7 @@ import { GoogleAuth } from "google-auth-library";
 import { normalizeBible } from "../lib/aiFilm/story";
 import { buildFilmPlan, shotKey } from "../lib/aiFilm/plan";
 import { generateGroups } from "../lib/aiFilm/generate";
+import { reviewGeneratedClips } from "../lib/aiFilm/clipReview";
 import { compositeFilter, overlaysFor } from "../lib/aiFilm/composite";
 import { loadCharacterProfile } from "../lib/aiFilm/character";
 import { loadUniverseProfile } from "../lib/aiFilm/universe";
@@ -237,4 +238,36 @@ test("контактный лист принадлежит текущему ви
   const second = sha(sheet);
   await contactSheet(video, sheet, 4);
   assert.equal(sha(sheet), second);
+});
+
+test("generated clip review gates actual frames, keeps cached files, and rejects incomplete review", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-clip-review-"));
+  try {
+    const plan = planOf([beat("B1", 0, 4, "room")], 4);
+    const file = path.join(dir, "source.mp4");
+    // Landscape input has green objects at both edges; portrait assembly crops them out.
+    execFileSync(ffmpegBin(), ["-hide_banner", "-y", "-f", "lavfi", "-i", "color=c=red:size=640x320:duration=4:rate=24",
+      "-vf", "drawbox=x=0:y=0:w=160:h=320:color=green:t=fill,drawbox=x=480:y=0:w=160:h=320:color=green:t=fill",
+      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", file],
+      { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const clips = [{ groupId: plan.groups[0].id, file: "source.mp4", seconds: 4 }];
+    const original = fs.readFileSync(file);
+    let calls = 0;
+    await assert.rejects(reviewGeneratedClips({ dir, plan, clips, words: [], script: "Открыл посылку", vision: async request => {
+      calls++;
+      assert.ok(request.image && "base64" in request.image && request.image.base64.length > 100);
+      const pixel = execFileSync(ffmpegBin(), ["-v", "error", "-i", "pipe:0", "-vf", "scale=1:1", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"],
+        { input: Buffer.from(request.image.base64, "base64"), windowsHide: true });
+      assert.ok(pixel[0] > 220 && pixel[1] < 25, `review must see the rendered red crop, not green edges: ${[...pixel]}`);
+      return JSON.stringify({ issues: [{ severity: "block", message: "В кадре нет посылки" }] });
+    } }), /нет посылки/);
+    assert.equal(calls, 1);
+    assert.deepEqual(fs.readFileSync(file), original);
+    const report = JSON.parse(fs.readFileSync(path.join(dir, "ai-film/clip-review.json"), "utf8"));
+    assert.equal(report.windows[0].verdict.issues[0].severity, "block");
+    await assert.rejects(reviewGeneratedClips({ dir, plan, clips, words: [], script: "", vision: async () => '{"issues":[{"severity":"pass"}]}' }), /не завершена/);
+    await reviewGeneratedClips({ dir, plan, clips, words: [], script: "", vision: async () => '{"issues":[]}' });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

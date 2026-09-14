@@ -3,5 +3,6 @@
  */
 import "./source.js";
 import "./analysis.js";
+import "./content.js";
 
 export {};

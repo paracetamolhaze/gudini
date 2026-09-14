@@ -4,6 +4,8 @@ import { registerStatusRoutes } from "./status.js";
 import { registerLogRoutes } from "./logs.js";
 import { registerSourceRoutes } from "./sources.js";
 import { registerCandidateRoutes } from "./candidates.js";
+import { registerDraftRoutes } from "./drafts.js";
+import { registerVoiceRoutes } from "./voice.js";
 
 /** All JSON API routes live under `${prefix}/api`. Modules are added per phase. */
 export async function registerApiRoutes(app: FastifyInstance, api: string): Promise<void> {
@@ -12,4 +14,6 @@ export async function registerApiRoutes(app: FastifyInstance, api: string): Prom
   registerLogRoutes(app, api);
   registerSourceRoutes(app, api);
   registerCandidateRoutes(app, api);
+  registerDraftRoutes(app, api);
+  registerVoiceRoutes(app, api);
 }

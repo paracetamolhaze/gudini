@@ -364,7 +364,7 @@ function Settings() {
       <div className="card">
         <h2>Сервисы</h2>
         <p className="hint">Ключи хранятся на сервере и показываются замаскированными. Пустое поле отключает сервис.</p>
-        <Field label="Anthropic API Key" note="Сценарии и описания.">
+        <Field label="Anthropic API Key" note="Только для подключения Claude. При работе через Codex этот ключ не нужен.">
           <input type="password" value={s.anthropicKey} onChange={(e) => field("anthropicKey", e.target.value)} placeholder="sk-ant-…" autoComplete="off" />
         </Field>
         <Field label="ElevenLabs API Key" note="Точные субтитры по речи.">

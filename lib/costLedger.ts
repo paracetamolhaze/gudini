@@ -29,9 +29,13 @@ export type CostStage =
   | "AI Film Story"
   | "AI Film Generation";
 
-export type CostProvider = "anthropic" | "openrouter" | "brave" | "elevenlabs" | "openai" | "google" | "local";
+export type CostProvider = "anthropic" | "codex" | "openrouter" | "brave" | "elevenlabs" | "openai" | "google" | "local";
 
 export type CostEntry = {
+  /** Subscription calls consume allowance, not a per-call API charge. */
+  billing?: "subscription";
+  runId?: string;
+  durationMs?: number;
   stage: CostStage;
   provider: CostProvider;
   /** модель или endpoint — то, по чему провайдер выставляет счёт */
@@ -362,7 +366,7 @@ export function summarize(): CostSummary {
       t.failedOrRetryCalls += e.requests;
       t.failedOrRetryCost += e.estimatedCost;
     }
-    if (e.inputTokens && !MODEL_PRICES[e.model] && e.providerReportedCost === undefined) unpriced.add(e.model);
+    if (e.billing !== "subscription" && e.inputTokens && !MODEL_PRICES[e.model] && e.providerReportedCost === undefined) unpriced.add(e.model);
   }
 
   t.variableApiCost = Number(t.variableApiCost.toFixed(6));

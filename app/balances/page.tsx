@@ -39,6 +39,7 @@ const LEVEL_TITLE: Record<BalanceLevel, string> = {
 
 const PROVIDER_NAMES: Record<string, string> = {
   anthropic: "Claude",
+  codex: "Codex (подписка)",
   openrouter: "OpenRouter",
   elevenlabs: "ElevenLabs",
   brave: "Brave",

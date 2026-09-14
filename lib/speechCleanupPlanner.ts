@@ -1,5 +1,5 @@
-import { mediaComplete } from "./mediaLlm";
-import { getSettings } from "./store";
+import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
+
 import { Word } from "./transcribe";
 import { SilenceEvent } from "./ffmpeg";
 import { RawCleanupAction } from "./speechCleanupPlan";
@@ -56,7 +56,7 @@ export async function planSpeechCleanup(
   words: Word[],
   silences: SilenceEvent[],
 ): Promise<RawCleanupAction[] | null> {
-  const key = getSettings().anthropicKey;
+  const key = mediaLlmAvailable();
   if (!key || words.length < 8) return null;
 
   const wordList = words.map((w, i) => `${i}:${w.word}[${w.start.toFixed(2)}-${w.end.toFixed(2)}]`).join(" ");

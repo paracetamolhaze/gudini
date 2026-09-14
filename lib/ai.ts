@@ -1,5 +1,5 @@
-import { mediaComplete } from "./mediaLlm";
-import { getSettings, ProjectMeta } from "./store";
+import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
+import { ProjectMeta } from "./store";
 import type { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
 import { readSpeechProfile, rhythmLine } from "./speechProfile";
@@ -17,7 +17,7 @@ const MODEL_UTIL = "claude-sonnet-5";
  * своего клиента Anthropic здесь больше нет.
  */
 function haveKey(): boolean {
-  return Boolean(getSettings().anthropicKey);
+  return mediaLlmAvailable();
 }
 
 // ===== Сценарий =====

@@ -12,7 +12,7 @@ const pack = fs.readFileSync("lib/storyAssetPack.ts", "utf8");
 const director = fs.readFileSync("lib/creativeDirector.ts", "utf8");
 const llm = fs.readFileSync("lib/mediaLlm.ts", "utf8");
 
-test("1: все три стадии ходят через общий транспорт, и модели в нём только Anthropic", () => {
+test("1: все три стадии ходят через общий транспорт, Claude сохраняет свой учёт", () => {
   for (const [name, src] of [["scriptBeats", beats], ["storyAssetPack", pack], ["creativeDirector", director]] as const) {
     assert.ok(src.includes("mediaComplete("), `${name} использует общий транспорт`);
     assert.ok(!src.includes("new Anthropic("), `${name} не создаёт клиента Anthropic напрямую`);

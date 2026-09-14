@@ -2,32 +2,19 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSettings } from "./store";
 import { recordTokens, withBudget, projectRequestCost, CostStage, CostProvider } from "./costLedger";
 import { assertProvider, ProviderPolicyError } from "./providerPolicy";
+import { codexComplete, codexModel, codexEffort, CODEX_ADAPTER_VERSION } from "./codexLlm";
 
 /**
- * Транспорт для текстовых и зрительных вызовов основного видео-конвейера.
- *
- * Модели здесь ровно одного провайдера — Anthropic (Claude). Подмена модели молча
- * меняет качество разбора истории и цену ролика, а понять постфактум, чем собран
- * конкретный ролик, становится невозможно. Кончился доступ — задача останавливается
- * с внятной ошибкой, и решение принимает человек.
- *
- * Транспорт выбирается явно настройкой, а не обстоятельствами:
- * MEDIA_LLM_TRANSPORT=anthropic (по умолчанию) — прямой API Anthropic ключом ANTHROPIC_API_KEY;
- * MEDIA_LLM_TRANSPORT=openrouter — те же модели Claude через OpenRouter ключом
- * OPENROUTER_CLAUDE_KEY (отдельный от ключа обложек). Для этого аккаунта так дешевле:
- * Anthropic добавляет к пополнению 16 % налога, OpenRouter — 5,5 % комиссии, тарифы на
- * токены одинаковые; вдобавок OpenRouter называет точную цену каждого вызова, а остаток
- * ключа виден на странице балансов. Автоматического перехода между транспортами нет:
- * нет ключа выбранного транспорта — стадия падает.
- *
- * MEDIA_LLM_MODEL — модель Anthropic для стадий конвейера.
- * MEDIA_VISION_MODEL — отдельная модель для разбора кадров, если нужна другая.
+ * Explicit transport for the main video pipeline:
+ * anthropic = direct Claude API, openrouter = Claude via OpenRouter,
+ * codex = local CLI/Windows bridge using the owner's ChatGPT subscription.
+ * No automatic switch after missing credentials, quota or failed requests.
+ * Claude model overrides stay in their existing stage callers; Codex resolves
+ * CODEX_SCRIPT_MODEL / CODEX_STORY_MODEL / CODEX_MODEL / CODEX_UTIL_MODEL by stage.
  */
-
-/** У медиа-конвейера провайдер моделей один и не выбирается. */
 export const MEDIA_PROVIDER = "anthropic" as const;
 
-export type MediaTransport = "anthropic" | "openrouter";
+export type MediaTransport = "anthropic" | "openrouter" | "codex";
 
 const DEFAULT_MODEL = "claude-sonnet-5";
 
@@ -38,20 +25,29 @@ const OPENROUTER_MODELS: Record<string, string> = {
   "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
 };
 
-export function mediaProvider(): typeof MEDIA_PROVIDER {
+export function mediaProvider(): "anthropic" | "codex" {
+  const provider = mediaTransport() === "codex" ? "codex" : MEDIA_PROVIDER;
   const requested = String(process.env.MEDIA_LLM_PROVIDER ?? "").toLowerCase();
-  if (requested && requested !== "anthropic") {
+  if (requested && requested !== provider) {
     // Явная попытка увести конвейер на чужого провайдера — это ошибка настройки,
     // а не повод тихо согласиться.
-    throw new ProviderPolicyError("Media Research", requested as CostProvider, ["anthropic"]);
+    throw new ProviderPolicyError("Media Research", requested as CostProvider, [provider]);
   }
-  return MEDIA_PROVIDER;
+  return provider;
 }
 
 export function mediaTransport(): MediaTransport {
   const t = String(process.env.MEDIA_LLM_TRANSPORT ?? "anthropic").toLowerCase();
-  if (t === "anthropic" || t === "openrouter") return t;
-  throw new Error(`MEDIA_LLM_TRANSPORT=${t}: допустимы только anthropic и openrouter`);
+  if (t === "anthropic" || t === "openrouter" || t === "codex") return t;
+  throw new Error(`MEDIA_LLM_TRANSPORT=${t}: допустимы anthropic, openrouter и codex`);
+}
+
+/** Actual engine identity for plan cache invalidation and diagnostics. */
+export function mediaEngine(stage: CostStage, legacyModel?: string) {
+  const transport = mediaTransport();
+  return transport === "codex"
+    ? { transport, model: codexModel(stage), effort: codexEffort(stage), adapterVersion: CODEX_ADAPTER_VERSION }
+    : { transport, model: transportModelId(legacyModel || mediaModel()) };
 }
 
 export function mediaModel(): string {
@@ -78,6 +74,8 @@ export function detectImageMediaType(buffer: Buffer): "image/png" | "image/jpeg"
 }
 
 export function mediaLlmAvailable(): boolean {
+  // Missing CLI/auth must produce an actionable transport error, never demo content.
+  if (mediaTransport() === "codex") return true;
   return mediaTransport() === "openrouter" ? Boolean(openrouterClaudeKey()) : Boolean(getSettings().anthropicKey);
 }
 
@@ -256,7 +254,18 @@ async function withOneRetry<T>(fn: (isRetry: boolean) => Promise<T>): Promise<T>
 
 /** Один текстовый запрос. Возвращает текст ответа или бросает ошибку — молча не глотаем. */
 export async function mediaComplete(args: CompleteArgs): Promise<string> {
+  if (mediaTransport() === "codex") return completeWithCodex(args);
   return withOneRetry((isRetry) => completeOnce(args, isRetry));
+}
+
+async function completeWithCodex(args: CompleteArgs & { images?: VisionImage[] }): Promise<string> {
+  const stage = args.stage || "Media Research";
+  mediaProvider();
+  assertProvider(stage, "codex");
+  const model = codexModel(stage);
+  const effort = codexEffort(stage);
+  const response = await codexComplete({ system: args.system, user: args.user, stage, model, effort, images: args.images });
+  return response.text;
 }
 
 async function completeOnce(
@@ -336,6 +345,11 @@ export type VisionArgs = {
  * видео-сегмент не проходит дальше, поэтому оно не должно зависеть от отдельного счёта.
  */
 export async function mediaVision(args: VisionArgs): Promise<string> {
+  if (mediaTransport() === "codex") {
+    const images = args.images ?? (args.image ? [args.image] : []);
+    if (!images.length) throw new Error("зрению не передан ни один кадр");
+    return completeWithCodex({ ...args, stage: args.stage || "Vision Verification", images });
+  }
   return withOneRetry((isRetry) => visionOnce(args, isRetry));
 }
 

@@ -16,7 +16,7 @@ import { mediaTransport, openrouterClaudeKey } from "./mediaLlm";
 export type BalanceLevel = "ok" | "low" | "empty" | "unknown" | "missing" | "error";
 
 export type ProviderBalance = {
-  id: "anthropic" | "openrouter" | "elevenlabs" | "brave" | "google";
+  id: "anthropic" | "codex" | "openrouter" | "elevenlabs" | "brave" | "google";
   name: string;
   /** за что отвечает в Gudini */
   role: string;
@@ -53,6 +53,12 @@ function levelByShare(remaining: number, total: number): BalanceLevel {
 
 // ---------------------------------------------------------------- Anthropic: весь текст, рассуждение и зрение
 async function anthropic(): Promise<ProviderBalance> {
+  if (mediaTransport() === "codex") return {
+    id: "codex", name: "Codex · ChatGPT", role: "сценарии, планы Veo, исследование и проверки кадров",
+    level: "unknown", value: "по подписке ChatGPT",
+    note: "Общий лимит с Codex. Остаток смотрите в приложении Codex; журнал запусков — data/codex/runs. Отдельной оплаты текстового API нет.",
+    consoleUrl: "https://chatgpt.com/codex/settings/usage", manualAllowed: false,
+  };
   if (mediaTransport() === "openrouter") return claudeViaOpenRouter();
   const base = {
     id: "anthropic" as const,

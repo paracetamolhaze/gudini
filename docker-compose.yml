@@ -17,6 +17,8 @@ services:
     env_file: .env
     environment:
       PORT: "3000"
+      # Codex runs on Windows with the owner's ChatGPT login; credentials stay on the host.
+      CODEX_BRIDGE_URL: http://host.docker.internal:43127
       # пусто — сайт открыт без пароля; GUDINI_PASSWORD воркера при этом просто не проверяется
       SITE_PASSWORD: ${SITE_PASSWORD:-}
       # монтаж только на воркере: сайт не запускает конвейер у себя, если воркер молчит
@@ -43,6 +45,7 @@ services:
     environment:
       # воркер ходит на сайт по внутренней сети Docker, исходник не гоняется через интернет
       GUDINI_URL: http://gudini-site:3000
+      CODEX_BRIDGE_URL: http://host.docker.internal:43127
       # AI-фильм: Veo на Vertex AI через учётные данные gcloud (application-default login);
       # ключей в .env нет, файл смонтирован только для чтения
       GOOGLE_APPLICATION_CREDENTIALS: /app/gcp-adc.json

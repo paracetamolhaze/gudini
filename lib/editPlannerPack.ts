@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { mediaComplete } from "./mediaLlm";
-import { getSettings } from "./store";
+import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
+
 import { Word } from "./transcribe";
 import { EditEvent, EditPlan, DEFAULT_CAPTION_STYLE } from "./editPlan";
 import { StoryResearchPack } from "./storyResearch";
@@ -112,7 +112,7 @@ export async function planFromAssetPack(
   words: Word[],
   duration: number,
 ): Promise<EditPlan | null> {
-  const key = getSettings().anthropicKey;
+  const key = mediaLlmAvailable();
   const usable = pack.assets.filter(isUsable);
   if (!key || words.length < 10 || !usable.length) return null;
 

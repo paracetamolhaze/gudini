@@ -1,6 +1,6 @@
 import crypto from "crypto";
-import { mediaComplete } from "./mediaLlm";
-import { getSettings } from "./store";
+import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
+
 import { braveNews, braveWeb, BraveResult } from "./braveSearch";
 import { addCost } from "./pipelineCost";
 
@@ -158,7 +158,7 @@ export async function buildStoryResearchPack(
   topic: string,
   originUrl?: string,
 ): Promise<StoryResearchPack | null> {
-  const key = getSettings().anthropicKey;
+  const key = mediaLlmAvailable();
   if (!key) return null;
 
   const originContext = originUrl ? await fetchOriginContext(originUrl) : "";

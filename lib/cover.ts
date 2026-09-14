@@ -11,7 +11,7 @@ import {
   CoverLayout,
 } from "./coverLayout";
 import { buildCoverImagePrompt } from "./coverPrompt";
-import { mediaComplete } from "./mediaLlm";
+import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
 
 /**
  * Gudini Cover Design System — ИИ-обложки с нуля в едином фирменном стиле.
@@ -139,7 +139,7 @@ export async function generateCoverConcept(
   strictNote?: string | null,
   styleHint?: string | null,
 ): Promise<CoverConcept | null> {
-  const key = getSettings().anthropicKey;
+  const key = mediaLlmAvailable();
   if (!key) return null;
   const raw = (
     await mediaComplete({

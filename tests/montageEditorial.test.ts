@@ -56,6 +56,18 @@ test("one explanatory card can span adjacent relevant clauses, stopping before t
   assert.equal(p.events[0].end, 13);
 });
 
+test("an exact minimum-length placement survives decimal timestamp rounding", () => {
+  const events = [event("gun", "weapon", 17.5, 19.9)];
+  const p = refineMontage({
+    montage: { version: 3, duration: 25, events, stats: computeStats(events, 25, []) },
+    pack: { assets: [asset("gun", { weapon: 3 })] } as any,
+    beats: [{ id: "weapon", text: "Показываем игрушечный пистолет", visualNeed: "GENERAL" }],
+    needs: [], duration: 25,
+    words: [{ word: "Показываем", start: 17.5, end: 18 }, { word: "игрушечный", start: 18, end: 18.5 }, { word: "пистолет", start: 18.5, end: 19 }],
+  }).plan;
+  assert.equal(p.events.length, 1);
+});
+
 test("general object research does not require the story brand or incident year", () => {
   const research: any = { kind: "NEWS_EVENT", topic: "robotaxi", eventYear: 2026, entities: [{ id: "w", name: "Waymo", aliases: [] }] };
   const need: any = { intent: "GENERAL", entities: [], visualDescription: "A close-up product photograph of a toy gel blaster with gel beads." };

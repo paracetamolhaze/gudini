@@ -85,7 +85,7 @@ export function refineMontage(args: {
     }
     const end = Math.min(e.end, meaningEnd, duration, start + (asset.role === "EVENT" ? T.max_exact_event_duration : T.max_visual_duration));
     const min = slot.listItem ? T.min_list_item_duration : T.min_visual_duration;
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < min) continue;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start + 0.001 < min) continue;
     const spoken = words.filter(w => w.end > start && w.start < end);
     if (spoken.length < 2) continue;
     events.push({ ...e, start, end, quote: spoken.slice(0, 12).map(w => w.word.replace(/[{}\\]/g, "")).join(" ") });

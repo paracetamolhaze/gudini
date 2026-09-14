@@ -6,7 +6,7 @@ import { StoryAssetPackV2, PackAsset } from "./storyAssetPack";
 import { taste } from "./montageTaste";
 
 /** Версия промпта режиссёра: поднимать при изменении текста промпта, иначе сохранённый план переиспользуется. */
-export const DIRECTOR_PROMPT_VERSION = 5;
+export const DIRECTOR_PROMPT_VERSION = 6;
 import { addCost } from "./pipelineCost";
 
 /**
@@ -29,6 +29,8 @@ export type MontageEvent = {
   type: MontageEventType;
   assetId: string;
   beatId: string;
+  /** Why this image explains this episode and why the picture changes here. */
+  visualPurpose?: string;
   /** дословная цитата речи, которую перекрывает вставка */
   quote: string;
   start: number;
@@ -51,69 +53,58 @@ export type MontagePlan = {
   };
 };
 
-type RawPlacement = {
+export type RawPlacement = {
   assetId?: string;
   beatId?: string;
   quote?: string;
   seconds?: number;
+  visualPurpose?: string;
 };
 
 function systemPrompt(): string {
-  const T = taste();
-  return `Ты — режиссёр монтажа коротких вертикальных видео. Автор читает текст на камеру,
-и он ВИДЕН ПОЧТИ ВСЁ ВРЕМЯ: его лицо — главный слой ролика.
+  return `Ты — монтажный режиссёр. Автор говорит в нижней части вертикального ролика.
+СВЕРХУ КАРТИНКА ДОЛЖНА БЫТЬ ВСЕГДА: с первого кадра до последнего. Пустых участков нет.
+Твоя задача — выстроить непрерывный СМЫСЛОВОЙ видеоряд из неподвижных изображений.
 
-Внешние материалы — ТОЛЬКО НЕПОДВИЖНЫЕ КАРТИНКИ. Каждая показывается одинаковой
-карточкой в верхней части кадра, поверх автора — как подпись к тому, о чём он
-сейчас говорит. Размер и положение карточки задаёт программа, тебе о них думать
-не нужно: ты решаешь только ЧТО показать и НА КАКИХ СЛОВАХ.
+Прочитай ВЕСЬ рассказ и сначала выдели законченные смысловые эпизоды. Выбери картинку,
+которая помогает понять каждый эпизод: новый участник, предмет, механизм, действие,
+последствие или развязка. Картинка держится, пока развивается соответствующая мысль.
+Смена нужна тогда, когда следующая картинка сообщает новую визуальную информацию.
+Длительность определяешь ТЫ по смыслу речи, а не программа по таймеру.
+Нет нормы «каждые 3 секунды», нет максимума 5 секунд и нет квоты на количество кадров.
+Один эпизод может занимать несколько предложений и несколько служебных блоков сценария.
 
-Картинка появляется только на той мысли, которую помогает понять. Между такими
-мыслями остаётся автор. Программа не заполняет паузы и не продлевает вставки
-на соседние темы: укажи осмысленные начало и длительность каждой карточки.
+НЕ делай галерею одного объекта: машина спереди → машина сбоку → машина сзади НЕ
+объясняет историю. Например, в истории с роботакси зрителю полезно увидеть сам автомобиль
+при знакомстве, игрушечное оружие и шарики при их объяснении, пустое водительское место,
+камеру/систему наблюдения, связь с полицией, остановку, полицию, развязку. Это примеры
+смысловых функций, а НЕ обязательный шаблон и не повод ставить неподходящий материал.
 
-У тебя ЕСТЬ готовая медиатека проверенных материалов этой истории. Искать ничего
-не нужно и нельзя: доступны только материалы из списка, по их id.
+Медиатека конечна. Выбирай лучший честный визуальный опорный образ для ЦЕЛОГО эпизода.
+Если нет буквального кадра действия, используй поясняющий предмет, участника или контекст
+и объясни в visualPurpose, что именно он помогает понять. Не объявляй иллюстрацию
+доказательством события. Не выдумывай интерфейсы, факты или то, чего на картинке нет.
+Слабый автоматический балл сопоставления с коротким блоком — повод подумать, а не убрать
+картинку. Ты видишь весь рассказ и отвечаешь за смысл окончательного выбора.
+Нельзя оставлять только автора; нельзя тянуть случайную фотографию через смену темы.
 
-Задача — объяснять сюжет немногими полезными иллюстрациями. Другой ракурс того же
-объекта без новой информации не нужен. Если подходящих картинок нет, placements
-может быть пустым.
+ФОРМАТ ПЛАНА — точки смены картинки:
+- assetId: существующая КАРТИНКА из медиатеки;
+- beatId: блок, в котором начинается эпизод (NONE в старой разметке не выключает картинку);
+- quote: 2–12 ДОСЛОВНЫХ последовательных слов транскрипции, с которых начинается эпизод;
+- visualPurpose: что зритель понимает благодаря этой картинке на ВСЁМ эпизоде и почему
+  именно здесь нужна смена относительно предыдущего изображения.
 
-ЖЁСТКИЕ ПРАВИЛА:
-1. Для каждой вставки укажи quote — ДОСЛОВНЫЙ фрагмент транскрипции из 2–12 слов
-   подряд, который эта вставка сопровождает. Копируй слова точно, без изменений.
-   Если не можешь найти точную цитату — не ставь вставку.
-2. assetId — только из списка медиатеки.
-3. Один материал используется ОДИН раз. Разные сегменты одного видео — разные материалы.
-4. seconds — желаемая длительность: ${T.min_visual_duration}–${T.max_visual_duration}, обычно ${T.typical_visual_duration}.
-5. Первые ${T.first_visual_after} секунды — только лицо автора. Первую карточку ставь,
-   когда она помогает сказанному. Не сдвигай неподходящую картинку на начало ради темпа.
-6. Один смысловой блок можно закрыть ПОСЛЕДОВАТЕЛЬНОСТЬЮ из 2–3 вставок
-   (участник → событие → последствие). Соседние вставки могут идти встык.
-7. Паузы с автором нормальны. Не заполняй их общими фотографиями темы.
-8. Нет квоты на число картинок или процент покрытия. Обычно достаточно одной
-   вставки на законченный смысловой эпизод; держи её, пока объясняется эта деталь.
-   Меняй только когда следующая картинка добавляет НОВУЮ информацию.
-9. У каждого материала показаны оценки совместимости с блоками (b3=3 значит
-   «точно про этот блок»). Бери только 3 или 2. Оценка 1 — декоративная обстановка,
-   такую картинку не ставь даже при отсутствии лучшей.
-10. Если под фразу в медиатеке нет ПОДХОДЯЩЕГО материала — не ставь ничего.
-    Лицо автора лучше неподходящего кадра. Заполнять таймлайн ради процента нельзя.
-11. При равной оценке ИЛЛЮСТРАЦИЯ лучше, чем КАДР ВИДЕО: кадр, вырезанный из чужого
-    ролика, бери только когда иллюстрации под эту фразу нет. Один и тот же материал
-    дважды не ставь даже под разные фразы.
-12. Человека не показывай раньше, чем его впервые назвали по имени. Смотри на роль
-    PERSON и заголовок источника: портрет режиссёра под фразу «билеты раскупили» —
-    ошибка, там нужна обстановка или постер.
-13. Блоки с пометкой СПИСОК — перечисление: на КАЖДЫЙ элемент своя карточка ровно на
-    словах этого элемента, ${T.min_list_item_duration}–1.8 секунды, в порядке называния.
-    Правило 4 о длительности на них не действует. Если под элемент картинки нет —
-    пропусти его, а не тяни соседнюю.
-14. Цифры и даты иллюстрируй только материалом, который помогает понять конкретное
-    сравнение или масштаб. Заголовок источника с нужной цифрой не делает кадр полезным.
+Первая quote начинается с первых слов транскрипции: её картинка появится с нулевой секунды.
+Дальше располагай quote строго по порядку речи. Картинка заканчивается ровно в начале
+следующей quote; последняя держится до конца. Отдельные seconds НЕ задавай.
+Так ты сам выбираешь длительность каждого изображения через смысловую границу смены.
+Не делай новую смену ради другого ракурса той же машины. Возврат к прежнему изображению
+допустим, если сюжет действительно возвращается к тому же предмету; поясни это.
+В перечислении разных людей/предметов переключай на словах о следующем элементе.
 
-Ответь СТРОГО валидным JSON:
-{"placements":[{"assetId":"...","beatId":"...","quote":"дословные слова из транскрипции","seconds":3.6}]}`;
+Ответь СТРОГО JSON:
+{"placements":[{"assetId":"...","beatId":"...","quote":"первые слова текущего эпизода","visualPurpose":"что объясняет кадр и почему смена здесь"}]}`;
 }
 
 /** Ищет дословную цитату в словах транскрипции, возвращает индексы. */
@@ -122,22 +113,13 @@ export function locateQuote(words: Word[], quote: string): { from: number; to: n
     s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
   const target = norm(quote).split(" ").filter(Boolean);
   if (target.length < 2) return null;
-  const flat = words.map((w) => norm(w.word));
-
+  // A measured word can contain several normalized tokens (e.g. «15-летних»).
+  // Preserve its original word index when matching the phrase.
+  const flat = words.flatMap((w, wordIndex) => norm(w.word).split(" ").filter(Boolean).map(token => ({ token, wordIndex })));
   for (let i = 0; i + target.length <= flat.length; i++) {
-    let hit = true;
-    for (let j = 0; j < target.length; j++) {
-      if (flat[i + j] !== target[j]) {
-        hit = false;
-        break;
-      }
+    if (target.every((token, j) => flat[i + j].token === token)) {
+      return { from: flat[i].wordIndex, to: flat[i + target.length - 1].wordIndex };
     }
-    if (hit) return { from: i, to: i + target.length - 1 };
-  }
-  // мягкий поиск: достаточно первых трёх слов подряд
-  const head = target.slice(0, 3);
-  for (let i = 0; i + head.length <= flat.length; i++) {
-    if (head.every((t, j) => flat[i + j] === t)) return { from: i, to: Math.min(flat.length - 1, i + target.length - 1) };
   }
   return null;
 }
@@ -258,7 +240,6 @@ export async function directMontage(
     })
     .join("\n");
   const beatList = beats
-    .filter((b) => b.visualNeed !== "NONE")
     .map((b) => `[${b.id}] (${b.visualNeed}${b.listItem ? ", СПИСОК" : ""}) ${b.text}`)
     .join("\n");
   const transcript = words.map((w) => w.word).join(" ");
@@ -276,80 +257,42 @@ export async function directMontage(
         ? `Склейки речи на ${speechCuts.map((s) => s.toFixed(1)).join(", ")} сек — вставку рядом ставить особенно полезно.\n\n`
         : "") +
       `Не повторяй одну визуальную информацию разными файлами: другой ракурс автомобиля ничего не объясняет. ` +
-      `Показывай предмет, механизм или последствие, о котором СЕЙЧАС говорят. Если такого нет — оставь автора.\n\n` +
+      `Верх заполнен от начала до конца. Выбирай смысловые эпизоды и точки смены; не оставляй пауз без картинки.\n\n` +
       `Транскрипция (${duration.toFixed(0)} сек):\n${transcript}`,
   });
   addCost({ editPlannerCalls: 1 });
 
   const placements: RawPlacement[] = parseJson<any>(raw, "Режиссёр монтажа").placements ?? [];
+  return planSemanticSequence(placements, pack, words, duration, speechCuts);
+}
 
-  const byId = new Map(pack.assets.map((a) => [a.id, a]));
-  const used = new Set<string>();
+/** The model chooses every cut through a speech quote; code only resolves its time. */
+export function planSemanticSequence(
+  placements: RawPlacement[], pack: StoryAssetPackV2, words: Word[], duration: number, speechCuts: number[] = [],
+): MontagePlan {
+  if (!placements.length) throw new Error("Нужен непрерывный смысловой видеоряд, а не пустой план");
+  const byId = new Map(pack.assets.map(a => [a.id, a]));
   const events: MontageEvent[] = [];
-
-  const located = placements
-    .map((p) => {
-      const asset = byId.get(String(p.assetId));
-      if (!asset || used.has(asset.id)) return null;
-      const at = locateQuote(words, String(p.quote ?? ""));
-      if (!at) return null;
-      return { p, asset, at };
-    })
-    .filter((x): x is NonNullable<typeof x> => x !== null)
-    .sort((a, b) => a.at.from - b.at.from);
-
-  let prevEnd = -Infinity;
-  let prevScene: string | undefined;
-  for (const { p, asset, at } of located) {
-    if (used.has(asset.id)) continue;
-    const startRaw = words[at.from]?.start;
-    if (!Number.isFinite(startRaw)) continue;
-    const start = Math.max(startRaw, prevEnd + 0.12);
-    if (start < 1.8) continue; // открывающая фраза остаётся лицом автора
-
-    // Два почти одинаковых плана подряд читаются как застрявшая картинка,
-    // даже если это формально разные фрагменты разного времени.
-    const scene = asset.sceneId;
-    if (scene && scene === prevScene) continue;
-
-    // Если под блок есть точный материал, слабая обстановка не ставится:
-    // выбор «1» при наличии «3» — это потеря смысла без всякой выгоды.
-    const beatId = String(p.beatId ?? asset.compatibleBeatIds[0] ?? "");
-    const myScore = asset.beatScores?.[beatId] ?? 0;
-    if (myScore < 2) continue;
-
-    const wanted = Number(p.seconds);
-    const minimum = beats.find(b => b.id === beatId)?.listItem ? T.min_list_item_duration : T.min_visual_duration;
-    const cap = asset.role === "EVENT" ? T.max_exact_event_duration : T.max_visual_duration;
-    let len = Number.isFinite(wanted) ? wanted : T.typical_visual_duration;
-    len = Math.min(cap, Math.max(minimum, len));
-    const end = Math.min(start + len, duration - 0.05);
-    if (end - start < minimum * 0.8) continue;
-
-    // Верхняя карточка — только картинка. Видео в медиатеке нового формата нет,
-    // а если старый пакет его подсунул — это ошибка данных, а не повод показать.
-    if (asset.kind !== "IMAGE") {
-      throw new Error(`Материал ${asset.id} — не картинка (${asset.kind}); карточка принимает только изображения`);
-    }
-    used.add(asset.id);
-    events.push({
-      type: "EXTERNAL_IMAGE",
-      assetId: asset.id,
-      beatId,
-      quote: String(p.quote ?? "").slice(0, 120),
-      start: Number(start.toFixed(2)),
-      end: Number(end.toFixed(2)),
-      layout: "smart_crop",
-      motion: asset.kind === "IMAGE" ? (T.image_motion === "subtle" ? "slow_push" : "static") : undefined,
-      role: asset.role,
-    });
-    prevEnd = end;
-    prevScene = scene;
+  let cursor = 0;
+  for (const p of placements) {
+    const asset = byId.get(String(p.assetId));
+    if (!asset || asset.kind !== "IMAGE") throw new Error(`Неизвестная картинка: ${p.assetId}`);
+    const purpose = String(p.visualPurpose ?? "").trim();
+    if (!purpose) throw new Error(`${asset.id}: не объяснён смысл изображения и момент смены`);
+    const at = locateQuote(words.slice(cursor), String(p.quote ?? ""));
+    if (!at) throw new Error(`${asset.id}: цитата смены не найдена в речи: ${p.quote}`);
+    const wordIndex = cursor + at.from;
+    if (!events.length && wordIndex !== 0) throw new Error("Первая картинка должна сопровождать начало рассказа");
+    const start = events.length ? words[wordIndex].start : 0;
+    const previous = events.at(-1);
+    if (previous && (start <= previous.start || previous.assetId === asset.id)) throw new Error("Новая смена не должна повторять предыдущую картинку или её время");
+    if (!Number.isFinite(start) || start >= duration) throw new Error("Смена за пределами ролика");
+    if (previous) previous.end = start;
+    events.push({ type: "EXTERNAL_IMAGE", assetId: asset.id, beatId: String(p.beatId ?? ""),
+      quote: String(p.quote), visualPurpose: purpose, start, end: duration,
+      layout: "smart_crop", motion: "static", role: asset.role });
+    cursor = wordIndex + 1;
   }
-
-  // Preserve the director's intentional author-only passages.
-  events.sort((a, b) => a.start - b.start);
-
   return { version: 3, duration, events, stats: computeStats(events, duration, speechCuts) };
 }
 

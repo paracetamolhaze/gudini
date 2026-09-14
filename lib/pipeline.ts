@@ -791,10 +791,13 @@ export async function renderPlan(
   onProgress: (f: number) => void,
 ): Promise<void> {
   const music = hasMusic();
-  const brolls = plan.events.filter((e) => e.type === "B_ROLL" && e.file);
+  let brolls = plan.events.filter((e) => e.type === "B_ROLL" && e.file);
   // источник — clean.mp4 (уже 1080×1920) или raw без склеек: в обоих случаях кадр целиком, без обрезки
   const src = await probe(path.isAbsolute(source) ? source : path.join(dir, source));
   const fit = authorFitFilter(src.displayWidth, src.displayHeight);
+  // A continuous final card also covers encoder/frame rounding beyond the speech duration.
+  brolls = brolls.map(b => b.end >= effDur - 0.01
+    ? { ...b, end: Math.max(b.end, src.videoDuration || src.duration) + 1 / 30 } : b);
 
   // Запись телесуфлёра уже содержит выбранный пользователем кадр 9:16.
   // Сохраняем его границы на всём таймлайне: никаких скрытых приближений после записи.
@@ -818,7 +821,7 @@ export async function renderPlan(
     chain +=
       `;[${inputIdx}:v]${CARD_FILTER},fps=30,` +
       `trim=duration=${clipDur},setpts=PTS-STARTPTS+${b.start.toFixed(3)}/TB[bv${k}]` +
-      `;[${current}][bv${k}]overlay=${CARD.x}:${CARD.y}:eof_action=pass:enable='between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})'[vo${k}]`;
+      `;[${current}][bv${k}]overlay=${CARD.x}:${CARD.y}:eof_action=repeat:enable='between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})'[vo${k}]`;
     current = `vo${k}`;
   });
 

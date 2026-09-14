@@ -48,6 +48,6 @@ test("элементы перечисления держат по коротко
 test("short non-list beats are not stretched or merged into neighboring speech", () => {
   const r = run(false);
   assert.equal(r.slots.filter(s => s.beatId !== "b0").length, 3);
-  assert.equal(r.plan.events.length, 1, "short placements are omitted, the longer final one remains");
-  assert.equal(r.plan.events[0].beatId, "b3");
+  assert.equal(r.plan.events.length, 3, "model-selected semantic cuts remain, even for short items");
+  assert.deepEqual(r.plan.events.map(e => e.start), itemStarts);
 });

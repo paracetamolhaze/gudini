@@ -158,7 +158,7 @@ export async function runMontageV3(args: {
   const ready = packReady(pack);
   if (!ready.ok) warnings.push(...ready.reasons);
 
-  // Sparse but relevant media is useful; missing pictures leave the author on screen.
+  // Metadata coverage is advisory; the director plans complete semantic episodes.
   const pre = montagePreflight(pack, beats, duration);
   if (!pre.ok) warnings.push(...pre.reasons);
 
@@ -169,7 +169,7 @@ export async function runMontageV3(args: {
   const directed = savedPlan ?? (await directMontage(research, beats, pack, words, duration, speechCuts));
   if (!directed) throw new Error("Режиссёр монтажа не вернул план");
 
-  // Validate relevance and trim at meaning boundaries; no automatic visual filler.
+  // Preserve the director’s speech-anchored cuts; validation rejects any empty upper track.
   const refined = refineMontage({
     montage: directed,
     pack,

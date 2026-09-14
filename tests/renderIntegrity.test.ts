@@ -52,6 +52,41 @@ async function refHash(dir: string, src: string): Promise<bigint> {
   return (await frameHash(f, dir))!;
 }
 
+test("continuous picture includes the first and last encoded frames despite duration rounding", { timeout: 120_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-continuous-"));
+  try {
+    await fixture(dir);
+    const plan: EditPlan = {
+      version: 1, duration: 4.93, captionStyle: { ...DEFAULT_CAPTION_STYLE },
+      events: [{ type: "B_ROLL", layout: "top_inset", start: 0, end: 4.93, file: path.join(dir, "still.png") }],
+    };
+    await renderPlan(dir, path.join(dir, "aroll.mp4"), plan, plan.duration, () => {});
+    const ref = await refHash(dir, path.join(dir, "still.png"));
+    for (const at of [0, 4.966]) assert.ok(hamming(ref, await cardHash(dir, at)) <= 18, `picture missing at ${at}s`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("semantic cut between frame timestamps never exposes the author-only upper area", { timeout: 120_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-semantic-cut-"));
+  try {
+    await fixture(dir);
+    await runFfmpeg(["-f", "lavfi", "-i", "testsrc=s=1600x900", "-frames:v", "1", path.join(dir, "second.png")]);
+    const plan: EditPlan = {
+      version: 1, duration: 5, captionStyle: { ...DEFAULT_CAPTION_STYLE },
+      events: [
+        { type: "B_ROLL", layout: "top_inset", start: 0, end: 2.47, file: path.join(dir, "still.png") },
+        { type: "B_ROLL", layout: "top_inset", start: 2.47, end: 5, file: path.join(dir, "second.png") },
+      ],
+    };
+    await renderPlan(dir, path.join(dir, "aroll.mp4"), plan, plan.duration, () => {});
+    const a = await refHash(dir, path.join(dir, "still.png")), b = await refHash(dir, path.join(dir, "second.png"));
+    for (const at of [2.433, 2.466, 2.5]) {
+      const actual = await cardHash(dir, at);
+      assert.ok(Math.min(hamming(a, actual), hamming(b, actual)) <= 18, `empty upper area at ${at}s`);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("1: карточка 900×506 сверху, автор снизу, вне вставки её нет, чёрных кадров нет", { timeout: 300_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-card-"));
   try {

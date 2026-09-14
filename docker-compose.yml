@@ -25,6 +25,8 @@ services:
       PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
       # вкладка /clipy: сайт проксирует её в контейнер clipy (снаружи это делает Caddy напрямую)
       CLIPY_URL: http://clipy:8500
+      # раздел /threads: то же для контейнера threads-app
+      THREADS_URL: http://threads-app:8600
     ports:
       # только с этого компьютера; из интернета — через caddy
       # 3000 открыт и в домашней сети: роутер не заворачивает свой внешний адрес обратно внутрь,
@@ -76,6 +78,81 @@ services:
               count: all
               capabilities: [gpu]
 
+  # --- Threads, раздел /threads: автономный русскоязычный крипто-аккаунт в Threads (threads/) ---
+  # Обособленный сервис: свои Postgres и Redis, один образ для API+dashboard (app) и очередей (worker).
+  # Секреты и ключи — в threads/.env (см. threads/.env.example); адреса БД подставляются здесь.
+  threads-app:
+    build:
+      context: ./threads
+    container_name: gudini-threads-app
+    restart: unless-stopped
+    env_file:
+      - path: ./threads/.env
+        required: false
+    environment:
+      PORT: "8600"
+      DATABASE_URL: postgres://threads:threads@threads-postgres:5432/threads
+      REDIS_URL: redis://threads-redis:6379
+      SITE_PASSWORD: ${SITE_PASSWORD:-}
+      PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
+      DATA_DIR: /app/data
+    ports:
+      # дома открывается напрямую http://192.168.1.68:8600/threads/, снаружи — через Caddy
+      - "8600:8600"
+    volumes:
+      - threads-data:/app/data
+    depends_on:
+      threads-postgres:
+        condition: service_healthy
+      threads-redis:
+        condition: service_started
+
+  threads-worker:
+    build:
+      context: ./threads
+    container_name: gudini-threads-worker
+    restart: unless-stopped
+    command: ["node", "dist/src/worker.js"]
+    env_file:
+      - path: ./threads/.env
+        required: false
+    environment:
+      DATABASE_URL: postgres://threads:threads@threads-postgres:5432/threads
+      REDIS_URL: redis://threads-redis:6379
+      PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
+      DATA_DIR: /app/data
+    volumes:
+      - threads-data:/app/data
+    depends_on:
+      threads-postgres:
+        condition: service_healthy
+      threads-redis:
+        condition: service_started
+
+  threads-postgres:
+    image: postgres:17-alpine
+    container_name: gudini-threads-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: threads
+      POSTGRES_PASSWORD: threads
+      POSTGRES_DB: threads
+    volumes:
+      - threads-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U threads -d threads"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  threads-redis:
+    image: redis:7-alpine
+    container_name: gudini-threads-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - threads-redis-data:/data
+
   # --- публичный HTTPS: включается профилем `public`, когда домен и проброс порта готовы ---
   caddy:
     profiles: ["public"]
@@ -110,5 +187,8 @@ volumes:
   gudini-site-data:
   gudini-worker-data:
   clipy-data:
+  threads-data:
+  threads-pg-data:
+  threads-redis-data:
   caddy-data:
   caddy-config:

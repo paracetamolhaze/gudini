@@ -6,6 +6,12 @@
 			flush_interval -1
 		}
 	}
+	# раздел /threads — контейнер threads-app (автономный крипто-аккаунт Threads); вход тот же
+	handle /threads* {
+		reverse_proxy threads-app:8600 {
+			flush_interval -1
+		}
+	}
 	# сайт внутри сети Docker; тела запросов не ограничены — исходники на гигабайт проходят
 	handle {
 		reverse_proxy gudini-site:3000 {

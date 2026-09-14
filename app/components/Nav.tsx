@@ -32,6 +32,10 @@ export default function Nav() {
       <a href="/clipy" className="nav-link">
         Clipy
       </a>
+      {/* Threads — тоже отдельный сервис (контейнер threads-app), сайт проксирует /threads */}
+      <a href="/threads/" className="nav-link">
+        Threads
+      </a>
     </nav>
   );
 }

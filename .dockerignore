@@ -21,3 +21,5 @@ README.md
 
 # Clipy собирается своим Dockerfile (clipy/Dockerfile); в образ сайта не нужен
 clipy
+# Threads — тоже свой образ (threads/Dockerfile)
+threads

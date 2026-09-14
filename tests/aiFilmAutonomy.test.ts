@@ -5,7 +5,8 @@ import { planFilm } from "../lib/aiFilm/run";
 import { loadCharacterProfile } from "../lib/aiFilm/character";
 import { loadUniverseProfile } from "../lib/aiFilm/universe";
 import { auditPlan } from "../lib/aiFilm/audit";
-import { retryIssues } from "../lib/aiFilm/criteria";
+import { retryIssues, planCompletion } from "../lib/aiFilm/criteria";
+import { reviewCompiledPlan } from "../lib/aiFilm/editorialReview";
 
 const words = [
   { word: "Сначала.", start: 0, end: 5 },
@@ -13,13 +14,59 @@ const words = [
 ];
 const character = loadCharacterProfile();
 const universe = loadUniverseProfile();
-const args = { words, script: "Сначала. Потом.", character, universe, duration: 10,
+const args = { words, script: "Сначала. Потом.", character, universe, duration: 10, skipEditorialReview: true,
   coverage: { target: 0.5, max: 0.7 }, researchFacts: ["Сотрудник остановил автомобиль; алгоритм не принимал это решение."],
 };
 const raw = { bible: { storyType: "explainer", events: [], visualTasks: [] }, beats: [
   { fromPhrase: 1, toPhrase: 1, displayMode: "full_ai", visualAction: "a ball rolls across a table", keyMoment: "the ball reaches the edge", location: "a room", gudiniVisible: false },
   { fromPhrase: 2, toPhrase: 2, displayMode: "author" },
 ] };
+
+test("a saved blocked plan remains reviewable but is never announced as ready", () => {
+  const issue = { code: "editorial-quality", beatIds: ["B1"], message: "Unworkable action" };
+  assert.equal(planCompletion({ issues: [{ ...issue, severity: "block" }] }).status, "failed");
+  assert.equal(planCompletion({ issues: [{ ...issue, severity: "block" }] }).step, "План требует доработки");
+  assert.equal(planCompletion({ issues: [{ ...issue, severity: "warn" }] }).status, "planned");
+});
+
+test("an unavailable editor stops before creative repair; casting feedback opens the role scope", async () => {
+  let calls = 0;
+  const result = await planFilm({ ...args, skipEditorialReview: false,
+    cfg: { key: "editor-unavailable", universe, budgetUsd: 12, maxCoverage: 0.7, concurrency: 1, callMinutes: 2 },
+    complete: async () => { calls++; return JSON.stringify(raw); },
+    reviewComplete: async () => { throw new Error("usage limit reached"); },
+  });
+  assert.equal(calls, 1);
+  assert.ok(result.plan.issues.some(i => i.code === "editorial-review-failed"));
+  const parsed = storyFromRaw(raw, { ...args, phrases: phrasesFromWords(words) });
+  const scope = scopeFromIssues([{ code: "editorial-roles", beatIds: ["B1"] }], parsed.beats, parsed.bible, raw, 2);
+  assert.equal(scope.roles, true);
+});
+
+test("independent editor sees compiled shots, sends actionable notes into repair, and checks the result", async () => {
+  let reviews = 0;
+  let repairPrompt = "";
+  const result = await planFilm({ ...args, skipEditorialReview: false,
+    cfg: { key: "editorial", universe, budgetUsd: 12, maxCoverage: 0.7, concurrency: 1, callMinutes: 2 },
+    complete: async ({ retry, user }) => {
+      if (!retry) return JSON.stringify(raw);
+      repairPrompt = user;
+      return "{}";
+    },
+    reviewComplete: async ({ user }) => {
+      reviews++;
+      assert.ok(user.includes('"shots"'));
+      assert.ok(user.includes('"deadlines"'));
+      return JSON.stringify({ issues: [{ severity: "block", beatIds: ["B1"], message: "The action deadline is too short; start the movement earlier." }] });
+    },
+  });
+  assert.equal(reviews, 2);
+  assert.match(repairPrompt, /ПОСЛЕ СБОРКИ/);
+  assert.match(repairPrompt, /action deadline is too short/);
+  assert.ok(result.plan.issues.some(i => i.code === "editorial-quality" && i.severity === "block"));
+  const invalid = await reviewCompiledPlan({ plan: result.plan, script: args.script, facts: [], complete: async () => '{"issues":[{"severity":"warn","beatIds":["NOT-A-BEAT"],"message":"change it"}]}' });
+  assert.ok(invalid.issues.some(i => i.code === "editorial-review-failed" && i.severity === "block"));
+});
 
 test("both model calls receive the exact evidence used by the validator", async () => {
   let first = "", retry = "";
@@ -37,6 +84,18 @@ test("correction system requests patches rather than a competing complete-plan r
 
 test("a valid JSON fragment without beats cannot become a successful author-only plan", () => {
   assert.throws(() => storyFromRaw({ bible: {} }, { ...args, phrases: phrasesFromWords(words) }), /бит|beat|структур/i);
+});
+
+test("a useful three-second illustration survives compilation without inventing an event", () => {
+  const shortWords = [{ word: "Начало.", start: 0, end: 5 }, { word: "Камера.", start: 5, end: 8 }, { word: "Конец.", start: 8, end: 13 }];
+  const source = { bible: { storyType: "explainer", events: [], visualTasks: [{ id: "camera", role: "illustration", learns: "Камера фиксирует салон", fromPhrase: 2, toPhrase: 2, action: "Hold on a cabin camera lens" }] }, beats: [
+    { fromPhrase: 1, toPhrase: 1, displayMode: "author" },
+    { fromPhrase: 2, toPhrase: 2, displayMode: "full_ai", visualTask: "camera", visualAction: "Hold on a cabin camera lens", keyMoment: "The lens and mount are distinguishable", hold: "read", gudiniVisible: false },
+    { fromPhrase: 3, toPhrase: 3, displayMode: "author" },
+  ] };
+  const parsed = storyFromRaw(source, { words: shortWords, phrases: phrasesFromWords(shortWords), duration: 13, character, universe });
+  assert.ok(parsed.beats.some(b => b.displayMode === "full_ai" && b.visualTask === "camera"));
+  assert.equal(parsed.bible.events.length, 0);
 });
 
 test("a failed optional correction preserves the first candidate and never adds a third call", async () => {
@@ -65,6 +124,20 @@ test("an object-addressed issue opens its containing scene for correction", () =
   const parsed = storyFromRaw(raw, { ...args, phrases: phrasesFromWords(words) });
   const scope = scopeFromIssues([{ code: "phase-conflict", beatIds: ["B1/ball"] }], parsed.beats, parsed.bible, raw, 2);
   assert.ok(scope.beats.has("1-1"));
+});
+
+test("a review of a merged author window can repair the original insert lost inside it", () => {
+  const source = { bible: {}, beats: [
+    { fromPhrase: 1, toPhrase: 1, displayMode: "author" },
+    { fromPhrase: 2, toPhrase: 2, displayMode: "full_ai", visualTask: "detail" },
+    { fromPhrase: 3, toPhrase: 4, displayMode: "author" },
+  ] };
+  const bible: any = { events: [], visualTasks: [{ id: "detail", fromPhrase: 2, toPhrase: 2, start: 5, end: 8, role: "illustration" }] };
+  const beats: any = [{ id: "B3", sourceIndex: 2, start: 5, end: 20, displayMode: "author", eventIds: [] }];
+  const scope = scopeFromIssues([{ code: "editorial-quality", beatIds: ["B3"] }], beats, bible, source, 4);
+  assert.ok(scope.beats.has("2-2"));
+  assert.ok(scope.tasks.has("detail"));
+  assert.ok(!scope.beats.has("1-1"));
 });
 
 test("format repair cannot silently bypass documentary evidence review or make a third call", async () => {

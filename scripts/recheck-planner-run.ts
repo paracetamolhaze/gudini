@@ -24,6 +24,7 @@ async function main() {
   let calls = 0;
   try {
     const result = await planFilm({ ...input, character, universe,
+      skipEditorialReview: !live,
       cfg: { ...input.cfg, universe, key: planKey(input.words, input.script, character, universe, input.duration, compilerFingerprint(character, universe)) },
       complete: async ({ system, user }) => {
         calls++;

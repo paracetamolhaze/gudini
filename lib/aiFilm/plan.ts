@@ -1203,23 +1203,11 @@ export function uncoveredGroupIssues(built: BuiltShots): PlanIssue[] {
 }
 
 /**
- * Назван ли ЭТОТ человек в тексте окна. Полное имя — доказательство; отдельная часть имени
- * годится, только если она не общая с другим объявленным персонажем.
- *
- * Прежде совпадало любое слово имени длиной от трёх букв, и при двух Смитах сцена с Alice
- * Smith получала ещё и Robert Smith вместе с его внешностью.
+ * Participants use their full declared names as stable labels. A unique name fragment is
+ * not evidence: "one small movement" used to inject Officer One into an operator's shot.
  */
-export function mentionsPerson(name: string, text: string, declared: string[]): boolean {
-  const low = text.toLowerCase();
-  const full = name.trim().toLowerCase();
-  if (!full) return false;
-  if (containsWord(low, full)) return true;
-  const parts = full.split(/[\s/()-]+/).filter((w) => w.length >= 3);
-  const others = declared.filter((d) => d.trim().toLowerCase() !== full);
-  return parts.some((w) => {
-    const shared = others.some((d) => d.toLowerCase().split(/[\s/()-]+/).includes(w));
-    return !shared && containsWord(low, w);
-  });
+export function mentionsPerson(name: string, text: string, _declared: string[]): boolean {
+  return name.split("/").some(alias => containsWord(text, alias.trim()));
 }
 
 /**

@@ -1,4 +1,6 @@
 import { directorInstructions, researchContext } from "./directorPrompt";
+import { compiledReviewContext } from "./editorialReview";
+import type { AiFilmPlan } from "./types";
 import { mediaComplete, parseJson } from "../mediaLlm";
 import type { Word } from "../transcribe";
 import type { UniverseProfile } from "./universe";
@@ -15,7 +17,7 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
 /** 9 — общая процедура режиссуры: причинность, доказательство сцены, состояние, механика, камера. */
-export const STORY_VERSION = 24;
+export const STORY_VERSION = 25;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -627,12 +629,16 @@ export function beatsFromRaw(raw: RawBeat[], phrases: Phrase[], duration: number
  * Появилось после настоящего плана, где раскрытию запасного купола досталось 1.2 секунды:
  * правило «короче порога — автору» молча уносило вместе со сценой обязательное событие.
  */
+function hasShortVisualPurpose(beat: StoryBeat): boolean {
+  return Boolean((beat.eventIds ?? []).length || (beat.visualTask && beat.visualAction && beat.keyMoment));
+}
+
 function borrowTime(beats: StoryBeat[], index: number, need: number): boolean {
   const b = beats[index];
   const spare = (n: StoryBeat): number => {
     const len = n.end - n.start;
     if (n.displayMode === "author") return Math.max(0, len - 1.0);
-    const floor = (n.eventIds ?? []).length ? MIN_SHOWN_AI_SEC : MIN_AI_BEAT_SEC;
+    const floor = hasShortVisualPurpose(n) ? MIN_SHOWN_AI_SEC : MIN_AI_BEAT_SEC;
     return Math.max(0, len - floor);
   };
   const prev = beats[index - 1];
@@ -661,18 +667,18 @@ function borrowTime(beats: StoryBeat[], index: number, need: number): boolean {
   // набранный отзыв читаются за это время. Раньше здесь всё короче четырёх секунд уходило
   // автору, и обязательные события истории пропадали из ролика при живом бюджете.
   //
-  // Оставляем короткую сцену, только если она несёт событие: три секунды украшения ради
-  // украшения не нужны никому. Открывающий бит пропускаем, им занимаемся ниже.
+  // A declared visual task can be readable in three seconds too. Requiring an event here
+  // discarded useful close-ups and encouraged invented state changes just to keep them.
   for (let i = 0; i < beats.length; i++) {
     const b = beats[i];
     if (i === 0 || b.displayMode === "author") continue;
     const dur = b.end - b.start;
     if (dur >= MIN_AI_BEAT_SEC - 1e-6) continue;
-    if (dur >= MIN_SHOWN_AI_SEC - 1e-6 && (b.eventIds ?? []).length) continue;
+    if (dur >= MIN_SHOWN_AI_SEC - 1e-6 && hasShortVisualPurpose(b)) continue;
     // Сцена с событием сначала пробует дотянуться до минимума за счёт соседа, и только
     // потом уходит автору. Настоящий план отдал раскрытию запасного купола 1.2 секунды,
     // и обязательное событие исчезало из ролика вместе с этой сценой.
-    if ((b.eventIds ?? []).length && borrowTime(beats, i, MIN_SHOWN_AI_SEC - dur)) continue;
+    if (hasShortVisualPurpose(b) && borrowTime(beats, i, MIN_SHOWN_AI_SEC - dur)) continue;
     b.displayMode = "author";
     b.requiresGeneration = false;
     b.gudiniVisible = false;
@@ -691,7 +697,7 @@ function borrowTime(beats: StoryBeat[], index: number, need: number): boolean {
   // Делается ПОСЛЕ общей проверки: сосед мог сам быть коротким AI-битом и только что стать
   // автором — тогда занимать время у него уже можно.
   const first = beats[0];
-  const firstShownEnough = first && first.end - first.start >= MIN_SHOWN_AI_SEC - 1e-6 && (first.eventIds ?? []).length > 0;
+  const firstShownEnough = first && first.end - first.start >= MIN_SHOWN_AI_SEC - 1e-6 && hasShortVisualPurpose(first);
   if (first && first.displayMode !== "author" && !firstShownEnough && first.end - first.start < MIN_AI_BEAT_SEC - 1e-6) {
     let need = MIN_AI_BEAT_SEC - (first.end - first.start);
     // Считаем всю авторскую цепочку сразу за хуком: между ним и длинным объяснением
@@ -1179,6 +1185,7 @@ export async function planPatch(args: {
   scope?: PatchScope;
   requireEvidenceReview?: boolean;
   first: RawStory;
+  compiled?: AiFilmPlan;
   remarks: string[];
   character: CharacterProfile;
   universe: UniverseProfile;
@@ -1195,6 +1202,7 @@ export async function planPatch(args: {
     `${args.budgetUsd == null ? "" : `Предел расходов Veo: $${args.budgetUsd}.\n`}` +
     `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}\n\n` +
     `ТВОЙ ПЕРВЫЙ ПЛАН НА ЭТУ РЕЧЬ, ЦЕЛИКОМ:\n${JSON.stringify(canonicalRaw(args.first))}\n\n` +
+    (args.compiled ? `ПОСЛЕ СБОРКИ (реальные окна, дедлайны и запросы; исправляй исходные биты так, чтобы конечный результат стал лучше):\n${JSON.stringify(compiledReviewContext(args.compiled))}\n\n` : "") +
     `ЗАМЕЧАНИЯ К НЕМУ:\n${args.remarks.map((r) => `- ${r}`).join("\n")}\n\n` +
     (args.scope ? `ДОПУСТИМАЯ ОБЛАСТЬ ИЗМЕНЕНИЙ (точные адреса исходного плана):\n${JSON.stringify({ beats: [...args.scope.beats], events: [...args.scope.events], visualTasks: [...args.scope.tasks], roles: args.scope.roles, recastCharacter: Boolean(args.scope.recastCharacter) })}\n\n` : "") +
     (args.scope?.recastCharacter ? `ОБЯЗАТЕЛЬНЫЙ РЕЗУЛЬТАТ ИСПРАВЛЕНИЯ РОЛИ: bible.playedByGudini="". Назначь отдельных supportingCharacters, согласуй их имена, внешность, одежду и действия во ВСЕХ появлениях. Во всех AI-битах gudiniVisible=false; ${args.character.name} не играет другую роль и не добавляется свидетелем. Не меняй события, лишь исполнителей.\n\n` : "") +
@@ -1206,6 +1214,7 @@ export async function planPatch(args: {
     `- При переназначении playedByGudini исправь ВСЕ появления этой роли, включая последующие сцены без отдельного замечания: они открыты в области. Нельзя передать предмет одному актёру, а продолжить действие другим. Неполное переназначение отклоняется целиком.\n` +
     `- Если исправление требует связанных изменений в других сценах или событиях, перечисли их в related: target — что меняется, for — какое замечание это обслуживает (id события, задачи или fromPhrase-toPhrase сцены из замечаний), why — почему без этого исправление невозможно. Принимается только изменение, связанное с этим замечанием: то же событие или задача, либо соседняя сцена. Объяснение само по себе ничего не разрешает, роли через related не меняются.\n` +
     `- Сцена адресуется парой fromPhrase/toPhrase из твоего плана. Новая сцена (add) может занять только фразы авторских битов; чтобы изменить существующую сцену, используй replace с полным описанием бита.\n` +
+    `- Чтобы сократить или разделить AI-сцену: remove её исходного диапазона (он становится авторским), затем add новой сцены на нужном поддиапазоне фраз. Не записывай секунды монтажа в purpose или prose: они не управляют монтажом. Минимум полезной вставки 2.5 с; выбирай фразы с достаточной длиной. Остаток диапазона останется автору.\n` +
     `- Событие и задача адресуются id. В update и add отдавай объект целиком.\n` +
     `Формат ответа, только JSON:\n` +
     `{"evidenceReview": [], "unsupportedMechanisms": [], "events": {"update": [], "add": [], "remove": []}, "visualTasks": {"update": [], "add": [], "remove": []}, ` +
@@ -1242,7 +1251,7 @@ export function scopeFromIssues(
 ): PatchScope {
   const ranges = rawBeatRanges(canonicalRaw(raw).beats ?? [], phraseCount);
   const scope: PatchScope = { beats: new Set(), events: new Set(), tasks: new Set(), roles: false, phraseCount, characterName };
-  const ROLE_CODES = new Set(["role-miscast", "costume-conflict", "hero-flag-mismatch"]);
+  const ROLE_CODES = new Set(["role-miscast", "costume-conflict", "hero-flag-mismatch", "editorial-roles"]);
   for (const i of issues) {
     if (ROLE_CODES.has(i.code)) scope.roles = true;
     if (i.code === "role-miscast") scope.recastCharacter = true;
@@ -1254,6 +1263,15 @@ export function scopeFromIssues(
       if (r) scope.beats.add(rangeKey(r));
       for (const id of b.eventIds ?? []) scope.events.add(id);
       if (b.visualTask) scope.tasks.add(b.visualTask);
+      // Compiled author spans may contain a dropped raw insert. Open the original task's
+      // ranges inside this actual window, not only the surviving beat's sourceIndex.
+      for (const task of bible.visualTasks ?? []) {
+        if (task.start == null || task.end == null || task.start >= b.end || task.end <= b.start) continue;
+        scope.tasks.add(task.id);
+        for (const range of ranges) {
+          if (range && range.from <= task.toPhrase && range.to >= task.fromPhrase) scope.beats.add(rangeKey(range));
+        }
+      }
     }
   }
   if (scope.roles) {

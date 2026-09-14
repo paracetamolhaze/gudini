@@ -24,9 +24,16 @@ export function gateIssues(plan: Pick<AiFilmPlan, "issues">): PlanIssue[] {
   return (plan.issues ?? []).filter((i) => i.severity === "block");
 }
 
+export function planCompletion(plan: Pick<AiFilmPlan, "issues">) {
+  const blocked = gateIssues(plan);
+  return blocked.length
+    ? { status: "failed" as const, step: "План требует доработки", error: issueLines(blocked).join(". ") }
+    : { status: "planned" as const, step: "План фильма готов", error: undefined };
+}
+
 /** Нарушения, оправдывающие второй заход планировщика. */
 export function retryIssues(plan: Pick<AiFilmPlan, "issues">): PlanIssue[] {
-  return (plan.issues ?? []).filter((i) => i.severity === "block" || RETRY_WARN_CODES.has(i.code));
+  return (plan.issues ?? []).filter((i) => i.severity === "block" || i.code === "editorial-quality" || i.code === "editorial-roles" || RETRY_WARN_CODES.has(i.code));
 }
 
 /** Обязательные события с проверяемым доказательством. */

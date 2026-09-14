@@ -347,6 +347,15 @@ test("общая часть имени не приводит в кадр дру�
   assert.ok(!prompt.includes("grey jacket"), "в запрос попала внешность постороннего персонажа");
 });
 
+test("обычные слова из названия роли не добавляют участника в чужую сцену", async () => {
+  const { mentionsPerson } = await import("../lib/aiFilm/plan");
+  const cast = ["Officer One", "Officer Two", "Remote Operator"];
+  const text = "Remote Operator makes one small mouse movement and looks at two monitors";
+  assert.equal(mentionsPerson("Officer One", text, cast), false);
+  assert.equal(mentionsPerson("Officer Two", text, cast), false);
+  assert.equal(mentionsPerson("Remote Operator", text, cast), true);
+});
+
 test("имя ищется целиком, а не как часть обычного слова", async () => {
   const { mentionsPerson, containsWord } = await import("../lib/aiFilm/plan");
   const cast = ["Ben", "Ann", "Ben Carter", "Anna", "Jean-Luc Picard"];

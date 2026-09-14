@@ -1,4 +1,5 @@
 import fs from "fs";
+import { planCompletion } from "./aiFilm/criteria";
 import os from "os";
 import path from "path";
 import { getProject, updateProject, projectDir, hasMusic, MUSIC_FILE, getSettings } from "./store";
@@ -422,13 +423,14 @@ export async function processProject(id: string): Promise<void> {
         setStep: (step, p) => setStep(id, step, p),
       });
       if (film.kind === "plan") {
+        const completion = planCompletion(film.plan);
         writeLedger(dir);
         keepRunLedger(dir, "done");
         console.log(`Стоимость плана AI-фильма (переменные API): $${summarize().totals.variableApiCost.toFixed(4)}`);
         updateProject(id, {
           processedVideo: null,
-          aiFilm: { ...(project.aiFilm ?? {}), request: "plan", plan: film.plan, status: "planned", generatedAt: undefined, spent: undefined, error: undefined },
-          processing: { state: "done", step: "План фильма готов", progress: 100 },
+          aiFilm: { ...(project.aiFilm ?? {}), request: "plan", plan: film.plan, status: completion.status, generatedAt: undefined, spent: undefined, error: completion.error },
+          processing: { state: "done", step: completion.step, progress: 100 },
         });
         return;
       }

@@ -31,6 +31,7 @@ async function main() {
     let calls = 0;
     try {
       const result = await planFilm({ words, duration: 36, script: item.sentences.join("\n"), topic: item.topic,
+        skipEditorialReview: !live,
         researchFacts: item.facts, character, universe, coverage: { target: 0.5, max: 0.8 },
         cfg: { key: `autonomy-${item.id}`, universe, budgetUsd: 4, maxCoverage: 0.8, concurrency: 1, callMinutes: 2 },
         complete: async ({ system, user, retry }) => {

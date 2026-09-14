@@ -14,6 +14,7 @@ import { loadCharacterProfile } from "./character";
 import { loadUniverseProfile } from "./universe";
 import { veoConfigured } from "./veo";
 import type { AiFilmPlan, GroupClip, StoryBeat, StoryBible } from "./types";
+import { reviewCompiledPlan } from "./editorialReview";
 
 /**
  * Стадия AI-фильма v2 в конвейере. Две фазы по запросу пользователя:
@@ -138,8 +139,15 @@ export async function planFilm(args: {
   onCall?: (info: { system: string; user: string; raw: string; retry: boolean }) => void;
   /** подмена вызова модели по заходам: продолжить прерванный прогон от сохранённого ответа; в конвейере не задаётся */
   complete?: (a: { system: string; user: string; retry: boolean }) => Promise<string>;
+  /** Offline replays may inject the editor too; production always runs the independent review. */
+  reviewComplete?: (a: { system: string; user: string }) => Promise<string>;
+  /** Explicit offline compiler/patch replay only; never set by the production stage. */
+  skipEditorialReview?: boolean;
 }): Promise<{ plan: AiFilmPlan; story: Awaited<ReturnType<typeof planStory>>; retried: boolean; accepted: boolean; candidates: { first: AiFilmPlan; retry?: AiFilmPlan }; correction: { kind: "none" | "format" | "patch" | "failed"; applied: string[]; rejected: string[] } }> {
   const { character, universe, duration, cfg } = args;
+  const editorialReview = (candidate: AiFilmPlan) => args.skipEditorialReview
+    ? Promise.resolve(candidate) // Existing deterministic compiler/patch fixtures make no network calls.
+    : reviewCompiledPlan({ plan: candidate, script: args.script, facts: args.researchFacts ?? [], complete: args.reviewComplete, onCall: args.onCall });
   let capturedFirst = "";
   const ask = (retryNote?: string) =>
     planStory({
@@ -178,7 +186,13 @@ export async function planFilm(args: {
   // обязательные к показу: контракт минус неподтверждённые механизмы и опровергнутые утверждения
   let required = showableEvents(story.bible);
   plan = withVisualTaskIssue(plan, story.bible);
+  args.onStep?.("AI-фильм: режиссёрская проверка собранного плана", 31);
+  plan = await editorialReview(plan);
   candidates.first = plan;
+  if (plan.issues.some(i => i.code === "editorial-review-failed")) {
+    // A transport/quota or invalid-review failure is not a request to spend on creative repair.
+    return { plan, story, retried: formatRepaired, accepted: false, candidates, correction: { kind: "failed", applied: [], rejected: [] } };
+  }
   const first = retryIssues(plan);
   let retried = formatRepaired;
   let accepted = false;
@@ -207,11 +221,11 @@ export async function planFilm(args: {
     // Ограниченная корректировка: модель получает первый план целиком и замечания, возвращает
     // только изменения. Всё незатронутое сохраняется по построению, изменения вне области
     // отбрасываются, затем весь план проходит проверки заново.
-    let scope = scopeFromIssues(first, story.beats, story.bible, story.raw, story.phrases.length, character.name);
+    let scope = scopeFromIssues(first, plan.beats, story.bible, story.raw, story.phrases.length, character.name);
     try {
       const patch = await planPatch({
         words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary, researchFacts: args.researchFacts,
-        first: story.raw, remarks: [...issueLines(first), ...(contract ? [contract.trim()] : [])],
+        first: story.raw, compiled: plan, remarks: [...issueLines(first), ...(contract ? [contract.trim()] : [])],
         character, universe, duration, coverage: args.coverage, budgetUsd: cfg.budgetUsd, scope, requireEvidenceReview: needsEvidenceReview, onCall: args.onCall,
         complete: args.complete ? (a) => args.complete!({ ...a, retry: true }) : undefined,
       });
@@ -221,10 +235,12 @@ export async function planFilm(args: {
       if (reviewed.eventIds.length) {
         story = storyFromRaw(reviewed.raw, { words: args.words, phrases: story.phrases, duration, character, universe, researchFacts: args.researchFacts });
         story.bible.authorCarried = authorCarriedEvents(story.bible);
+        const editorialIssues = plan.issues.filter(i => i.code.startsWith("editorial-"));
         plan = withVisualTaskIssue(buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg }), story.bible);
+        plan = { ...plan, issues: [...plan.issues, ...editorialIssues], warnings: [...plan.warnings, ...editorialIssues.map(i => i.message)] };
         candidates.first = plan;
         required = showableEvents(story.bible);
-        scope = scopeFromIssues([...first, { code: "unconfirmed-mechanism", beatIds: [], eventIds: reviewed.eventIds }], story.beats, story.bible, story.raw, story.phrases.length, character.name);
+        scope = scopeFromIssues([...first, { code: "unconfirmed-mechanism", beatIds: [], eventIds: reviewed.eventIds }], plan.beats, story.bible, story.raw, story.phrases.length, character.name);
       }
       const patched = applyPatch(story.raw, patch, scope);
       // A patch cannot restore its own unsupported assertion to confirmed after review.
@@ -248,7 +264,8 @@ export async function planFilm(args: {
       // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
       // событие в сцене и забывает переписать его в bible.events.
       reconcileEventRefs(retryBible, retry.beats);
-      const retryPlan = withVisualTaskIssue(buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg }), retryBible);
+      args.onStep?.("AI-фильм: проверка результата правки", 32);
+      const retryPlan = await editorialReview(withVisualTaskIssue(buildFilmPlan({ character, bible: retryBible, beats: retry.beats, duration, cfg }), retryBible));
       candidates.retry = retryPlan;
       // Выбор по тяжести и сохранённым событиям, а не по числу строк.
       const was = { blocks: blockingWeight(plan), lost: missingRequired(plan, required).length };

@@ -45,7 +45,9 @@ export async function enqueue(
   data: Record<string, unknown>,
   opts: JobsOptions & { priority?: number; jobId?: string } = {},
 ): Promise<string> {
-  const job = await getQueue(name).add(jobName, data, { ...DEFAULT_JOB_OPTIONS, ...opts });
+  // BullMQ forbids ":" in custom ids; keep ids readable but legal.
+  const jobId = opts.jobId ? opts.jobId.replace(/[^A-Za-z0-9_-]+/g, "-") : undefined;
+  const job = await getQueue(name).add(jobName, data, { ...DEFAULT_JOB_OPTIONS, ...opts, ...(jobId ? { jobId } : {}) });
   return String(job.id);
 }
 

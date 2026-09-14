@@ -81,9 +81,13 @@ export async function buildServer(): Promise<FastifyInstance> {
     await app.register(fastifyStatic, { root: here, serve: false, decorateReply: true });
   }
 
-  // The bare prefix without a trailing slash should open the dashboard too.
+  // The bare prefix must serve the dashboard directly: the Gudini site (Next.js) redirects
+  // `/threads/` → `/threads` before proxying, so a redirect back would loop.
   if (prefix) {
-    app.get(prefix, async (_req, reply) => reply.redirect(`${prefix}/`, 302));
+    app.get(prefix, async (_req, reply) => {
+      if (existsSync(path.join(WEB_DIST, "index.html"))) return reply.type("text/html").sendFile("index.html", WEB_DIST);
+      return { service: "gudini-threads", note: "dashboard is not built (web/dist missing); API is available under /api" };
+    });
   }
 
   return app;

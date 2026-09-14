@@ -6,14 +6,14 @@ import type { Project } from "../store";
 import type { StoryResearchPack } from "../storyResearch";
 import { textHash } from "../fileFingerprint";
 import { setRunCostLimit } from "../costLedger";
-import { planStory, planPatch, applyPatch, storyFromRaw, scopeFromIssues, reconcileEventRefs, STORY_VERSION } from "./story";
+import { planStory, planPatch, applyPatch, storyFromRaw, scopeFromIssues, reconcileEventRefs, reviewEvidence, STORY_VERSION } from "./story";
 import { buildFilmPlan, compilerFingerprint, coverageConfig, planVersionError, veoCallMinutes, veoConcurrency, PLAN_VERSION, VEO_MODEL, ENVIRONMENT_MODEL } from "./plan";
 import { betterPlan, blockingWeight, gateIssues, issueLines, missingRequired, preserveRequired, retryIssues, authorCarriedEvents, showableEvents } from "./criteria";
 import { generateGroups } from "./generate";
 import { loadCharacterProfile } from "./character";
 import { loadUniverseProfile } from "./universe";
 import { veoConfigured } from "./veo";
-import type { AiFilmPlan, GroupClip } from "./types";
+import type { AiFilmPlan, GroupClip, StoryBeat, StoryBible } from "./types";
 
 /**
  * Стадия AI-фильма v2 в конвейере. Две фазы по запросу пользователя:
@@ -24,6 +24,26 @@ import type { AiFilmPlan, GroupClip } from "./types";
  */
 
 export const PLAN_FILE = "ai-film-plan.json";
+
+/** A failed visual explanation must not force another paid call. Only source-reviewed,
+ * unsupported mechanisms can return to the existing recording; mixed scenes containing
+ * any other event keep their checks and cannot hide a physical obligation this way. */
+function useRecordingForUnsupportedMechanisms(bible: StoryBible, beats: StoryBeat[]) {
+  const unsupported = new Set(bible.events.filter(e => e.reviewedMechanism).map(e => e.id));
+  if (!["news", "history"].includes(bible.storyType) || !unsupported.size) return { bible, beats, routed: [] as string[] };
+  const routed: string[] = [];
+  const next = beats.map(beat => {
+    const ids = beat.eventIds ?? [];
+    if (beat.displayMode === "author" || !ids.length || !ids.every(id => unsupported.has(id))) return beat;
+    routed.push(beat.id);
+    return { ...beat, displayMode: "author" as const, gudiniVisible: false };
+  });
+  const tasks = new Set(beats.filter(b => routed.includes(b.id)).map(b => b.visualTask));
+  return { beats: next, routed, bible: { ...bible, visualTasks: (bible.visualTasks ?? []).map(task =>
+    tasks.has(task.id) && !next.some(b => b.visualTask === task.id && b.displayMode !== "author")
+      ? { ...task, role: "explanation" as const, action: "" } : task),
+  } };
+}
 
 export function filmBudget(): number {
   const v = Number(process.env.MEDIA_FILM_MAX_COST_USD ?? 12);
@@ -156,13 +176,19 @@ export async function planFilm(args: {
   // выражениями, а ворота смотрели только на issues, и известная склейка внутри кадра
   // проходила мимо ворот. Теперь набор один — criteria.ts.
   // обязательные к показу: контракт минус неподтверждённые механизмы и опровергнутые утверждения
-  const required = showableEvents(story.bible);
+  let required = showableEvents(story.bible);
   plan = withVisualTaskIssue(plan, story.bible);
   candidates.first = plan;
   const first = retryIssues(plan);
   let retried = formatRepaired;
   let accepted = false;
-  if (first.length && !formatRepaired) {
+  const needsEvidenceReview = ["news", "history"].includes(story.bible.storyType) && Boolean(args.researchFacts?.length);
+  if (needsEvidenceReview && formatRepaired) {
+    const message = "Две попытки ушли на восстановление ответа; проверка источников не завершена, Veo не запускается";
+    plan = { ...plan, issues: [...plan.issues, { code: "correction-failed", severity: "block", beatIds: [], message }], warnings: [...plan.warnings, message] };
+    candidates.first = plan;
+  }
+  if ((first.length || needsEvidenceReview) && !formatRepaired) {
     console.warn(`AI-фильм: план нарушил требования (${issueLines(first).join("; ")}) — второй заход`);
     args.onStep?.("AI-фильм: правка плана", 29);
     retried = true;
@@ -176,28 +202,49 @@ export async function planFilm(args: {
           .map((e) => `- ${e.id}: ${e.observable} (${e.objects.map((o) => `${o.id}: ${o.before} → ${o.after}`).join("; ")})`)
           .join("\n") +
         `\nСостояние предмета после сцены пиши теми же словами, что и after у события.`
+        + `\nИсключение: если evidenceReview обнаружит unsupported-mechanism, этот механизм не требуется показывать. Удали его доказательство из сцены; сохрани рассказ голосом или нейтральный внешний исход.`
       : "";
     // Ограниченная корректировка: модель получает первый план целиком и замечания, возвращает
     // только изменения. Всё незатронутое сохраняется по построению, изменения вне области
     // отбрасываются, затем весь план проходит проверки заново.
-    const scope = scopeFromIssues(first, story.beats, story.bible, story.raw, story.phrases.length, character.name);
+    let scope = scopeFromIssues(first, story.beats, story.bible, story.raw, story.phrases.length, character.name);
     try {
       const patch = await planPatch({
         words: args.words, script: args.script, topic: args.topic, researchSummary: args.researchSummary, researchFacts: args.researchFacts,
         first: story.raw, remarks: [...issueLines(first), ...(contract ? [contract.trim()] : [])],
-        character, universe, duration, coverage: args.coverage, budgetUsd: cfg.budgetUsd, scope, onCall: args.onCall,
+        character, universe, duration, coverage: args.coverage, budgetUsd: cfg.budgetUsd, scope, requireEvidenceReview: needsEvidenceReview, onCall: args.onCall,
         complete: args.complete ? (a) => args.complete!({ ...a, retry: true }) : undefined,
       });
+      const reviewed = needsEvidenceReview
+        ? reviewEvidence(story.raw, patch, args.researchFacts ?? [])
+        : { raw: story.raw, eventIds: [] };
+      if (reviewed.eventIds.length) {
+        story = storyFromRaw(reviewed.raw, { words: args.words, phrases: story.phrases, duration, character, universe, researchFacts: args.researchFacts });
+        story.bible.authorCarried = authorCarriedEvents(story.bible);
+        plan = withVisualTaskIssue(buildFilmPlan({ character, bible: story.bible, beats: story.beats, duration, cfg }), story.bible);
+        candidates.first = plan;
+        required = showableEvents(story.bible);
+        scope = scopeFromIssues([...first, { code: "unconfirmed-mechanism", beatIds: [], eventIds: reviewed.eventIds }], story.beats, story.bible, story.raw, story.phrases.length, character.name);
+      }
       const patched = applyPatch(story.raw, patch, scope);
+      // A patch cannot restore its own unsupported assertion to confirmed after review.
+      for (const event of patched.raw.bible.events) {
+        const reviewedEvent = story.bible.events.find(e => e.id === event.id && e.reviewedMechanism);
+        if (reviewedEvent) Object.assign(event, { reviewedMechanism: true, basis: "told", basisFact: reviewedEvent.basisFact });
+      }
       correction.kind = "patch";
       correction.applied = patched.applied;
       correction.rejected = patched.rejected;
       for (const l of patched.applied) console.log(`   корректировка: ${l}`);
       for (const l of patched.rejected) console.warn(`   корректировка отклонена: ${l}`);
-      const retry = storyFromRaw(patched.raw, { words: args.words, phrases: story.phrases, duration, character, universe, researchFacts: args.researchFacts });
+      let retry = storyFromRaw(patched.raw, { words: args.words, phrases: story.phrases, duration, character, universe, researchFacts: args.researchFacts });
       // Обязательный набор первого захода возвращается силой: снять обязательность вместо
       // постановки сцены модель не может — это делало проверку зелёной, не показав события.
-      const retryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events), authorCarried: story.bible.authorCarried };
+      let retryBible: StoryBible = { ...retry.bible, events: preserveRequired(story.bible.events, retry.bible.events), authorCarried: story.bible.authorCarried };
+      const fallback = useRecordingForUnsupportedMechanisms(retryBible, retry.beats);
+      retryBible = fallback.bible;
+      retry = { ...retry, bible: retryBible, beats: fallback.beats };
+      for (const id of fallback.routed) correction.applied.push(`${id}: неподтверждённый механизм оставлен авторской записи; генерация вставки не требуется`);
       // Ссылки сцен второго захода тоже сверяются с его контрактом: модель охотно описывает
       // событие в сцене и забывает переписать его в bible.events.
       reconcileEventRefs(retryBible, retry.beats);
@@ -223,7 +270,7 @@ export async function planFilm(args: {
       const message = "Корректировка не завершена; сохранён первый план и его проверки";
       console.warn(`${message}: ${error instanceof Error ? error.message : String(error)}`);
       plan = { ...plan, issues: [...(plan.issues ?? []), {
-        code: "correction-failed", severity: "warn", beatIds: [], message,
+        code: "correction-failed", severity: needsEvidenceReview ? "block" : "warn", beatIds: [], message,
       }], warnings: [...plan.warnings, message] };
     }
   }

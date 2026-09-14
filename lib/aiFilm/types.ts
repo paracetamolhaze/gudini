@@ -112,6 +112,8 @@ export type StoryEvent = {
    */
   basis?: "confirmed" | "told" | "contradicted";
   basisFact?: string;
+  /** Explicit mechanism classification from a source-grounded editorial review. */
+  reviewedMechanism?: boolean;
 };
 
 /**

@@ -15,7 +15,7 @@ import type { CharacterProfile, StoryBible, StoryBeat, DisplayMode, BeatPurpose,
 
 export const STORY_MODEL = process.env.AI_FILM_STORY_MODEL || "claude-sonnet-5";
 /** 9 — общая процедура режиссуры: причинность, доказательство сцены, состояние, механика, камера. */
-export const STORY_VERSION = 22;
+export const STORY_VERSION = 24;
 
 /** Границы AI-бита: короче — не прочитать, длиннее — одна сцена не удержит одно действие. */
 export const MIN_AI_BEAT_SEC = 4;
@@ -145,6 +145,8 @@ export type RawStory = { storyArc?: Partial<StoryBible["storyArc"]>; bible?: any
  * Связанные изменения вне замечаний объявляются в related с причиной, иначе не применяются.
  */
 export type RawPatch = {
+  evidenceReview?: { eventId: string; verdict: "supported" | "illustration" | "unsupported-mechanism"; quote: string; reason: string }[];
+  unsupportedMechanisms?: { eventId: string; quote: string; reason: string }[];
   bible?: { playedByGudini?: unknown; supportingCharacters?: unknown };
   events?: { update?: any[]; add?: any[]; remove?: unknown[] };
   visualTasks?: { update?: any[]; add?: any[]; remove?: unknown[] };
@@ -155,7 +157,7 @@ export type RawPatch = {
 };
 
 /** Что второму заходу разрешено менять: адреса сцен, событий и задач из замечаний, роли. */
-export type PatchScope = { beats: Set<string>; events: Set<string>; tasks: Set<string>; roles: boolean; phraseCount: number; characterName?: string };
+export type PatchScope = { beats: Set<string>; events: Set<string>; tasks: Set<string>; roles: boolean; recastCharacter?: boolean; phraseCount: number; characterName?: string };
 
 const str = (v: unknown, d = "") => (typeof v === "string" && v.trim() ? v.trim() : d);
 const arr = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
@@ -426,6 +428,7 @@ export function normalizeBible(raw: RawStory, character: CharacterProfile, unive
       // статус факта: подтверждение и опровержение требуют цитаты из справки, разбор её сверяет
       basis: (e?.basis === "confirmed" || e?.basis === "contradicted" ? e.basis : "told") as StoryEvent["basis"],
       basisFact: str(e?.basisFact),
+      reviewedMechanism: e?.reviewedMechanism === true,
     }))
     // Битые записи НЕ выбрасываются: молча удалённое обязательное событие превращало
     // непокрытый план в «зелёный». Они доезжают до разбора и там становятся ошибкой контракта.
@@ -859,6 +862,40 @@ export function rawBeatRanges(rawBeats: RawBeat[], n: number): ({ from: number; 
 
 const rangeKey = (r: { from: number; to: number }) => `${r.from}-${r.to}`;
 
+/** A semantic review can narrow an unsupported mechanism only with an exact source citation.
+ * It cannot open unrelated scenes, change roles, or promote an assertion to a fact. */
+export function reviewEvidence(first: RawStory, patch: RawPatch, facts: string[]): { raw: RawStory; eventIds: string[] } {
+  const raw = canonicalRaw(first);
+  const findings = [...(patch.unsupportedMechanisms ?? [])];
+  if (patch.evidenceReview) {
+    const expected = new Set(raw.bible.events.map((e: any) => slugId(e.id)));
+    const seen = new Set<string>();
+    for (const entry of patch.evidenceReview) {
+      const id = slugId(entry.eventId);
+      if (!expected.has(id) || seen.has(id) || !entry.reason?.trim() || !["supported", "illustration", "unsupported-mechanism"].includes(entry.verdict)) throw new Error("Evidence review must assess each event exactly once");
+      if (entry.verdict !== "illustration" && !facts.some(f => f.trim() === entry.quote?.trim())) throw new Error("Evidence review requires an exact input fact");
+      seen.add(id);
+      if (entry.verdict === "unsupported-mechanism") findings.push({ eventId: id, quote: entry.quote, reason: entry.reason });
+    }
+    if (seen.size !== expected.size) throw new Error("Evidence review omitted events");
+  }
+  if (!findings.length) return { raw, eventIds: [] };
+  if (!["news", "history"].includes(raw.bible.storyType)) throw new Error("Evidence review is only applicable to documentary stories");
+  const eventIds: string[] = [];
+  for (const finding of findings) {
+    const id = slugId(finding.eventId);
+    const event = raw.bible.events.find((e: any) => slugId(e.id) === id);
+    if (!event || !finding.reason?.trim() || !facts.some(f => f.trim() === finding.quote?.trim())) {
+      throw new Error("Evidence review must name an existing event and quote an exact input fact");
+    }
+    event.reviewedMechanism = true;
+    event.basis = "told";
+    event.basisFact = finding.quote;
+    eventIds.push(id);
+  }
+  return { raw, eventIds };
+}
+
 /**
  * Применить изменения второго захода к первому ответу. Незатронутые сцены, события, задачи,
  * участники и статусы фактов сохраняются по построению: в результате они те же объекты, что
@@ -869,6 +906,9 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
   const raw = canonicalRaw(first);
   const applied: string[] = [];
   const rejected: string[] = [];
+  if (scope.recastCharacter && patch?.bible?.playedByGudini !== "") {
+    return { raw, applied, rejected: ["Несовместимая роль требует отдельного актёра: playedByGudini должен быть пустым, переназначение герою другой роли не принимается"] };
+  }
   if (scope.roles && patch?.bible?.playedByGudini !== undefined &&
       patch.bible.playedByGudini !== raw.bible.playedByGudini) {
     const changed = new Set([...(patch.beats?.replace ?? []), ...(patch.beats?.remove ?? [])]
@@ -1117,6 +1157,9 @@ export function applyPatch(first: RawStory, patch: RawPatch, scope: PatchScope):
   for (const t of patch?.visualTasks?.update ?? []) mergeTask(t, "update");
   for (const t of patch?.visualTasks?.add ?? []) mergeTask(t, "add");
 
+  if (scope.recastCharacter && (raw.beats ?? []).some(b => b.displayMode !== "author" && b.gudiniVisible)) {
+    return { raw: canonicalRaw(first), applied: [], rejected: [...rejected, "Переназначение несовместимой роли не завершено: персонаж канала остаётся в сценах"] };
+  }
   return { raw, applied, rejected };
 }
 
@@ -1134,6 +1177,7 @@ export async function planPatch(args: {
   researchFacts?: string[];
   budgetUsd?: number;
   scope?: PatchScope;
+  requireEvidenceReview?: boolean;
   first: RawStory;
   remarks: string[];
   character: CharacterProfile;
@@ -1152,8 +1196,11 @@ export async function planPatch(args: {
     `Речь автора по фразам (чистый таймлайн, всего ${args.duration.toFixed(1)} с):\n${list}\n\n` +
     `ТВОЙ ПЕРВЫЙ ПЛАН НА ЭТУ РЕЧЬ, ЦЕЛИКОМ:\n${JSON.stringify(canonicalRaw(args.first))}\n\n` +
     `ЗАМЕЧАНИЯ К НЕМУ:\n${args.remarks.map((r) => `- ${r}`).join("\n")}\n\n` +
-    (args.scope ? `ДОПУСТИМАЯ ОБЛАСТЬ ИЗМЕНЕНИЙ (точные адреса исходного плана):\n${JSON.stringify({ beats: [...args.scope.beats], events: [...args.scope.events], visualTasks: [...args.scope.tasks], roles: args.scope.roles })}\n\n` : "") +
+    (args.scope ? `ДОПУСТИМАЯ ОБЛАСТЬ ИЗМЕНЕНИЙ (точные адреса исходного плана):\n${JSON.stringify({ beats: [...args.scope.beats], events: [...args.scope.events], visualTasks: [...args.scope.tasks], roles: args.scope.roles, recastCharacter: Boolean(args.scope.recastCharacter) })}\n\n` : "") +
+    (args.scope?.recastCharacter ? `ОБЯЗАТЕЛЬНЫЙ РЕЗУЛЬТАТ ИСПРАВЛЕНИЯ РОЛИ: bible.playedByGudini="". Назначь отдельных supportingCharacters, согласуй их имена, внешность, одежду и действия во ВСЕХ появлениях. Во всех AI-битах gudiniVisible=false; ${args.character.name} не играет другую роль и не добавляется свидетелем. Не меняй события, лишь исполнителей.\n\n` : "") +
     `ЗАДАЧА: исправь только то, к чему есть замечания, и верни ТОЛЬКО ИЗМЕНЕНИЯ, а не новый план.\n` +
+    (args.requireEvidenceReview ? `Сначала заполни evidenceReview ДЛЯ КАЖДОГО события первого плана: {eventId, verdict: supported|illustration|unsupported-mechanism, quote, reason}. Пустой список не принимается. supported: источник прямо подтверждает того же исполнителя, действие и причинную связь; quote — полный факт. illustration: допустимая постановочная деталь, которая НЕ доказывает скрытую причину, допускается пустая quote. unsupported-mechanism: деталь используется как доказательство распознавания, решения или скрытой причины, но источник подтверждает лишь внешний исход. В reason явно сопоставь, что говорит источник и что добавил кадр. «Как будто распознаёт» не превращает доказательство механизма в нейтральную иллюстрацию. После таблицы исправь найденные механизмы в этом же ответе.\n` : "") +
+    `ПЕРЕД ПРАВКОЙ проверь смысловую поддержку ВСЕХ документальных событий справкой, даже если код не нашёл нарушения. Наличие цитаты не подтверждает приписанный механизм: запись камеры не доказывает распознавание, сообщение человека не доказывает самостоятельное решение устройства. Если механизм не следует из источника, добавь unsupportedMechanisms: [{eventId, quote, reason}], где quote — ОДИН ФАКТ справки целиком без изменений, reason — конкретное различие. Это открывает только сцены и задачи данного события: убери выдуманный механизм, оставь голос или внешний исход; не добавляй новых действующих лиц. Вымышленные и условные примеры этим ограничением не исправляй.\n` +
     `- Сцены, события и задачи без замечаний не переписывай: они сохранятся как есть.\n` +
     `- Участники, playedByGudini, статусы фактов (basis) и отсутствие сцен с неподтверждённым механизмом сохраняются; менять роли можно только по замечанию о ролях.\n` +
     `- При переназначении playedByGudini исправь ВСЕ появления этой роли, включая последующие сцены без отдельного замечания: они открыты в области. Нельзя передать предмет одному актёру, а продолжить действие другим. Неполное переназначение отклоняется целиком.\n` +
@@ -1161,7 +1208,7 @@ export async function planPatch(args: {
     `- Сцена адресуется парой fromPhrase/toPhrase из твоего плана. Новая сцена (add) может занять только фразы авторских битов; чтобы изменить существующую сцену, используй replace с полным описанием бита.\n` +
     `- Событие и задача адресуются id. В update и add отдавай объект целиком.\n` +
     `Формат ответа, только JSON:\n` +
-    `{"events": {"update": [], "add": [], "remove": []}, "visualTasks": {"update": [], "add": [], "remove": []}, ` +
+    `{"evidenceReview": [], "unsupportedMechanisms": [], "events": {"update": [], "add": [], "remove": []}, "visualTasks": {"update": [], "add": [], "remove": []}, ` +
     `"beats": {"replace": [], "add": [], "remove": [{"fromPhrase": 1, "toPhrase": 2}]}, ` +
     `"bible": {"playedByGudini": "", "supportingCharacters": []}, "related": [{"target": "id или fromPhrase-toPhrase", "for": "пункт из замечаний", "why": "почему без этого исправление невозможно"}], "note": "коротко, что исправлено"}\n` +
     `Поле bible включай только при замечании о ролях. Пустые списки можно опускать.`;
@@ -1176,6 +1223,7 @@ export async function planPatch(args: {
         Array.isArray(parsed.beats) || Array.isArray(parsed.events) || Array.isArray(parsed.visualTasks)) {
       throw new Error("Ожидались изменения, а не полный план");
     }
+    if (args.requireEvidenceReview && !Array.isArray(parsed.evidenceReview)) throw new Error("Missing per-event evidence review");
     return parsed;
   } catch {
     const tail = raw.slice(-300).replace(/\s+/g, " ");
@@ -1197,6 +1245,7 @@ export function scopeFromIssues(
   const ROLE_CODES = new Set(["role-miscast", "costume-conflict", "hero-flag-mismatch"]);
   for (const i of issues) {
     if (ROLE_CODES.has(i.code)) scope.roles = true;
+    if (i.code === "role-miscast") scope.recastCharacter = true;
     for (const id of i.eventIds ?? []) scope.events.add(id);
     for (const bid of i.beatIds) {
       const b = beats.find((x) => x.id === bid || bid.startsWith(`${x.id}/`));

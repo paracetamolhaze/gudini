@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planStory, planPatch, storyFromRaw, phrasesFromWords, scopeFromIssues, applyPatch } from "../lib/aiFilm/story";
+import { planStory, planPatch, storyFromRaw, phrasesFromWords, scopeFromIssues, applyPatch, reviewEvidence } from "../lib/aiFilm/story";
 import { planFilm } from "../lib/aiFilm/run";
 import { loadCharacterProfile } from "../lib/aiFilm/character";
 import { loadUniverseProfile } from "../lib/aiFilm/universe";
@@ -67,6 +67,16 @@ test("an object-addressed issue opens its containing scene for correction", () =
   assert.ok(scope.beats.has("1-1"));
 });
 
+test("format repair cannot silently bypass documentary evidence review or make a third call", async () => {
+  let calls = 0;
+  const result = await planFilm({ ...args,
+    cfg: { key: "repair-documentary", universe, budgetUsd: 12, maxCoverage: 0.7, concurrency: 1, callMinutes: 2 },
+    complete: async () => ++calls === 1 ? '{"bible":{}}' : JSON.stringify({ ...raw, bible: { ...raw.bible, storyType: "news" } }),
+  });
+  assert.equal(calls, 2);
+  assert.ok(result.plan.issues.some(i => i.code === "correction-failed" && i.severity === "block"));
+});
+
 test("presence checks use the cast as well as the action and send ambiguity to correction", () => {
   const parsed = storyFromRaw(raw, { ...args, phrases: phrasesFromWords(words) });
   const beat = { ...parsed.beats[0], gudiniVisible: true, scene: { who: character.name, props: [], worn: [], mechanics: "" } };
@@ -102,4 +112,86 @@ test("an addressed optional event can be removed using an id object", () => {
   const source = { ...raw, bible: { ...raw.bible, events: [{ id: "unused", observable: "unknown method", required: false, objects: [] }] } };
   const patched = applyPatch(source, { events: { remove: [{ id: "unused" }] } }, { beats: new Set(), tasks: new Set(), events: new Set(["unused"]), roles: false, phraseCount: 2 });
   assert.equal(patched.raw.bible?.events?.length, 0);
+});
+
+test("an incompatible role requires separate casting, not switching to another role", () => {
+  for (const role of ["child", "elderly woman", "teenage passenger"]) {
+    const source = { bible: { ...raw.bible, playedByGudini: role }, beats: [{ ...raw.beats[0], gudiniVisible: true }] };
+    const parsed = storyFromRaw(source, { ...args, phrases: phrasesFromWords(words) });
+    const scope = scopeFromIssues([{ code: "role-miscast", beatIds: ["B1"] }], parsed.beats, parsed.bible, source, 2, character.name);
+    assert.equal(scope.recastCharacter, true);
+    const result = applyPatch(source, { bible: { playedByGudini: "another incompatible role" }, beats: { replace: source.beats } }, scope);
+    assert.ok(result.rejected.length);
+    assert.equal(result.raw.bible?.playedByGudini, role);
+  }
+});
+
+test("evidence review is mandatory for documentary genres and does not block fiction or explainers", async () => {
+  const fact = "Мяч перекатился с середины стола на край.";
+  const event = { id: "ball", observable: "a ball rolls to the table edge", required: true, fromPhrase: 1, toPhrase: 1, basis: "confirmed", basisFact: fact, objects: [{ id: "ball", before: "ball at centre", after: "ball at edge", role: "change" }] };
+  for (const storyType of ["news", "history", "fiction", "explainer"]) {
+    const source = { ...raw, bible: { ...raw.bible, storyType, events: [event] } };
+    const result = await planFilm({ ...args, researchFacts: [fact],
+      cfg: { key: `genres-${storyType}`, universe, budgetUsd: 12, maxCoverage: 0.7, concurrency: 1, callMinutes: 2 },
+      complete: async ({ retry }) => !retry ? JSON.stringify(source) : JSON.stringify({ evidenceReview:
+        ["news", "history"].includes(storyType) ? [{ eventId: "ball", verdict: "supported", quote: fact, reason: "Same physical outcome" }] : [],
+      }),
+    });
+    assert.notEqual(result.correction.kind, "failed", storyType);
+  }
+});
+
+test("source-grounded review revises both candidates, not just the corrected one", async () => {
+  const fact = "Камера записала происшествие внутри автомобиля.";
+  const event = { id: "camera", observable: "camera reorients toward the object", required: true, fromPhrase: 1, toPhrase: 1, basis: "confirmed", basisFact: fact, objects: [{ id: "camera", before: "lens forward", after: "lens toward the object", role: "change" }] };
+  const source = { bible: { ...raw.bible, storyType: "news", events: [event] }, beats: [{ ...raw.beats[0], eventIds: ["camera"], objects: event.objects, visualAction: "the camera swivels toward the object", keyMoment: "lens oriented toward the object" }, raw.beats[1]] };
+  const findings = [{ eventId: "camera", quote: fact, reason: "Recording does not establish that the lens moved or recognized anything" }];
+  let calls = 0;
+  const result = await planFilm({ ...args, researchFacts: [fact],
+    cfg: { key: "review", universe, budgetUsd: 12, maxCoverage: 0.7, concurrency: 1, callMinutes: 2 },
+    complete: async () => ++calls === 1 ? JSON.stringify(source) : JSON.stringify({ evidenceReview: findings.map(f => ({ ...f, verdict: "unsupported-mechanism" })), beats: { replace: [{ fromPhrase: 1, toPhrase: 1, displayMode: "author", gudiniVisible: false, eventIds: [], objects: [], visualAction: "", keyMoment: "" }] } }),
+  });
+  assert.equal(calls, 2);
+  assert.ok(result.candidates.first.issues.some(i => i.code === "invented-mechanism"));
+  assert.ok(!result.plan.issues.some(i => i.severity === "block"));
+  assert.equal(result.accepted, true);
+  assert.throws(() => reviewEvidence(source, { unsupportedMechanisms: [{ ...findings[0], quote: "not an input fact" }] }, [fact]), /exact input fact/);
+  assert.throws(() => reviewEvidence(source, { evidenceReview: [] }, [fact]), /omitted events/);
+  assert.throws(() => reviewEvidence(source, { evidenceReview: [1, 2].map(() => ({ ...findings[0], verdict: "supported" as const })) }, [fact]), /exactly once/);
+  assert.equal(source.bible.events[0].basis, "confirmed", "source evidence must stay unchanged");
+});
+
+test("a documentary plan is not marked ready when its evidence review fails", async () => {
+  let calls = 0;
+  const result = await planFilm({ ...args,
+    cfg: { key: "review-failure", universe, budgetUsd: 12, maxCoverage: 0.7, concurrency: 1, callMinutes: 2 },
+    complete: async () => { if (++calls === 1) return JSON.stringify({ ...raw, bible: { ...raw.bible, storyType: "news" } }); throw new Error("unavailable"); },
+  });
+  assert.equal(calls, 2);
+  assert.ok(result.plan.issues.some(i => i.code === "correction-failed" && i.severity === "block"));
+});
+
+test("an unresolved reviewed mechanism falls back to the recording without hiding a physical obligation", async () => {
+  const fact = "Камера записала происшествие внутри автомобиля.";
+  const event = { id: "camera", observable: "camera reorients toward the object", required: true, fromPhrase: 1, toPhrase: 1, basis: "confirmed", basisFact: fact, objects: [{ id: "camera", before: "lens forward", after: "lens toward the object", role: "change" }] };
+  const physical = { id: "parcel", observable: "a courier hands a parcel to a woman", required: true, fromPhrase: 1, toPhrase: 1, basis: "told", objects: [{ id: "parcel", before: "parcel in the courier's hands", after: "parcel in the woman's hands", role: "change" }] };
+  for (const mixed of [false, true]) {
+    const source = { bible: { ...raw.bible, storyType: "news", events: [event, ...(mixed ? [physical] : [])] }, beats: [{ ...raw.beats[0], eventIds: mixed ? ["camera", "parcel"] : ["camera"], objects: event.objects, visualAction: "the camera swivels toward the object", keyMoment: "lens oriented toward the object" }, raw.beats[1]] };
+    const result = await planFilm({ ...args, researchFacts: [fact],
+      cfg: { key: "evidence-fallback", universe, budgetUsd: 12, maxCoverage: 0.7, concurrency: 1, callMinutes: 2 },
+      complete: async ({ retry }) => !retry ? JSON.stringify(source) : JSON.stringify({ evidenceReview: [
+        { eventId: "camera", verdict: "unsupported-mechanism", quote: fact, reason: "Recording does not establish recognition" },
+        ...(mixed ? [{ eventId: "parcel", verdict: "illustration", quote: "", reason: "Physical handover remains required" }] : []),
+      ] }),
+    });
+    if (mixed) {
+      assert.ok(result.plan.beats.some(b => b.displayMode !== "author" && b.eventIds?.includes("parcel")));
+      assert.ok(result.plan.issues.some(i => i.severity === "block"));
+    } else {
+      assert.equal(result.plan.beats[0].displayMode, "author");
+      assert.ok(!result.plan.issues.some(i => i.severity === "block"));
+      assert.ok(result.correction.applied.some(line => line.includes("автор")));
+      assert.equal(result.candidates.first.beats[0].displayMode, "full_ai");
+    }
+  }
 });

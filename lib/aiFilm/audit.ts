@@ -45,8 +45,8 @@ export function factMatches(quote: string, facts: string[]): boolean {
 }
 
 /** Событие приписывает действие системе, а не человеку. */
-export function mechanismEvent(e: Pick<StoryEvent, "observable" | "objects">): boolean {
-  return DEVICE_AGENCY.test(`${e.observable}. ${e.objects.map((o) => `${o.id.replace(/[-_]+/g, " ")} ${o.before} ${o.after}`).join(". ")}`);
+export function mechanismEvent(e: Pick<StoryEvent, "observable" | "objects"> & Partial<Pick<StoryEvent, "reviewedMechanism">>): boolean {
+  return e.reviewedMechanism === true || DEVICE_AGENCY.test(`${e.observable}. ${e.objects.map((o) => `${o.id.replace(/[-_]+/g, " ")} ${o.before} ${o.after}`).join(". ")}`);
 }
 
 /**
@@ -429,7 +429,7 @@ export function auditPlan(
     "invented-mechanism",
     shown
       .filter((b) => (b.eventIds ?? []).some((id) => suspect.has(id)) || (mechanisms.length > 0 && DEVICE_AGENCY.test(stagedText(b))))
-      .filter((b) => DEVICE_AGENCY.test(stagedText(b)) || DEVICE_REACTION.test(stagedText(b)))
+      .filter((b) => (b.eventIds ?? []).some(id => mechanisms.some(e => e.id === id && e.reviewedMechanism)) || DEVICE_AGENCY.test(stagedText(b)) || DEVICE_REACTION.test(stagedText(b)))
       .map((b) => b.id),
     "Сцена изображает механизм, которого справка не подтверждает: поворот камеры, тревога, объявление системы — это выдуманное доказательство; покажите внешний исход или оставьте голосу",
     "block",

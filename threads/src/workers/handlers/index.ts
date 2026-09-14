@@ -5,5 +5,6 @@ import "./source.js";
 import "./analysis.js";
 import "./content.js";
 import "./media.js";
+import "./publisher.js";
 
 export {};

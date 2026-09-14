@@ -67,3 +67,15 @@ test("план AI-фильма устаревает при изменении т
   assert.notEqual(key, film.planKey(words.map(w => ({ ...w, start: w.start + 1, end: w.end + 1 })), "Привет мир", character, universe));
   assert.notEqual(key, film.planKey(words, "Привет мир", character, universe, 3));
 });
+
+test("provider-refused plan cannot be queued again through the site API", async () => {
+  const p = store.createProject("refused plan");
+  store.updateProject(p.id, { rawVideo: "raw.mp4", montageStyle: "ai_film", aiFilm: {
+    request: "generate", status: "failed", plan: { issues: [{ code: "provider-refused", severity: "block", beatIds: [], message: "Google refused" }] } as any,
+  } });
+  const response = await processRoute.POST(new NextRequest(`http://localhost/api/projects/${p.id}/process`, {
+    method: "POST", body: JSON.stringify({ request: "generate" }),
+  }), { params: Promise.resolve({ id: p.id }) });
+  assert.equal(response.status, 409);
+  assert.notEqual(store.getProject(p.id)?.processing.state, "running");
+});

@@ -75,6 +75,14 @@ export class VertexError extends Error {
 /** The accepted operation finished unsuccessfully; retrying needs a new operation. */
 export class VeoOperationError extends Error {}
 
+/** A provider refusal is terminal, not a transient failure to retry or rephrase. */
+export class VeoFilteredError extends VeoOperationError {
+  constructor(readonly reasons: unknown, readonly response?: unknown) {
+    super(`[VEO_FILTERED] Google Veo отклонил сцену фильтром безопасности. Повтор того же запроса не выполняется. Ответ Google: ${typeof reasons === "string" ? reasons : JSON.stringify(reasons)}`);
+  }
+  get notCharged(): boolean { return /you will not be charged/i.test(this.message); }
+}
+
 async function api(method: string, url: string, body?: unknown): Promise<any> {
   const res = await fetch(url, {
     method,
@@ -195,6 +203,7 @@ export async function waitVeo(model: string, operationName: string, onTick?: (el
       const gcsUri: string | undefined = first?.gcsUri ?? first?.video?.uri ?? first?.uri;
       if (!gcsUri) {
         const filtered = op.response?.raiMediaFilteredReasons ?? op.response?.raiMediaFilteredCount;
+        if ((Array.isArray(filtered) && filtered.length) || (typeof filtered === "number" && filtered > 0) || (typeof filtered === "string" && filtered)) throw new VeoFilteredError(filtered, op.response);
         throw new VeoOperationError(`Veo: результат без видео${filtered ? ` (фильтр безопасности: ${JSON.stringify(filtered).slice(0, 200)})` : ""}`);
       }
       return { gcsUri, raw: op.response };

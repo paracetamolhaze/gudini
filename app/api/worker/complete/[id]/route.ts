@@ -19,9 +19,15 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   // и добор материала его не оплачивали заново
   const research = body.research && typeof body.research === "object" ? body.research : undefined;
   if (body.error) {
+    const providerRefused = String(body.error).includes("[VEO_FILTERED]") && project.aiFilm?.plan;
     return NextResponse.json(
       updateProject(id, {
         ...(research ? { research } : {}),
+        ...(providerRefused ? { aiFilm: { ...project.aiFilm!, status: "failed" as const, error: String(body.error), plan: {
+          ...project.aiFilm!.plan!, issues: [...(project.aiFilm!.plan!.issues ?? []).filter(i => i.code !== "provider-refused"), {
+            code: "provider-refused", severity: "block" as const, beatIds: [], message: "Google Veo отклонил сцену. Этот план нельзя повторно отправить без изменения материала; повторная оплата не запускается.",
+          }],
+        } } } : {}),
         processing: { state: "error", step: "Ошибка", progress: 0, error: String(body.error) },
       }),
     );

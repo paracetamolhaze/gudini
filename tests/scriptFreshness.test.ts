@@ -21,3 +21,12 @@ test("справка на сегодня: статус и факты без сс
   assert.match(brief, /- Бюджет 250 миллионов/);
   assert.ok(!/https/.test(brief));
 });
+
+test("сценарист получает задачу выбора и аргументы всех кандидатов, включая факты после шестого", () => {
+  const brief = todayBrief({
+    status: "ONGOING", editorialBrief: "Выбрать две камеры для путешествий и объяснить выбор автора.",
+    facts: Array.from({ length: 8 }, (_, i) => ({ id: `f${i}`, text: `Аргумент кандидата ${i + 1}`, sourceUrls: ["https://example.com"] })),
+  } as any);
+  assert.match(brief, /Выбрать две камеры/);
+  assert.match(brief, /Аргумент кандидата 8/);
+});

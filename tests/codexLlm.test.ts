@@ -12,9 +12,10 @@ import { codexArguments, codexEnvironment, codexError, codexModel, withCodexQueu
 import { mediaComplete, mediaVision, mediaLlmAvailable, mediaEngine } from "../lib/mediaLlm";
 import { ledger, resetLedger, summarize } from "../lib/costLedger";
 import { generateScript } from "../lib/ai";
+import { buildStoryResearchPack } from "../lib/storyResearch";
 
 const request: CodexRequest = { stage: "Script Generation", model: "gpt-6-astra", effort: "high", system: "JSON", user: "Тест" };
-const envKeys = ["MEDIA_LLM_TRANSPORT", "MEDIA_LLM_PROVIDER", "ANTHROPIC_API_KEY", "CODEX_RUNS_DIR", "CODEX_BRIDGE_URL", "CODEX_BRIDGE_TOKEN", "CODEX_TIMEOUT_MS"];
+const envKeys = ["MEDIA_LLM_TRANSPORT", "MEDIA_LLM_PROVIDER", "ANTHROPIC_API_KEY", "CODEX_RUNS_DIR", "CODEX_BRIDGE_URL", "CODEX_BRIDGE_TOKEN", "CODEX_TIMEOUT_MS", "BRAVE_API_KEY"];
 
 async function fixture(fn: (root: string) => Promise<void>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-codex-test-"));
@@ -34,7 +35,7 @@ async function fixture(fn: (root: string) => Promise<void>) {
   }
 }
 
-function fakeCli(mode: "ok" | "limit" | "empty" | "timeout" = "ok", inspect?: (args: string[], options: any, prompt: string) => void) {
+function fakeCli(mode: "ok" | "limit" | "empty" | "timeout" = "ok", inspect?: (args: string[], options: any, prompt: string) => void | string) {
   return mock.method(childProcess, "spawn", (_bin: string, args: string[], options: any) => {
     const child = new EventEmitter() as any;
     child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
@@ -42,13 +43,13 @@ function fakeCli(mode: "ok" | "limit" | "empty" | "timeout" = "ok", inspect?: (a
     let prompt = "";
     child.stdin.on("data", (chunk: Buffer) => { prompt += chunk.toString(); });
     child.stdin.on("finish", () => setImmediate(() => {
-      inspect?.(args, options, prompt);
+      const reply = inspect?.(args, options, prompt);
       if (mode === "timeout") return;
       if (mode === "limit") {
         child.stdout.write(JSON.stringify({ type: "turn.failed", error: { message: "usage limit reached" } }) + "\n");
         child.emit("close", 1); return;
       }
-      fs.writeFileSync(path.join(options.cwd, "answer.json"), JSON.stringify({ result: mode === "empty" ? "" : '{"ok":true,"text":"Привет"}' }));
+      fs.writeFileSync(path.join(options.cwd, "answer.json"), JSON.stringify({ result: mode === "empty" ? "" : reply ?? '{"ok":true,"text":"Привет"}' }));
       const event = JSON.stringify({ type: "turn.completed", usage: { input_tokens: 120, cached_input_tokens: 80, output_tokens: 25 } });
       child.stdout.write(event.slice(0, 17)); child.stdout.write(event.slice(17) + "\n");
       child.emit("close", 0);
@@ -56,6 +57,48 @@ function fakeCli(mode: "ok" | "limit" | "empty" | "timeout" = "ok", inspect?: (a
     return child;
   });
 }
+
+test("topic research fills evidence gaps once and forwards the original assignment and all arguments to the script", async () => fixture(async () => {
+  process.env.BRAVE_API_KEY = "test-key";
+  const topic = "Две лучшие камеры для путешествий в сентябре 2026 года";
+  const queries: string[] = [];
+  mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    queries.push(url.searchParams.get("q")!);
+    const results = [{ title: "Camera specifications", url: "https://example.com/cameras", description: queries.length > 2 ? "Targeted weight evidence" : "Generic candidate data" }];
+    return new Response(JSON.stringify(url.pathname.includes("news/") ? { results } : { web: { results } }));
+  });
+  let calls = 0;
+  const cli = fakeCli("ok", (_args, _options, prompt) => {
+    calls++;
+    if (calls === 3) {
+      assert.ok(prompt.includes(topic));
+      assert.ok(prompt.includes("Выбрать две конкретные камеры"));
+      assert.ok(prompt.includes("Аргумент кандидата 8"));
+      return "Мой выбор — две камеры.";
+    }
+    if (calls === 2) {
+      assert.ok(prompt.includes("Дополнительный поиск завершён"));
+      assert.ok(prompt.includes("Targeted weight evidence"));
+      assert.ok(!prompt.includes("Generic candidate data"));
+    }
+    return JSON.stringify({
+      canonicalEvent: "Two travel cameras September 2026", kind: "PRODUCT",
+      editorialBrief: "Выбрать две конкретные камеры и объяснить преимущества от лица автора.",
+      entities: [{ name: "Camera A", type: "PRODUCT" }, { name: "Camera B", type: "PRODUCT" }],
+      followUpQueries: ["Camera A weight", " Camera A weight ", "Camera B battery", "Camera A price", "ignored fourth query", null],
+      facts: Array.from({ length: 8 }, (_, i) => ({ text: `Аргумент кандидата ${i + 1}`, sourceUrls: ["https://example.com/cameras"] })),
+    });
+  });
+  const research = await buildStoryResearchPack(topic);
+  assert.ok(research);
+  assert.equal(research.facts.length, 8);
+  assert.deepEqual(queries, [topic, topic, "Camera A weight", "Camera B battery", "Camera A price"]);
+  assert.equal(cli.mock.callCount(), 2);
+  const result = await generateScript(topic, research);
+  assert.equal(result.script, "Мой выбор — две камеры.");
+  assert.equal(result.demo, false);
+}));
 
 test("subscription runner does not inherit API keys, shell code or parent task identity", () => {
   const env = codexEnvironment({ PATH: "bin", USERPROFILE: "user", CODEX_HOME: "auth", OPENAI_API_KEY: "secret", CODEX_API_KEY: "secret", NODE_OPTIONS: "bad", CODEX_THREAD_ID: "parent" });

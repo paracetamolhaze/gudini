@@ -98,6 +98,8 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
 export const eventLayout = (e: EditEvent): EventLayout => e.layout ?? "top_inset";
 
 export type EditPlan = {
+  /** Geometry measured against the author's head in this recording. */
+  cardRect?: import("./topInset").CardRect;
   version: 1;
   duration: number;
   events: EditEvent[];

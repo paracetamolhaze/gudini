@@ -3,14 +3,14 @@ import path from "path";
 import { runFfmpeg } from "./ffmpeg";
 import { frameHash, hamming } from "./sceneHash";
 import { EditPlan, EditEvent } from "./editPlan";
-import { CARD, CARD_FILTER, CARD_CROP, AUTHOR_CROP } from "./topInset";
+import { CARD, cardFilter, cardCrop, AUTHOR_CROP } from "./topInset";
 
 /**
  * Сверка отрендеренного ролика с планом.
  *
  * План может быть безупречным, а в готовом файле картинки не окажется. Поэтому
- * готовый файл проверяется по факту: в области карточки — строго x=90, y=120,
- * 900×506 — должен быть ожидаемый материал, а ниже — автор.
+ * готовый файл проверяется по факту: в области карточки из EditPlan.cardRect
+ * должен быть ожидаемый материал, а ниже — автор.
  *
  * Главное правило: каждая запланированная точка обязана получить результат.
  * Пропуск «не смогли проверить» — это не «всё хорошо»: молчаливый пропуск
@@ -93,6 +93,7 @@ export async function checkRenderConformance(
   opts: { introEnd?: number } = {},
 ): Promise<ConformanceResult> {
   const tmp = path.join(dir, "_conformance");
+  const card = plan.cardRect ?? CARD;
   fs.mkdirSync(tmp, { recursive: true });
   const inserts = plan.events.filter((e) => e.type === "B_ROLL" && e.file).sort((a, b) => a.start - b.start);
   const points: CheckPoint[] = [];
@@ -133,7 +134,7 @@ export async function checkRenderConformance(
 
       // эталон один: сама картинка, приведённая к карточке тем же фильтром, что и в рендере
       const refFile = path.join(tmp, `ref-${i}.jpg`);
-      const refErr = await grab(file, 0, refFile, true, CARD_FILTER);
+      const refErr = await grab(file, 0, refFile, true, cardFilter(card));
       const refHash = refErr ? null : await frameHash(refFile, tmp);
       if (refErr || refHash === null) {
         for (const at of checkPointsFor(ev)) points.push(fail(baseOf(at), `эталон карточки не снят: ${refErr ?? "не разобран"}`));
@@ -144,7 +145,7 @@ export async function checkRenderConformance(
       for (const at of checkPointsFor(ev)) {
         const base = baseOf(at);
         const shot = path.join(tmp, `card-${i}-${at.toFixed(2)}.jpg`);
-        const outErr = await grab(renderedFile, at, shot, false, CARD_CROP);
+        const outErr = await grab(renderedFile, at, shot, false, cardCrop(card));
         if (outErr) {
           points.push(fail(base, `кадр карточки не снят: ${outErr}`));
           continue;

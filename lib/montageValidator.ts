@@ -63,7 +63,7 @@ export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): Vali
   // 2) повторов быть не может
   const seen = new Set<string>();
   for (const e of plan.events) {
-    if (seen.has(e.assetId) && !e.visualPurpose?.trim()) errors.push(`материал ${e.assetId} использован дважды`);
+    if (seen.has(e.assetId)) errors.push(`материал ${e.assetId} использован дважды`);
     seen.add(e.assetId);
   }
 
@@ -87,9 +87,8 @@ export function validateMontage(plan: MontagePlan, pack: StoryAssetPackV2): Vali
   const videos = plan.events.filter((e) => e.type === "EXTERNAL_VIDEO").length;
   const images = plan.events.filter((e) => e.type === "EXTERNAL_IMAGE").length;
   const s = plan.stats;
-  // The upper picture must be present on every frame, including the opening and ending.
+  // The opening hook may be author-only; after the first image the track is continuous.
   if (!sorted.length) errors.push("Верхняя картинка отсутствует: пустой план");
-  if (sorted.length && sorted[0].start > 0.001) errors.push("Нет картинки в начале ролика");
   for (let i = 1; i < sorted.length; i++) {
     if (sorted[i].start - sorted[i - 1].end > 0.001) errors.push(`Пустой верх между картинками на ${sorted[i].start}с`);
   }

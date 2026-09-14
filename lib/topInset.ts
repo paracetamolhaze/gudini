@@ -6,7 +6,9 @@
  * 16:9. Прошлая версия вписывала материал «как получится», и в одном ролике
  * оказались широкое фото и узкие вертикальные полоски — смотреть на такое нельзя.
  *
- * Поэтому геометрия здесь не вычисляется от исходника, а задана раз и навсегда.
+ * В новом плане геометрия выбирается по положению головы автора и сохраняется
+ * в EditPlan.cardRect на весь ролик. CARD — исходный формат подготовки медиатеки
+ * и совместимость со старыми планами без измерения головы.
  * Материал приводится к ней масштабированием с сохранением пропорций и аккуратной
  * обрезкой: ничего не растягивается, чёрных полей не возникает.
  *
@@ -16,8 +18,20 @@
 
 export const FRAME = { w: 1080, h: 1920 } as const;
 
-/** Карточка. Значения фиксированы: разного размера вставок больше не бывает. */
+/** Исходная карточка медиатеки; итоговый размер записи хранится в EditPlan.cardRect. */
 export const CARD = { w: 900, h: 506, x: 90, y: 120 } as const;
+export type CardRect = { w: number; h: number; x: number; y: number };
+export const cardFilter = (c: CardRect) => `scale=${c.w}:${c.h}:force_original_aspect_ratio=increase,crop=${c.w}:${c.h}:(iw-${c.w})/2:(ih-${c.h})*0.15`;
+export const cardCrop = (c: CardRect) => `crop=${c.w}:${c.h}:${c.x}:${c.y}`;
+
+/** Stable geometry for the whole recording, with space above the highest sampled crown. */
+export function cardAboveHead(headTop: number): CardRect {
+  if (!Number.isFinite(headTop) || headTop < 0 || headTop > 1920) throw new Error("Некорректная граница головы");
+  const y = 48, clearance = 72;
+  const w = Math.min(780, Math.floor((headTop - clearance - y) * 16 / 9 / 2) * 2);
+  if (w < 320) throw new Error("Над головой недостаточно места для читаемой картинки; нужен кадр с большим пространством сверху");
+  return { w, h: Math.floor(w * 9 / 16 / 2) * 2, x: (1080 - w) / 2, y };
+}
 
 /** Минимальный исходник: мельче — это уже мыло на экране. */
 /**

@@ -7,7 +7,7 @@ import { runFfmpeg, probe } from "../lib/ffmpeg";
 import { buildCleanSource, renderPlan } from "../lib/pipeline";
 import { checkRenderConformance, checkPointsFor } from "../lib/renderConformance";
 import { frameHash, hamming } from "../lib/sceneHash";
-import { CARD, CARD_FILTER, CARD_CROP, AUTHOR_CROP } from "../lib/topInset";
+import { CARD, CARD_FILTER, CARD_CROP, AUTHOR_CROP, cardAboveHead } from "../lib/topInset";
 import { DEFAULT_CAPTION_STYLE, EditPlan } from "../lib/editPlan";
 import { segmentWindowDecision, SEGMENT_WINDOW, WINDOW_OFFSETS, pickFrameForNeeds } from "../lib/storyAssetPack";
 import { packDistribution, montagePreflight } from "../lib/montageValidator";
@@ -51,6 +51,20 @@ async function refHash(dir: string, src: string): Promise<bigint> {
   await runFfmpeg(["-i", src, "-frames:v", "1", "-vf", CARD_FILTER, f]);
   return (await frameHash(f, dir))!;
 }
+
+test("measured smaller card renders at its planned position after an author-only hook", { timeout: 120_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-headroom-"));
+  try {
+    await fixture(dir);
+    const plan: EditPlan = { version: 1, duration: 5, captionStyle: { ...DEFAULT_CAPTION_STYLE },
+      cardRect: cardAboveHead(480),
+      events: [{ type: "B_ROLL", start: 1.5, end: 5, file: path.join(dir, "still.png") }] };
+    await renderPlan(dir, path.join(dir, "aroll.mp4"), plan, 5, () => {});
+    const conf = await checkRenderConformance(dir, path.join(dir, "out.mp4"), plan);
+    assert.equal(conf.ok, true, JSON.stringify(conf));
+    assert.equal(conf.passed, 3);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("continuous picture includes the first and last encoded frames despite duration rounding", { timeout: 120_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-continuous-"));

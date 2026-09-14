@@ -28,7 +28,8 @@ import { runAiFilmStage } from "./aiFilm/run";
 import { renderFilmComposite } from "./aiFilm/composite";
 import { checkAiSegments } from "./aiFilm/check";
 import type { AiFilmPlan, GroupClip } from "./aiFilm/types";
-import { CARD, CARD_FILTER, authorFitFilter } from "./topInset";
+import { CARD, cardFilter, authorFitFilter } from "./topInset";
+import { measureAuthorCard } from "./authorHeadroom";
 export { authorFitFilter } from "./topInset";
 import { applyScriptFormatting } from "./scriptFormat";
 import { attachScriptPunctuation } from "./scriptPunctuation";
@@ -504,6 +505,9 @@ export async function processProject(id: string): Promise<void> {
         fit: authorFitFilter(src.displayWidth, src.displayHeight),
       });
     } else {
+      setStep(id, "Положение картинки над головой автора", 38);
+      plan.cardRect = await measureAuthorCard(dir, source, effDur);
+      fs.writeFileSync(path.join(dir, "edit-plan.json"), JSON.stringify(plan, null, 2), "utf8");
       await renderPlan(dir, source, plan, effDur, (f) =>
         setStep(id, "Монтаж видео", 38 + Math.round(f * 52)),
       );
@@ -791,6 +795,7 @@ export async function renderPlan(
   onProgress: (f: number) => void,
 ): Promise<void> {
   const music = hasMusic();
+  const card = plan.cardRect ?? CARD;
   let brolls = plan.events.filter((e) => e.type === "B_ROLL" && e.file);
   // источник — clean.mp4 (уже 1080×1920) или raw без склеек: в обоих случаях кадр целиком, без обрезки
   const src = await probe(path.isAbsolute(source) ? source : path.join(dir, source));
@@ -819,9 +824,9 @@ export async function renderPlan(
     const inputIdx = (music ? 2 : 1) + k;
     const clipDur = (b.end - b.start).toFixed(3);
     chain +=
-      `;[${inputIdx}:v]${CARD_FILTER},fps=30,` +
+      `;[${inputIdx}:v]${cardFilter(card)},fps=30,` +
       `trim=duration=${clipDur},setpts=PTS-STARTPTS+${b.start.toFixed(3)}/TB[bv${k}]` +
-      `;[${current}][bv${k}]overlay=${CARD.x}:${CARD.y}:eof_action=repeat:enable='between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})'[vo${k}]`;
+      `;[${current}][bv${k}]overlay=${card.x}:${card.y}:eof_action=repeat:enable='between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})'[vo${k}]`;
     current = `vo${k}`;
   });
 

@@ -3,8 +3,10 @@
 import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button, ErrorState, Field, StatusBadge, TechDetails } from "@/app/components/ui";
+import TikTokBrowserSettings from "@/app/components/TikTokBrowserSettings";
 
 type SettingsView = {
+  tiktokBrowser?: boolean;
   anthropicKey: string;
   openaiKey: string;
   elevenLabsKey: string;
@@ -245,6 +247,7 @@ function Settings() {
         <p className="hint" style={{ marginBottom: 12 }}>Публикация идёт в активный аккаунт каждой платформы. Новое подключение не стирает прежние.</p>
         <div className="settings-grid">
           {PLATFORMS.map((p) => {
+            if (p.key === "tiktok" && s.tiktokBrowser) return <TikTokBrowserSettings key="tiktok" />;
             const list = s.accounts[p.key] ?? [];
             const active = list.find((a) => a.active);
             return (

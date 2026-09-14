@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { browserPublication } from "./tiktok/state";
 import type { StoryResearchPack } from "./storyResearch";
 import type { AiFilmState } from "./aiFilm/types";
 import type { ScriptBeat } from "./ai";
@@ -16,7 +17,7 @@ export type ProcessingState = {
 
 export type Publication = {
   platform: Platform;
-  status: "demo" | "published" | "error" | "skipped";
+  status: "demo" | "published" | "error" | "skipped" | "queued" | "running" | "needs_login" | "unknown" | "cancelled";
   url?: string;
   message?: string;
   at: string;
@@ -205,11 +206,17 @@ function writeDb(db: Db) {
 }
 
 export function listProjects(): Project[] {
-  return readDb().projects.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return readDb().projects.map(withBrowserPublication).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export function getProject(id: string): Project | null {
-  return readDb().projects.find((p) => p.id === id) ?? null;
+  const project = readDb().projects.find((p) => p.id === id);
+  return project ? withBrowserPublication(project) : null;
+}
+
+function withBrowserPublication(project: Project): Project {
+  const publication = browserPublication(project.id);
+  return publication ? { ...project, publications: [...project.publications.filter(p => p.platform !== "tiktok"), publication] } : project;
 }
 
 export function createProject(topic: string): Project {

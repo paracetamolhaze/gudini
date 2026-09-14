@@ -1150,6 +1150,7 @@ function CoverBlock({ project, reload }: { project: Project; reload: () => Promi
 /* ================== Экран публикации TikTok (Direct Post) ================== */
 
 type TikTokScreen = {
+  browser?: boolean;
   direct: boolean;
   connected: boolean;
   creator: {
@@ -1356,6 +1357,11 @@ type AccountView = { id: string; label: string; at: string; active: boolean };
 
 /** Итог публикации словами: успех, черновик, демо, пропуск и ошибка — разные состояния. */
 function publicationView(pub: Publication): { tone: StatusTone; text: string } {
+  if (pub.status === "queued") return { tone: "accent", text: "В очереди" };
+  if (pub.status === "running") return { tone: "accent", text: "Публикуется" };
+  if (pub.status === "needs_login") return { tone: "error", text: "Нужен вход в TikTok" };
+  if (pub.status === "unknown") return { tone: "error", text: "Нужно проверить результат" };
+  if (pub.status === "cancelled") return { tone: "neutral", text: "Отменено" };
   if (pub.status === "published") {
     const draft = /черновик|private/i.test(pub.message ?? "");
     return draft ? { tone: "accent", text: "Черновик" } : { tone: "success", text: "Опубликовано" };
@@ -1453,6 +1459,13 @@ function PublishStep({
 
   const [tiktokScreen, setTiktokScreen] = useState<TikTokScreen | null>(null);
   const [tiktokOpen, setTiktokOpen] = useState(false);
+  const [tiktokSchedule, setTiktokSchedule] = useState("");
+  const pendingTikTok = project.publications.some(p => p.platform === "tiktok" && ["queued", "running", "needs_login"].includes(p.status));
+  useEffect(() => {
+    if (!pendingTikTok) return;
+    const timer = setInterval(() => void reload(), 3000);
+    return () => clearInterval(timer);
+  }, [pendingTikTok, reload]);
   const [batchNote, setBatchNote] = useState<string[]>([]);
   useEffect(() => {
     fetch(`/api/projects/${project.id}/tiktok`)
@@ -1512,6 +1525,10 @@ function PublishStep({
       for (const { key, name } of PLATFORMS) {
         if (!connected?.[key]) {
           notes.push(`${name}: не подключён, пропущен`);
+          continue;
+        }
+        if (key === "tiktok" && mode === "draft" && tiktokScreen?.browser) {
+          notes.push("TikTok: фоновая публикация включена, черновики пропущены");
           continue;
         }
         if (key === "tiktok" && mode === "live" && tiktokScreen?.direct) {
@@ -1642,11 +1659,13 @@ function PublishStep({
                             {tiktokOpen ? "Скрыть форму" : pub ? "Опубликовать снова" : "Опубликовать"}
                           </Button>
                         ) : (
-                          <Button size="sm" onClick={() => publishTo(key)} busy={busy === key} disabled={busy !== null}>
-                            {pub ? "Опубликовать снова" : "Опубликовать"}
+                          <Button size="sm" onClick={() => publishTo(key, key === "tiktok" && tiktokScreen?.browser && tiktokSchedule ? { scheduledAt: new Date(tiktokSchedule).toISOString() } : {})} busy={busy === key} disabled={busy !== null || (key === "tiktok" && ["queued", "running", "needs_login", "unknown"].includes(pub?.status ?? "") && Boolean(tiktokScreen?.browser))}>
+                            {key === "tiktok" && tiktokScreen?.browser ? (pendingTikTok ? "В очереди" : tiktokSchedule ? "Запланировать" : "Опубликовать в фоне") : pub ? "Опубликовать снова" : "Опубликовать"}
                           </Button>
                         )}
-                        {key !== "instagram" && (
+                        {key === "tiktok" && tiktokScreen?.browser && !pendingTikTok && <input aria-label="Время публикации TikTok (ваш часовой пояс)" type="datetime-local" value={tiktokSchedule} onChange={e => setTiktokSchedule(e.target.value)} style={{ maxWidth: 220 }} />}
+                        {key === "tiktok" && tiktokScreen?.browser && pub?.status === "unknown" && <Link href="/settings">Проверить результат</Link>}
+                        {key !== "instagram" && !(key === "tiktok" && tiktokScreen?.browser) && (
                           <Button
                             size="sm"
                             variant="secondary"
@@ -1657,7 +1676,7 @@ function PublishStep({
                             В черновики
                           </Button>
                         )}
-                        {key === "tiktok" && project.meta && !tiktokScreen?.direct && (
+                        {key === "tiktok" && project.meta && !tiktokScreen?.direct && !tiktokScreen?.browser && (
                           <Button size="sm" variant="ghost" onClick={copyCaption} title="TikTok не принимает подпись через API при заливке в черновики — вставьте её в приложении">
                             {captionCopied ? "Скопировано" : "Скопировать подпись"}
                           </Button>

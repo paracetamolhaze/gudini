@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import { getProject, getSettings, projectDir, updateActiveTokens, Platform, Publication, updateProject } from "./store";
 import { runFfmpeg } from "./ffmpeg";
+import { browserTikTokEnabled } from "./tiktok/state";
+import { tikTokBrowserRequest } from "./tiktok/client";
 
 export type PublishResult = Omit<Publication, "at">;
 
@@ -25,7 +27,7 @@ export type TikTokPostOptions = {
  */
 export type PublishMode = "live" | "draft";
 
-export type PublishOptions = { tiktok?: TikTokPostOptions; mode?: PublishMode; style?: "cards" | "ai_film" };
+export type PublishOptions = { tiktok?: TikTokPostOptions; mode?: PublishMode; style?: "cards" | "ai_film"; scheduledAt?: string };
 
 /**
  * Обложка первым кадром. YouTube для Shorts и TikTok не показывают свою картинку, даже
@@ -71,6 +73,11 @@ async function withCoverLead(dir: string, videoFile: string, coverFile: string |
 
 /** Публикация на платформу. Без подключённого аккаунта — демо-режим (симуляция). */
 export async function publish(id: string, platform: Platform, options: PublishOptions = {}): Promise<Publication> {
+  if (platform === "tiktok" && browserTikTokEnabled()) {
+    if (options.mode === "draft") throw new Error("Фоновый TikTok публикует сразу или по расписанию. Черновики здесь не поддерживаются.");
+    const { job } = await tikTokBrowserRequest("enqueue", { projectId: id, style: options.style, scheduledAt: options.scheduledAt });
+    return { platform: "tiktok", status: job.status, message: job.message, at: job.at, url: job.url };
+  }
   const project = getProject(id);
   // выбранный стиль публикуется из своей копии; без выбора — последний смонтированный ролик
   const source = options.style && project?.outputs?.[options.style]?.file ? project.outputs[options.style]!.file : project?.processedVideo;

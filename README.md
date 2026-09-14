@@ -27,10 +27,16 @@ npm run dev
 | `ANTHROPIC_API_KEY` | Уникальные сценарии и описания от Claude |
 | `OPENAI_API_KEY` | Whisper: субтитры точно по произнесённой речи |
 | `GOOGLE_CLIENT_ID/SECRET` | Публикация в YouTube Shorts (YouTube Data API v3) |
-| `TIKTOK_CLIENT_KEY/SECRET` | Публикация в TikTok (Content Posting API) |
+| `TIKTOK_BROWSER_TOKEN` | Внутреннее соединение с фоновым браузером TikTok; вход в аккаунт — в Настройках |
 | `META_APP_ID/SECRET` + `PUBLIC_BASE_URL` | Публикация в Instagram Reels (Graph API, нужен публичный URL сервера) |
 
 Подключение аккаунтов платформ — кнопки «Подключить …» в Настройках (OAuth). Redirect URI для приложений разработчика: `http://localhost:3000/api/auth/<youtube|tiktok|instagram>/callback`.
+
+TikTok в Docker использует отдельный фоновый браузер: сервис `tiktok-browser`, без ключей
+TikTok Developers. Настройки → TikTok → «Подключить TikTok» → вход по QR-коду.
+Публикация сразу, по расписанию или автоматически после нового монтажа.
+Подробности и локальный запуск: [docs/TIKTOK-BROWSER.md](docs/TIKTOK-BROWSER.md).
+Старый OAuth/API-путь остаётся доступен при `TIKTOK_TRANSPORT=api`.
 
 ## Где лежат данные
 

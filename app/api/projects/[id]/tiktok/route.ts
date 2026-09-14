@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProject } from "@/lib/store";
 import { coverLeadSec, tiktokCreatorInfo, tiktokDirectPostEnabled } from "@/lib/publish";
+import { browserTikTokEnabled, readTikTokState } from "@/lib/tiktok/state";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -13,6 +14,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   const project = getProject(id);
   if (!project) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
+  if (browserTikTokEnabled()) return NextResponse.json({ browser: true, direct: false, connected: readTikTokState().connected });
 
   const direct = tiktokDirectPostEnabled();
   const caption = [project.meta?.title ?? project.topic, project.meta?.description ?? "", (project.meta?.hashtags ?? []).join(" ")]

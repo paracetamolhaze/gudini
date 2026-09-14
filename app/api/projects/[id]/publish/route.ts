@@ -9,7 +9,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
   const project = getProject(id);
   if (!project) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
 
-  const { platform, tiktok, mode, style } = await req.json();
+  const { platform, tiktok, mode, style, scheduledAt } = await req.json();
   if (!["tiktok", "youtube", "instagram"].includes(platform)) {
     return NextResponse.json({ error: "Неизвестная платформа" }, { status: 400 });
   }
@@ -18,6 +18,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
       ...(tiktok && typeof tiktok === "object" ? { tiktok } : {}),
       mode: mode === "draft" ? "draft" : "live",
       ...(style === "cards" || style === "ai_film" ? { style } : {}),
+      ...(typeof scheduledAt === "string" ? { scheduledAt } : {}),
     });
     return NextResponse.json({ publication, project: getProject(id) });
   } catch (e: any) {

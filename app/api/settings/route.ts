@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { coverFontFile, getSettings, hasFace, hasMusic, listAccounts, saveSettings } from "@/lib/store";
+import { browserTikTokEnabled, readTikTokState } from "@/lib/tiktok/state";
 
 function mask(value?: string): string {
   if (!value) return "";
@@ -8,7 +9,10 @@ function mask(value?: string): string {
 
 export async function GET() {
   const s = getSettings();
+  const tiktokBrowser = browserTikTokEnabled();
+  const browser = tiktokBrowser ? readTikTokState() : null;
   return NextResponse.json({
+    tiktokBrowser,
     anthropicKey: mask(s.anthropicKey),
     openaiKey: mask(s.openaiKey),
     elevenLabsKey: mask(s.elevenLabsKey),
@@ -30,12 +34,12 @@ export async function GET() {
     publicBaseUrl: s.publicBaseUrl ?? "",
     connected: {
       youtube: Boolean(s.youtubeTokens),
-      tiktok: Boolean(s.tiktokTokens),
+      tiktok: tiktokBrowser ? Boolean(browser?.connected) : Boolean(s.tiktokTokens),
       instagram: Boolean(s.instagramTokens),
     },
     accounts: {
       youtube: listAccounts("youtube"),
-      tiktok: listAccounts("tiktok"),
+      tiktok: tiktokBrowser ? (browser?.connected ? [{ id: "browser", label: "TikTok · фоновая сессия", at: "", active: true }] : []) : listAccounts("tiktok"),
       instagram: listAccounts("instagram"),
     },
   });

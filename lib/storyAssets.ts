@@ -7,8 +7,8 @@ import { mediaFromPage, isDirectMedia } from "./brollVideo";
 import { analyzeAsset } from "./brollRelevance";
 import { addCost } from "./pipelineCost";
 import { probe, runFfmpeg } from "./ffmpeg";
-import { mediaComplete } from "./mediaLlm";
-import { getSettings } from "./store";
+import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
+
 
 /**
  * Story Asset Pack — медиатека ОДНОЙ истории, собранная до монтажа.
@@ -493,7 +493,7 @@ export async function annotateAssets(
   assets: StoryAsset[],
   research: StoryResearchPack,
 ): Promise<StoryAsset[]> {
-  const key = getSettings().anthropicKey;
+  const key = mediaLlmAvailable();
   if (!key || !assets.length) return assets;
 
   const facts = research.facts.map((f) => `[${f.id}] ${f.text}`).join("\n");

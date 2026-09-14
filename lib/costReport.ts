@@ -238,6 +238,10 @@ export function formatCostReport(opts: ReportOptions | string = {}): string {
     L.push(`    cost:  ${usd(v.cost)}`);
   };
   show("Anthropic", "anthropic");
+  if (stat.has("codex")) {
+    show("Codex (ChatGPT subscription)", "codex");
+    L.push("    $0 = нет отдельной оплаты API; расходуется лимит подписки, процент здесь неизвестен");
+  }
   show("Brave", "brave");
 
   const orCalls = stat.get("openrouter")?.calls ?? 0;

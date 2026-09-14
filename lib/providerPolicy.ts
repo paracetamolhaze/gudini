@@ -9,7 +9,7 @@ import { CostStage, CostProvider } from "./costLedger";
  * Поэтому недоступность своего провайдера — это остановка задачи, а не переход
  * на чужого.
  *
- * Anthropic — весь текст, рассуждение и зрение, включая концепт и проверку обложки.
+ * Anthropic или явно выбранный Codex — текст, рассуждение и зрение, включая концепт и проверку обложки.
  * OpenRouter — ровно одна стадия: платная генерация картинки обложки.
  * Brave — только поиск. Расшифровка речи — только ASR-провайдер.
  */
@@ -31,26 +31,26 @@ export class ProviderPolicyError extends Error {
 /** Кто имеет право обслуживать каждую стадию. */
 export const STAGE_PROVIDERS: Record<CostStage, CostProvider[]> = {
   // понимание истории и монтаж
-  "Story Research": ["anthropic"],
-  "Script Generation": ["anthropic"],
-  "Script Beats": ["anthropic"],
-  "Media Research": ["anthropic", "brave"],
-  "Source Verification": ["anthropic"],
-  "Vision Verification": ["anthropic"],
-  "Beat Matching": ["anthropic"],
-  "Creative Director": ["anthropic"],
-  "Speech Cleanup": ["anthropic"],
-  Metadata: ["anthropic"],
+  "Story Research": ["anthropic", "codex"],
+  "Script Generation": ["anthropic", "codex"],
+  "Script Beats": ["anthropic", "codex"],
+  "Media Research": ["anthropic", "codex", "brave"],
+  "Source Verification": ["anthropic", "codex"],
+  "Vision Verification": ["anthropic", "codex"],
+  "Beat Matching": ["anthropic", "codex"],
+  "Creative Director": ["anthropic", "codex"],
+  "Speech Cleanup": ["anthropic", "codex"],
+  Metadata: ["anthropic", "codex"],
   // расшифровка речи — отдельный провайдер и только она
   Transcription: ["elevenlabs", "openai"],
   // Обложка: рассуждение и проверка — это тоже reasoning и зрение, значит Anthropic.
   // OpenRouter остаётся ровно в одном месте — платная генерация картинки.
-  "Cover Concept": ["anthropic"],
+  "Cover Concept": ["anthropic", "codex"],
   "Cover Generation": ["openrouter"],
-  "Cover QC": ["anthropic"],
+  "Cover QC": ["anthropic", "codex"],
   // AI-фильм: история — рассуждение (Anthropic); видео — только Veo на Vertex AI (Google).
   // Видео автора в Google не уходит: стадия получает промпты и то, что сама сгенерировала.
-  "AI Film Story": ["anthropic"],
+  "AI Film Story": ["anthropic", "codex"],
   "AI Film Generation": ["google"],
 };
 

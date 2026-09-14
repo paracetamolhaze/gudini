@@ -4,7 +4,8 @@ import { universePromptBlock, type UniverseProfile } from "./universe";
 import { veoPricePerSecond, round2 } from "./pricing";
 import { normalizeVeoDuration, VEO_EXTEND_SECONDS } from "./veo";
 import { auditPlan } from "./audit";
-import { storySystemPrompt } from "./story";
+import { storySystemPrompt, STORY_MODEL } from "./story";
+import { mediaEngine } from "../mediaLlm";
 import { HOLD_SECONDS } from "./types";
 import type {
   AiFilmPlan, BeatPurpose, CameraAngle, CharacterProfile, Composition, ContinuityGroup, EventDeadline, FilmShot, ObjectState, PlanIssue, PlanStats, StagingMode, StoryBeat, StoryBible, TimelineSegment,
@@ -379,7 +380,7 @@ export function compilerFingerprint(character: CharacterProfile, universe: Unive
   const second: StoryBeat = { ...PROBE_BEAT, id: "probe2", start: 8, end: 14, visualAction: "he lifts the lid", keyMoment: "the lid comes off", anchorAtSec: 1, anchorAbsSec: 9 };
   const single = shotPrompt({ character, universe, bible, beats: [PROBE_BEAT], prev: null, mode: "text", aspectRatio: "9:16", deadlines: eventDeadlines([PROBE_BEAT], 0, 8), shownSeconds: 8 });
   const pair = shotPrompt({ character, universe, bible, beats: [PROBE_BEAT, second], prev: PROBE_BEAT, mode: "extend", aspectRatio: "16:9", deadlines: eventDeadlines([PROBE_BEAT, second], 0, 6), shownSeconds: 6 });
-  return shortHash([storySystemPrompt(character, universe, coverage), single, pair, JSON.stringify(coverage)].join("\n---\n"));
+  return shortHash([storySystemPrompt(character, universe, coverage), single, pair, JSON.stringify(coverage), JSON.stringify(mediaEngine("AI Film Story", STORY_MODEL))].join("\n---\n"));
 }
 
 /** Промпт shot: WHO / WHAT / WHERE / WHAT CHANGES, кадр, камера, непрерывность, запреты. */

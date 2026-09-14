@@ -1,5 +1,5 @@
-import { mediaComplete } from "./mediaLlm";
-import { getSettings } from "./store";
+import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
+
 import { Word } from "./transcribe";
 import { EditPlan, RawPlanEvent, validatePlan, DEFAULT_CAPTION_STYLE } from "./editPlan";
 
@@ -89,7 +89,7 @@ export async function planGapFillers(
   duration: number,
   gaps: { start: number; end: number }[],
 ): Promise<RawPlanEvent[]> {
-  const key = getSettings().anthropicKey;
+  const key = mediaLlmAvailable();
   if (!key || !gaps.length) return [];
   const list = words.map((w, i) => `${i}:${w.word}[${w.start.toFixed(1)}]`).join(" ");
   const response = await mediaComplete({
@@ -131,7 +131,7 @@ export async function planEdit(
   /** моменты видимых склеек после чистки речи — их желательно накрыть перебивкой */
   seamPoints: number[] = [],
 ): Promise<EditPlan | null> {
-  const key = getSettings().anthropicKey;
+  const key = mediaLlmAvailable();
   if (!key || words.length < 10) return null;
 
   const list = words.map((w, i) => `${i}:${w.word}`).join(" ");

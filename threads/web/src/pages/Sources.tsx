@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { del, patch, post } from "../api";
 import { useAction, useFetch, fmtDate } from "../hooks";
-import { Badge, Button, Card, Empty, ErrorBox, Field, Notice, Status, Toggle } from "../ui";
+import { Badge, Button, Card, Empty, ErrorBox, Field, Label, Notice, Status, Toggle } from "../ui";
 
 type Source = {
   id: string;
@@ -89,7 +89,7 @@ export default function Sources() {
           <div key={s.id} className="item">
             <div className="item-head">
               <div>
-                <span className="item-title">{s.name}</span> <Badge>{s.type}</Badge> <Badge>P{s.priority}</Badge> {s.translate_images && <Badge tone="accent">картинки</Badge>} {!s.enabled && <Badge tone="warn">выключен</Badge>}
+                <span className="item-title">{s.name}</span> <Label value={s.type} /> <Badge title="приоритет">P{s.priority}</Badge> {s.translate_images && <Badge tone="accent">картинки</Badge>} {!s.enabled && <Badge tone="warn">выключен</Badge>}
                 <div className="item-meta">
                   <span>{s.url ?? (s.username ? `@${s.username}` : "")}</span>
                   <span>проверка каждые {s.poll_minutes} мин</span>

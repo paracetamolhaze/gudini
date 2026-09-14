@@ -23,39 +23,113 @@ export const STATUS_TONE: Record<string, Tone> = {
   PUBLISHED: "success",
   SENT: "success",
   QA_PASSED: "success",
+  VERIFIED: "success",
   APPROVED: "accent",
   SCHEDULED: "accent",
   APPROVED_FOR_GENERATION: "accent",
   GENERATED: "accent",
-  DRAFT: "neutral",
-  NEW: "neutral",
-  FOUND: "neutral",
   QUEUED: "accent",
-  NEEDS_REVIEW: "warn",
-  PERMISSION_REQUIRED: "warn",
-  RATE_LIMITED: "warn",
-  PENDING: "neutral",
-  REJECTED: "error",
-  FAILED: "error",
-  ERROR: "error",
-  EXPIRED: "neutral",
-  SKIPPED: "neutral",
-  DUPLICATE: "neutral",
   PUBLISHING: "accent",
   SENDING: "accent",
   GENERATING: "accent",
   ANALYZING: "accent",
   CANDIDATE: "accent",
   RENDERED: "accent",
-  VERIFIED: "success",
+  NEEDS_REVIEW: "warn",
+  PERMISSION_REQUIRED: "warn",
+  RATE_LIMITED: "warn",
   UNVERIFIED: "warn",
+  REJECTED: "error",
+  FAILED: "error",
+  ERROR: "error",
   CONTRADICTED: "error",
-  NOT_CHECKABLE: "neutral",
+};
+
+/** Russian captions for technical statuses; the raw value stays in the tooltip. */
+export const STATUS_LABEL: Record<string, string> = {
+  OK: "ок",
+  NEW: "новый",
+  ANALYZING: "анализируется",
+  ANALYZED: "проанализирован",
+  DUPLICATE: "дубликат",
+  CANDIDATE: "кандидат",
+  DISCOVERED: "найден",
+  APPROVED_FOR_GENERATION: "к генерации",
+  GENERATING: "пишется",
+  GENERATED: "черновик создан",
+  REJECTED: "отклонён",
+  EXPIRED: "просрочен",
+  FAILED: "ошибка",
+  ERROR: "ошибка",
+  DRAFT: "черновик",
+  NEEDS_REVIEW: "нужна проверка",
+  APPROVED: "одобрен",
+  SCHEDULED: "запланирован",
+  PUBLISHING: "публикуется",
+  PUBLISHED: "опубликован",
+  PENDING: "ожидает решения",
+  SENDING: "отправляется",
+  SENT: "отправлен",
+  SKIPPED: "пропущен",
+  FOUND: "найден",
+  QUEUED: "в очереди",
+  QA_PASSED: "QA пройден",
+  RENDERED: "отрисован",
+  DOWNLOADED: "загружен",
+  OCR_DONE: "распознан",
+  TRANSLATED: "переведён",
+  VERIFIED: "подтверждено",
+  UNVERIFIED: "не подтверждено",
+  CONTRADICTED: "противоречит рынку",
+  NOT_CHECKABLE: "не проверяемо",
+  PERMISSION_REQUIRED: "нужно разрешение API",
+  RATE_LIMITED: "лимит API",
+  DISABLED: "выключен",
+  PROPOSED: "предложено",
+  ACCEPTED: "принято",
+  FACT: "факт",
+  OPINION: "мнение",
+  RUMOR: "слух",
+  PREDICTION: "прогноз",
+};
+
+export const MODE_LABEL: Record<string, string> = { OFF: "выключен", DRAFT: "только черновики", REVIEW: "на одобрение", AUTO: "автопилот" };
+export const TYPE_LABEL: Record<string, string> = {
+  THREADS_PROFILE: "профиль Threads",
+  THREADS_SEARCH: "поиск Threads",
+  RSS: "RSS",
+  NEWS: "новости",
+  MANUAL: "вручную",
+  OWN_POST_REPLY: "комментарий под нашим постом",
+  NESTED_REPLY: "ответ в ветке",
+  MENTION: "упоминание",
+  PUBLIC_POST_REPLY: "чужой пост",
+  NEWS_POST: "новость",
+  OPINION: "мнение",
+  EXPLAINER: "разбор",
+  HOT_TAKE: "тезис",
+  SHORT: "коротко",
+  SKIP: "пропустить",
+  REPLY: "ответить",
+  REPLY_AND_QUESTION: "ответить и спросить",
 };
 
 export function Status({ value }: { value: string | null | undefined }) {
   if (!value) return <Badge>—</Badge>;
-  return <Badge tone={STATUS_TONE[value] ?? "neutral"}>{value}</Badge>;
+  return (
+    <Badge tone={STATUS_TONE[value] ?? "neutral"} title={value}>
+      {STATUS_LABEL[value] ?? value}
+    </Badge>
+  );
+}
+
+export function Label({ value, tone = "neutral" }: { value: string | null | undefined; tone?: Tone }) {
+  if (!value) return null;
+  return (
+    <Badge tone={tone} title={value}>
+      {TYPE_LABEL[value] ?? STATUS_LABEL[value] ?? value}
+    </Badge>
+  );
 }
 
 export function Card({ title, children, actions, className = "" }: { title?: ReactNode; children: ReactNode; actions?: ReactNode; className?: string }) {
@@ -132,5 +206,18 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       <span>{label}</span>
     </label>
+  );
+}
+
+/** Readiness row: green check or the exact thing to do. */
+export function Check({ ok, label, hint }: { ok: boolean; label: string; hint?: ReactNode }) {
+  return (
+    <div className={`check ${ok ? "check-ok" : "check-bad"}`}>
+      <span className="check-mark">{ok ? "✓" : "✗"}</span>
+      <span>
+        <span className="check-label">{label}</span>
+        {!ok && hint && <span className="check-hint">{hint}</span>}
+      </span>
+    </div>
   );
 }

@@ -37,6 +37,11 @@ export function registerStatusRoutes(app: FastifyInstance, api: string): void {
     );
     const lastPost = await one<{ published_at: Date }>(`SELECT published_at FROM publications ORDER BY published_at DESC LIMIT 1`);
     const account = await one<{ username: string; threads_user_id: string; token_expires_at: Date | null }>(`SELECT username, threads_user_id, token_expires_at FROM accounts ORDER BY updated_at DESC LIMIT 1`);
+    const e = env();
+    const llmKey = Boolean(e.LLM_API_KEY || e.OPENROUTER_API_KEY || e.OPENAI_API_KEY || e.ANTHROPIC_API_KEY || e.GEMINI_API_KEY);
+    const last = await one<{ source_check: Date | null; source_post: Date | null; draft: Date | null }>(
+      `SELECT (SELECT max(last_checked_at) FROM sources) AS source_check, (SELECT max(created_at) FROM source_posts) AS source_post, (SELECT max(created_at) FROM drafts) AS draft`,
+    );
     return {
       mode: settings.mode,
       killSwitch: settings.killSwitch,
@@ -46,7 +51,8 @@ export function registerStatusRoutes(app: FastifyInstance, api: string): void {
       sources,
       lastPostAt: lastPost?.published_at ?? null,
       account: account ? { username: account.username, userId: account.threads_user_id, tokenExpiresAt: account.token_expires_at ?? threadsClient().tokenExpiresAt ?? null } : null,
-      health: { db, redis, threads, llmProvider: env().LLM_PROVIDER },
+      health: { db, redis, threads, llmProvider: e.LLM_PROVIDER },
+      readiness: { llmKey, publicBaseUrl: Boolean(e.PUBLIC_BASE_URL), lastSourceCheckAt: last?.source_check ?? null, lastSourcePostAt: last?.source_post ?? null, lastDraftAt: last?.draft ?? null },
       queues,
     };
   });

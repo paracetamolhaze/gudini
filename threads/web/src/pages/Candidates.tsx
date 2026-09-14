@@ -66,13 +66,13 @@ export default function Candidates({ navigate }: { navigate: (p: string) => void
           <div key={c.id} className="item">
             <div className="item-head">
               <div>
-                <span className="item-title">{c.topic ?? "(без темы)"}</span> <Status value={c.status} /> <Badge>{c.category}</Badge> <Badge>{c.priority}</Badge> {a?.isBreaking && <Badge tone="error">breaking</Badge>}
+                <span className="item-title">{c.topic ?? "(без темы)"}</span> <Status value={c.status} /> <Badge>{c.category}</Badge> <Badge title="приоритет">{c.priority}</Badge> {a?.isBreaking && <Badge tone="error">срочная</Badge>}
                 <div className="item-meta"><span>{fmtDate(c.created_at)}</span><span>истекает {fmtDate(c.expires_at)}</span>{c.analysis_json?.sourcePosts && c.analysis_json.sourcePosts.length > 1 && <span>{c.analysis_json.sourcePosts.length} источника события</span>}</div>
               </div>
               <div className="row">
-                <Button size="sm" tone="primary" disabled={c.status === "EXPIRED"} onClick={() => void act.run("Генерация", () => post(`/candidates/${c.id}/generate`), reload)}>Generate</Button>
-                <Button size="sm" onClick={() => void act.run("Отклонить", () => post(`/candidates/${c.id}/reject`), reload)}>Reject</Button>
-                <Button size="sm" tone="danger" onClick={() => { if (confirm("Отключить источник этого кандидата?")) void act.run("Отключить источник", () => post(`/candidates/${c.id}/ignore-source`), reload); }}>Ignore source</Button>
+                <Button size="sm" tone="primary" disabled={c.status === "EXPIRED"} onClick={() => void act.run("Генерация", () => post(`/candidates/${c.id}/generate`), reload)}>Написать пост</Button>
+                <Button size="sm" onClick={() => void act.run("Отклонить", () => post(`/candidates/${c.id}/reject`), reload)}>Отклонить</Button>
+                <Button size="sm" tone="danger" onClick={() => { if (confirm("Отключить источник этого кандидата?")) void act.run("Отключить источник", () => post(`/candidates/${c.id}/ignore-source`), reload); }}>Отключить источник</Button>
               </div>
             </div>
             <div className="split">

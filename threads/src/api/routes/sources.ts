@@ -31,6 +31,12 @@ function validateShape(input: z.infer<typeof sourceBody>): void {
 export function registerSourceRoutes(app: FastifyInstance, api: string): void {
   app.get(`${api}/sources`, async () => ({ sources: await listSources() }));
 
+  /** Force a poll of every enabled source now (the scheduler does this on its own interval). */
+  app.post(`${api}/sources/poll`, async () => {
+    const jobId = await enqueue("source", "source:poll", {}, { jobId: `source-poll-manual-${Date.now()}`, priority: 1 });
+    return { queued: true, jobId };
+  });
+
   app.post(`${api}/sources`, async (req, reply) => {
     const parsed = sourceBody.safeParse(req.body);
     if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));

@@ -52,7 +52,7 @@ export default function Analytics() {
             <div className="grid grid-stats">
               <Stat label="Постов" value={a.data.report.totals.posts} />
               <Stat label="Просмотров" value={fmtNum(a.data.report.totals.views)} />
-              <Stat label="Engagement rate" value={fmtPct(a.data.report.totals.engagementRate)} />
+              <Stat label="Вовлечённость (ER)" value={fmtPct(a.data.report.totals.engagementRate)} />
               <Stat label="Ответов" value={a.data.report.totals.replies} />
               <Stat label="Лайков" value={a.data.report.totals.likes} />
             </div>

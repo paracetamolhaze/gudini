@@ -58,7 +58,7 @@ export default function Logs() {
   const logs = data?.logs ?? [];
   return (
     <Card
-      title="Activity log"
+      title="Журнал действий"
       actions={
         <>
           <select value={event} onChange={(e) => { setEvent(e.target.value); setBefore(null); }} style={{ width: 220 }}>

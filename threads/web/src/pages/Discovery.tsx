@@ -21,7 +21,7 @@ export default function Discovery({ navigate }: { navigate: (p: string) => void 
   };
   return (
     <>
-      <Card title="Watch keywords" actions={<Button size="sm" onClick={() => void act.run("Запустить поиск", () => post("/discovery/run"), posts.reload)}>Искать сейчас</Button>}>
+      <Card title="Ключевые слова для поиска" actions={<Button size="sm" onClick={() => void act.run("Запустить поиск", () => post("/discovery/run"), posts.reload)}>Искать сейчас</Button>}>
         <div className="pill-list">
           {keywords.map((k) => <span key={k} className="pill">{k}<button onClick={() => save(keywords.filter((x) => x !== k))}>×</button></span>)}
         </div>

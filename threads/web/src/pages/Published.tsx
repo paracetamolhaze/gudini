@@ -1,5 +1,5 @@
 import { useFetch, fmtDate, fmtNum } from "../hooks";
-import { Badge, Card, Empty, ErrorBox } from "../ui";
+import { Badge, Card, Empty, ErrorBox, Label } from "../ui";
 
 type Pub = { id: string; permalink: string | null; threads_post_id: string; published_text: string; published_at: string; dry_run: boolean; topic: string | null; category: string | null; views: number | null; likes: number | null; replies: number | null; reposts: number | null; quotes: number | null; captured_at: string | null; meta_json: { type?: string; parts?: number } | null };
 
@@ -21,7 +21,7 @@ export default function Published() {
                   <tr key={p.id}>
                     <td className="small">{fmtDate(p.published_at)}{p.dry_run && <div><Badge tone="warn">DRY_RUN</Badge></div>}</td>
                     <td>
-                      <div className="row small"><Badge>{p.category ?? "—"}</Badge><Badge>{p.meta_json?.type ?? ""}</Badge>{p.meta_json?.parts && p.meta_json.parts > 1 && <Badge>тред {p.meta_json.parts}</Badge>}{p.permalink && <a href={p.permalink} target="_blank" rel="noreferrer">открыть</a>}</div>
+                      <div className="row small"><Badge>{p.category ?? "—"}</Badge><Label value={p.meta_json?.type ?? null} />{p.meta_json?.parts && p.meta_json.parts > 1 && <Badge>тред {p.meta_json.parts}</Badge>}{p.permalink && <a href={p.permalink} target="_blank" rel="noreferrer">открыть</a>}</div>
                       <div className="clamp">{p.published_text}</div>
                     </td>
                     <td>{fmtNum(p.views)}</td><td>{fmtNum(p.likes)}</td><td>{fmtNum(p.replies)}</td><td>{fmtNum(p.reposts)}</td><td>{fmtNum(p.quotes)}</td>

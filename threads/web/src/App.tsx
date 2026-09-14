@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { get, post } from "./api";
 import { useFetch, useRoute } from "./hooks";
-import { Badge, ErrorBox } from "./ui";
+import { Badge, ErrorBox, MODE_LABEL } from "./ui";
 import Overview from "./pages/Overview";
 import Sources from "./pages/Sources";
 import Candidates from "./pages/Candidates";
@@ -27,24 +27,25 @@ export type OverviewData = {
   lastPostAt: string | null;
   account: { username: string; userId: string; tokenExpiresAt: string | null } | null;
   health: { db: { ok: boolean; message: string }; redis: { ok: boolean; message: string }; threads: { ok: boolean; message: string; username?: string }; llmProvider: string };
+  readiness: { llmKey: boolean; publicBaseUrl: boolean; lastSourceCheckAt: string | null; lastSourcePostAt: string | null; lastDraftAt: string | null };
   queues: Record<string, { waiting: number; active: number; delayed: number; failed: number }>;
 };
 
 const PAGES: Array<{ id: string; label: string; badge?: (o: OverviewData) => number }> = [
-  { id: "overview", label: "Overview" },
-  { id: "sources", label: "Sources", badge: (o) => o.sources?.errors ?? 0 },
-  { id: "candidates", label: "Candidates" },
-  { id: "drafts", label: "Drafts", badge: (o) => o.today.drafts_waiting },
-  { id: "queue", label: "Queue", badge: (o) => o.today.scheduled },
-  { id: "published", label: "Published" },
-  { id: "replies", label: "Replies", badge: (o) => o.today.needs_review },
-  { id: "discovery", label: "Discovery" },
-  { id: "images", label: "Images" },
-  { id: "analytics", label: "Analytics" },
-  { id: "voice", label: "Voice" },
-  { id: "prompts", label: "Prompts" },
-  { id: "settings", label: "Settings" },
-  { id: "logs", label: "Logs" },
+  { id: "overview", label: "Обзор" },
+  { id: "sources", label: "Источники", badge: (o) => o.sources?.errors ?? 0 },
+  { id: "candidates", label: "Кандидаты" },
+  { id: "drafts", label: "Черновики", badge: (o) => o.today.drafts_waiting },
+  { id: "queue", label: "Очередь" },
+  { id: "published", label: "Опубликовано" },
+  { id: "replies", label: "Ответы", badge: (o) => o.today.needs_review },
+  { id: "discovery", label: "Чужие посты" },
+  { id: "images", label: "Картинки" },
+  { id: "analytics", label: "Аналитика" },
+  { id: "voice", label: "Голос" },
+  { id: "prompts", label: "Промпты" },
+  { id: "settings", label: "Настройки" },
+  { id: "logs", label: "Журнал" },
 ];
 
 export default function App() {
@@ -61,7 +62,7 @@ export default function App() {
   async function toggleKill() {
     if (!o) return;
     const stop = !o.killSwitch;
-    if (stop && !confirm("Остановить автопилот? Новые публикации, ответы и engagement будут запрещены немедленно.")) return;
+    if (stop && !confirm("Остановить автопилот? Новые публикации, ответы и работа с чужими постами будут запрещены немедленно.")) return;
     setKillBusy(true);
     setKillError("");
     try {
@@ -129,15 +130,15 @@ export default function App() {
       <main className="main">
         <div className="topbar">
           <div className="topbar-left">
-            <h1 className="page-title">{PAGES.find((p) => p.id === route.page)?.label ?? "Overview"}</h1>
-            {o && <Badge tone={o.mode === "AUTO" ? "success" : o.mode === "OFF" ? "error" : "accent"}>режим {o.mode}</Badge>}
-            {o?.dryRun && <Badge tone="warn" title="Threads только читается; publish/reply пишутся в лог">DRY_RUN</Badge>}
-            {o?.killSwitch && <Badge tone="error">STOPPED</Badge>}
+            <h1 className="page-title">{PAGES.find((p) => p.id === route.page)?.label ?? "Обзор"}</h1>
+            {o && <Badge tone={o.mode === "AUTO" ? "success" : o.mode === "OFF" ? "error" : "accent"} title={`режим ${o.mode}`}>режим: {MODE_LABEL[o.mode] ?? o.mode}</Badge>}
+            {o?.dryRun && <Badge tone="warn" title="Threads только читается; публикации и ответы пишутся в журнал">DRY_RUN: ничего не отправляется</Badge>}
+            {o?.killSwitch && <Badge tone="error">ОСТАНОВЛЕН</Badge>}
             {o?.account && <Badge>@{o.account.username}</Badge>}
-            {o && !o.health.threads.ok && <Badge tone="warn" title={o.health.threads.message}>Threads: нет токена</Badge>}
+            {o && !o.health.threads.ok && <Badge tone="warn" title={o.health.threads.message}>нет токена Threads</Badge>}
           </div>
           <button className={`kill ${o?.killSwitch ? "active" : ""}`} onClick={() => void toggleKill()} disabled={killBusy || !o}>
-            {o?.killSwitch ? "ВОЗОБНОВИТЬ АВТОПИЛОТ" : "STOP AUTOPILOT"}
+            {o?.killSwitch ? "ВОЗОБНОВИТЬ АВТОПИЛОТ" : "ОСТАНОВИТЬ АВТОПИЛОТ"}
           </button>
         </div>
         <ErrorBox text={killError} />

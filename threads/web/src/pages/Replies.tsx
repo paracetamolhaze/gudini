@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { post, put } from "../api";
 import { useAction, useFetch, fmtDate } from "../hooks";
-import { Badge, Button, Card, Empty, ErrorBox, Notice, Status } from "../ui";
+import { Badge, Button, Card, Empty, ErrorBox, Label, Notice, Status } from "../ui";
 
 type Interaction = { id: string; type: string; status: string; target_username: string; target_text: string; target_permalink: string | null; target_published_at: string | null; our_text: string | null; decision: string | null; reason: string | null; decision_json: { confidence?: number; sentiment?: string; toxicityScore?: number; scores?: { total: number }; angle?: string } | null; permalink: string | null; error: string | null; created_at: string; sent_at: string | null };
 type Detail = { interaction: Interaction; chain: Array<{ username: string; text: string; is_ours: boolean }>; publication: { published_text: string; permalink: string | null } | null; discovered: { text: string; scores_json: unknown } | null };
@@ -41,7 +41,7 @@ function ReplyList({ navigate }: { navigate: (p: string) => void }) {
       {data?.interactions.map((r) => (
         <div key={r.id} className="item" style={{ cursor: "pointer" }} onClick={() => navigate(`replies/${r.id}`)}>
           <div className="item-head">
-            <div><span className="item-title">@{r.target_username}</span> <Status value={r.status} /> <Badge>{r.type}</Badge> {r.decision && <Badge tone={r.decision === "SKIP" ? "neutral" : "accent"}>{r.decision}</Badge>}
+            <div><span className="item-title">@{r.target_username}</span> <Status value={r.status} /> <Label value={r.type} /> {r.decision && <Label value={r.decision} tone={r.decision === "SKIP" ? "neutral" : "accent"} />}
               <div className="item-meta"><span>{fmtDate(r.target_published_at ?? r.created_at)}</span>{r.decision_json?.confidence !== undefined && <span>уверенность {r.decision_json.confidence}</span>}{r.decision_json?.scores && <span>балл {r.decision_json.scores.total}</span>}</div>
             </div>
           </div>
@@ -69,12 +69,12 @@ function ReplyDetail({ id, navigate }: { id: string; navigate: (p: string) => vo
   return (
     <>
       <div className="row row-between" style={{ marginBottom: 10 }}>
-        <div className="row"><Button size="sm" tone="ghost" onClick={() => navigate("replies")}>← к списку</Button><Status value={r.status} /><Badge>{r.type}</Badge>{r.decision && <Badge tone="accent">{r.decision}</Badge>}</div>
+        <div className="row"><Button size="sm" tone="ghost" onClick={() => navigate("replies")}>← к списку</Button><Status value={r.status} /><Label value={r.type} />{r.decision && <Label value={r.decision} tone="accent" />}</div>
         <div className="row">
           {editable && <Button tone="primary" disabled={text === (r.our_text ?? "")} onClick={() => run("Сохранить", () => put(`/replies/${id}`, { text }))}>Сохранить</Button>}
-          {editable && <Button tone="primary" disabled={!text.trim()} onClick={() => { if (confirm("Отправить ответ в Threads?")) run("Отправить", () => post(`/replies/${id}/send`)); }}>Send</Button>}
-          {editable && <Button onClick={() => run("Перегенерировать", () => post(`/replies/${id}/regenerate`))}>Regenerate</Button>}
-          {editable && <Button tone="danger" onClick={() => run("Пропустить", () => post(`/replies/${id}/skip`))}>Skip</Button>}
+          {editable && <Button tone="primary" disabled={!text.trim()} onClick={() => { if (confirm("Отправить ответ в Threads?")) run("Отправить", () => post(`/replies/${id}/send`)); }}>Отправить</Button>}
+          {editable && <Button onClick={() => run("Перегенерировать", () => post(`/replies/${id}/regenerate`))}>Написать заново</Button>}
+          {editable && <Button tone="danger" onClick={() => run("Пропустить", () => post(`/replies/${id}/skip`))}>Пропустить</Button>}
         </div>
       </div>
       <ErrorBox text={act.error} />

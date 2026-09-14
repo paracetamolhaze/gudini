@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { API, post, put } from "../api";
 import { useAction, useFetch, fmtDate } from "../hooks";
-import { Badge, Button, Card, Empty, ErrorBox, Notice, Score, Status } from "../ui";
+import { Badge, Button, Card, Empty, ErrorBox, Label, Notice, Score, Status } from "../ui";
 import { FactList, type Candidate } from "./Candidates";
 
 type Draft = {
@@ -57,7 +57,7 @@ function DraftList({ navigate }: { navigate: (p: string) => void }) {
         <div key={d.id} className="item" style={{ cursor: "pointer" }} onClick={() => navigate(`drafts/${d.id}`)}>
           <div className="item-head">
             <div>
-              <span className="item-title">{d.candidate?.topic ?? d.text.slice(0, 60)}</span> <Status value={d.status} /> <Badge>{d.type}</Badge> <Badge>{d.priority}</Badge> {d.asset && <Badge tone={d.asset.status === "QA_PASSED" ? "success" : "warn"}>картинка: {d.asset.status}</Badge>}
+              <span className="item-title">{d.candidate?.topic ?? d.text.slice(0, 60)}</span> <Status value={d.status} /> <Label value={d.type} /> <Badge>{d.priority}</Badge> {d.asset && <Badge tone={d.asset.status === "QA_PASSED" ? "success" : "warn"}>картинка: {d.asset.status}</Badge>}
               <div className="item-meta"><span>{fmtDate(d.created_at)}</span><span>уверенность {d.confidence ?? "—"}</span><span>риск {d.risk_score ?? "—"}</span>{d.scheduled_at && <span>слот {fmtDate(d.scheduled_at)}</span>}</div>
             </div>
           </div>
@@ -91,15 +91,15 @@ function DraftDetail({ id, navigate }: { id: string; navigate: (p: string) => vo
       <div className="row row-between" style={{ marginBottom: 10 }}>
         <div className="row">
           <Button size="sm" tone="ghost" onClick={() => navigate("drafts")}>← к списку</Button>
-          <Status value={d.status} /> <Badge>{d.type}</Badge> <Badge>{d.priority}</Badge> {c && <Badge>{c.category}</Badge>}
+          <Status value={d.status} /> <Label value={d.type} /> <Badge>{d.priority}</Badge> {c && <Badge>{c.category}</Badge>}
           <span className="dim small">{d.prompt_version} · {d.model}</span>
         </div>
         <div className="row">
           {editable && <Button tone="primary" disabled={!dirty} busy={act.busy === "Сохранить"} onClick={() => run("Сохранить", () => put(`/drafts/${id}`, { text }))}>Сохранить правку</Button>}
-          {editable && <Button onClick={() => run("Одобрить", () => post(`/drafts/${id}/approve`))}>Approve</Button>}
-          {editable && <Button onClick={() => run("Перегенерировать", () => post(`/drafts/${id}/regenerate`))}>Regenerate</Button>}
-          {editable && <Button tone="primary" onClick={() => { if (confirm("Опубликовать в Threads прямо сейчас?")) run("Опубликовать", () => post(`/drafts/${id}/publish-now`)); }}>Publish now</Button>}
-          {editable && <Button tone="danger" onClick={() => run("Отклонить", () => post(`/drafts/${id}/reject`))}>Reject</Button>}
+          {editable && <Button onClick={() => run("Одобрить", () => post(`/drafts/${id}/approve`))}>Одобрить</Button>}
+          {editable && <Button onClick={() => run("Перегенерировать", () => post(`/drafts/${id}/regenerate`))}>Написать заново</Button>}
+          {editable && <Button tone="primary" onClick={() => { if (confirm("Опубликовать в Threads прямо сейчас?")) run("Опубликовать", () => post(`/drafts/${id}/publish-now`)); }}>Опубликовать сейчас</Button>}
+          {editable && <Button tone="danger" onClick={() => run("Отклонить", () => post(`/drafts/${id}/reject`))}>Отклонить</Button>}
         </div>
       </div>
       <ErrorBox text={act.error} />
@@ -138,12 +138,12 @@ function DraftDetail({ id, navigate }: { id: string; navigate: (p: string) => vo
             </div>
           ) : <div className="small" style={{ color: "var(--success)", marginTop: 8 }}>Валидация чисел и фраз пройдена</div>}
           <div className="row" style={{ marginTop: 10 }}>
-            <Button size="sm" onClick={() => run("LIKE", () => post(`/drafts/${id}/feedback`, { rating: "LIKE" }))}>👍 Like</Button>
-            <Button size="sm" onClick={() => run("DISLIKE", () => post(`/drafts/${id}/feedback`, { rating: "DISLIKE" }))}>👎 Dislike</Button>
+            <Button size="sm" onClick={() => run("LIKE", () => post(`/drafts/${id}/feedback`, { rating: "LIKE" }))}>👍 Нравится</Button>
+            <Button size="sm" onClick={() => run("DISLIKE", () => post(`/drafts/${id}/feedback`, { rating: "DISLIKE" }))}>👎 Не нравится</Button>
             {editable && (
               <>
                 <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} style={{ width: 210 }} />
-                <Button size="sm" disabled={!when} onClick={() => run("Запланировать", () => post(`/drafts/${id}/schedule`, { scheduledAt: new Date(when).toISOString() }))}>Schedule</Button>
+                <Button size="sm" disabled={!when} onClick={() => run("Запланировать", () => post(`/drafts/${id}/schedule`, { scheduledAt: new Date(when).toISOString() }))}>Запланировать</Button>
               </>
             )}
           </div>

@@ -16,28 +16,41 @@ export type LogRow = {
   publication_id: string | null;
 };
 
-export function LogList({ logs, navigate }: { logs: LogRow[]; navigate?: (p: string) => void }) {
-  if (!logs.length) return <Empty title="Пока пусто" text="Здесь появятся решения системы с объяснениями." />;
+export function LogList({ logs, navigate, compact = false }: { logs: LogRow[]; navigate?: (p: string) => void; compact?: boolean }) {
+  if (!logs.length) return <Empty title="Пока пусто" text="Здесь появятся действия системы с объяснениями." />;
   return (
     <div>
-      {logs.map((l) => (
-        <div key={l.id} className={`log log-${l.level}`}>
-          <div className="log-time">{fmtDate(l.at)}<br /><span className="dim">{l.event}</span></div>
-          <div>
-            <div className="log-msg">{l.message}</div>
-            <div className="row small" style={{ marginTop: 4 }}>
-              {l.draft_id && navigate && <a href="#" onClick={(e) => { e.preventDefault(); navigate(`drafts/${l.draft_id}`); }}>черновик</a>}
-              {l.interaction_id && navigate && <a href="#" onClick={(e) => { e.preventDefault(); navigate(`replies/${l.interaction_id}`); }}>ответ</a>}
-              {l.details != null && (
-                <details>
-                  <summary>детали</summary>
-                  <pre className="json">{JSON.stringify(l.details, null, 2)}</pre>
-                </details>
+      {logs.map((l) => {
+        const firstLine = l.message.split("\n")[0] ?? l.message;
+        return (
+          <div key={l.id} className={`log log-${l.level}`}>
+            <div className="log-time">
+              {fmtDate(l.at)}
+              {!compact && (
+                <>
+                  <br />
+                  <span className="dim">{l.event}</span>
+                </>
+              )}
+            </div>
+            <div>
+              <div className="log-msg">{compact ? firstLine.slice(0, 160) : l.message}</div>
+              {!compact && (
+                <div className="row small" style={{ marginTop: 4 }}>
+                  {l.draft_id && navigate && <a href="#" onClick={(e) => { e.preventDefault(); navigate(`drafts/${l.draft_id}`); }}>черновик</a>}
+                  {l.interaction_id && navigate && <a href="#" onClick={(e) => { e.preventDefault(); navigate(`replies/${l.interaction_id}`); }}>ответ</a>}
+                  {l.details != null && (
+                    <details>
+                      <summary>детали</summary>
+                      <pre className="json">{JSON.stringify(l.details, null, 2)}</pre>
+                    </details>
+                  )}
+                </div>
               )}
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

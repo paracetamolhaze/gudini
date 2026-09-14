@@ -152,3 +152,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .check-bad .check-mark { color: var(--error); }
 .check-hint { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .check code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+
+.nav-more summary { padding: 8px 10px; color: var(--dim); cursor: pointer; font-size: 13px; }
+.nav-more a { padding-left: 18px; font-size: 13px; }
+.tech > summary { color: var(--dim); cursor: pointer; padding: 6px 0; }

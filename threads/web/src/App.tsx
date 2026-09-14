@@ -31,6 +31,7 @@ export type OverviewData = {
   queues: Record<string, { waiting: number; active: number; delayed: number; failed: number }>;
 };
 
+const PRIMARY = new Set(["overview", "sources", "drafts", "replies", "logs"]);
 const PAGES: Array<{ id: string; label: string; badge?: (o: OverviewData) => number }> = [
   { id: "overview", label: "Обзор" },
   { id: "sources", label: "Источники", badge: (o) => o.sources?.errors ?? 0 },
@@ -116,7 +117,7 @@ export default function App() {
           <span className="brand-sub">/ Threads</span>
         </div>
         <nav className="nav">
-          {PAGES.map((p) => {
+          {PAGES.filter((p) => PRIMARY.has(p.id)).map((p) => {
             const n = o && p.badge ? p.badge(o) : 0;
             return (
               <a key={p.id} href={`${p.id}`} className={route.page === p.id ? "active" : ""} onClick={(e) => { e.preventDefault(); navigate(p.id); }}>
@@ -125,6 +126,14 @@ export default function App() {
               </a>
             );
           })}
+          <details className="nav-more" open={!PRIMARY.has(route.page)}>
+            <summary>Ещё</summary>
+            {PAGES.filter((p) => !PRIMARY.has(p.id)).map((p) => (
+              <a key={p.id} href={`${p.id}`} className={route.page === p.id ? "active" : ""} onClick={(e) => { e.preventDefault(); navigate(p.id); }}>
+                <span>{p.label}</span>
+              </a>
+            ))}
+          </details>
         </nav>
       </aside>
       <main className="main">
@@ -132,10 +141,8 @@ export default function App() {
           <div className="topbar-left">
             <h1 className="page-title">{PAGES.find((p) => p.id === route.page)?.label ?? "Обзор"}</h1>
             {o && <Badge tone={o.mode === "AUTO" ? "success" : o.mode === "OFF" ? "error" : "accent"} title={`режим ${o.mode}`}>режим: {MODE_LABEL[o.mode] ?? o.mode}</Badge>}
-            {o?.dryRun && <Badge tone="warn" title="Threads только читается; публикации и ответы пишутся в журнал">DRY_RUN: ничего не отправляется</Badge>}
+            {o?.dryRun && <Badge tone="warn" title="DRY_RUN: Threads только читается">пробный режим</Badge>}
             {o?.killSwitch && <Badge tone="error">ОСТАНОВЛЕН</Badge>}
-            {o?.account && <Badge>@{o.account.username}</Badge>}
-            {o && !o.health.threads.ok && <Badge tone="warn" title={o.health.threads.message}>нет токена Threads</Badge>}
           </div>
           <button className={`kill ${o?.killSwitch ? "active" : ""}`} onClick={() => void toggleKill()} disabled={killBusy || !o}>
             {o?.killSwitch ? "ВОЗОБНОВИТЬ АВТОПИЛОТ" : "ОСТАНОВИТЬ АВТОПИЛОТ"}

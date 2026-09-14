@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPool, closePool } from "./pool.js";
 import { logger } from "../shared/logger.js";
+import { projectDir } from "../shared/paths.js";
 
 /**
  * Numbered SQL migrations (migrations/NNNN_name.sql), each applied once inside a transaction.
@@ -10,7 +11,7 @@ import { logger } from "../shared/logger.js";
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const MIGRATIONS_DIR = path.resolve(here, "../../migrations");
+export const MIGRATIONS_DIR = projectDir(here, "migrations");
 
 const MIGRATION_LOCK = 727272;
 

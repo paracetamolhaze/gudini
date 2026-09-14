@@ -7,5 +7,6 @@ import "./content.js";
 import "./media.js";
 import "./publisher.js";
 import "./engagement.js";
+import "./analytics.js";
 
 export {};

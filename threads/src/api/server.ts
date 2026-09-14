@@ -9,10 +9,11 @@ import { logger, scrubSecrets } from "../shared/logger.js";
 import { makeAuthHook } from "./auth.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerApiRoutes } from "./routes/index.js";
+import { projectDir } from "../shared/paths.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** Built dashboard (vite) — served under the URL prefix with an SPA fallback. */
-export const WEB_DIST = path.resolve(here, "../../web/dist");
+export const WEB_DIST = projectDir(here, "web/dist");
 
 export class HttpError extends Error {
   readonly status: number;

@@ -9,6 +9,8 @@ export type TikTokJob = {
   status: JobStatus; message: string; at: string; submitted?: boolean; url?: string;
 };
 export type TikTokState = {
+  loginRetryAfter?: string;
+  loginIssue?: string;
   account?: string; connected: boolean; autoPublish: boolean;
   seen: string[]; jobs: TikTokJob[];
 };

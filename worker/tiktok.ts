@@ -6,6 +6,7 @@ import type { BrowserContext, Page } from "playwright";
 import { getProject, listProjects, projectDir } from "../lib/store";
 import { TIKTOK_DIR, readTikTokState, writeTikTokState, recoverJobs, type TikTokJob } from "../lib/tiktok/state";
 import { LoginRequired, needsLogin, openTikTokBrowser, preparePost, submitPost, uploadControl, UPLOAD_URL } from "../lib/tiktok/browser";
+import { observeLogin, LOGIN_BACKOFF_MS, LOGIN_RATE_LIMIT_MESSAGE, type LoginSignal } from "../lib/tiktok/loginDiagnostics";
 
 const state = readTikTokState();
 const persist = () => writeTikTokState(state);
@@ -16,6 +17,7 @@ let login = false;
 let loginUntil = 0;
 let lastError = "";
 let commandBusy = false;
+const loginSignals: LoginSignal[] = [];
 const hash = (value: string | Buffer) => crypto.createHash("sha256").update(value).digest("hex");
 const token = process.env.TIKTOK_BROWSER_TOKEN || "";
 const host = process.env.TIKTOK_BROWSER_HOST || "127.0.0.1";
@@ -26,7 +28,18 @@ async function browserPage() {
     context = await openTikTokBrowser();
     context.on("close", () => { context = undefined; page = undefined; });
   }
-  if (!page || page.isClosed()) page = await context.newPage();
+  if (!page || page.isClosed()) {
+    page = await context.newPage();
+    observeLogin(page, signal => {
+      loginSignals.push(signal); if (loginSignals.length > 20) loginSignals.shift();
+      if (signal.rateLimited && login) {
+        login = false;
+        state.loginRetryAfter = new Date(Date.now() + LOGIN_BACKOFF_MS).toISOString();
+        state.loginIssue = LOGIN_RATE_LIMIT_MESSAGE;
+        persist();
+      }
+    });
+  }
   page.setDefaultTimeout(15_000);
   return page;
 }
@@ -114,9 +127,12 @@ async function run(job: TikTokJob) {
 }
 
 function status() {
+  const retryMinutes = Math.max(0, Math.ceil((Date.parse(state.loginRetryAfter ?? "") - Date.now()) / 60_000)) || 0;
   return {
     connected: state.connected, account: state.account ? "TikTok" : null,
-    autoPublish: state.autoPublish, login, busy, error: lastError,
+    autoPublish: state.autoPublish, login, busy,
+    error: lastError || (state.loginIssue ? state.loginIssue + (retryMinutes ? ` Пауза в проекте: ещё ${retryMinutes} мин.` : "") : ""), loginSignals,
+    loginRetryAfter: state.loginRetryAfter,
     jobs: state.jobs.filter((job, index) => ["queued", "running", "needs_login", "unknown"].includes(job.status) || index >= state.jobs.length - 30)
       .reverse().map(({ video, cover, key, account, ...job }) => job),
   };
@@ -144,13 +160,14 @@ async function command(action: string, body: any) {
   }
   if (busy) throw new Error("Сейчас идёт публикация. Дождитесь её завершения.");
   if (action === "login") {
+    if (Date.parse(state.loginRetryAfter ?? "") > Date.now()) throw new Error(LOGIN_RATE_LIMIT_MESSAGE);
+    state.loginIssue = undefined; state.loginRetryAfter = undefined; loginSignals.length = 0; persist();
     login = true; loginUntil = Date.now() + 15 * 60_000;
     try {
       const p = await browserPage(); await p.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 45_000 });
-      if (/\/login/.test(p.url())) {
-        const qr = p.getByText("Use QR code", { exact: true });
-        await qr.click({ timeout: 10_000 }).catch(() => {});
-      }
+      // Studio redirects after DOMContentLoaded; do not inspect the URL too early.
+      const qr = p.getByText("Use QR code", { exact: true });
+      await qr.click({ timeout: 15_000 }).catch(() => {});
     }
     catch (e) { login = false; await context?.close(); throw e; }
     return status();

@@ -38,7 +38,7 @@ test("real worker persists immutable jobs, deduplicates, protects access and ret
   fs.writeFileSync(path.join(root, "data", "db.json"), JSON.stringify({ projects: [project] }));
   const oldUnknown = { ...job(true), id: "old-unknown", status: "unknown", key: "old" };
   const history = Array.from({ length: 35 }, (_, i) => ({ ...job(true), id: `done-${i}`, status: "published" }));
-  fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({ connected: true, account: "a", autoPublish: false, seen: [], jobs: [oldUnknown, ...history] }));
+  fs.writeFileSync(path.join(stateDir, "state.json"), JSON.stringify({ connected: true, account: "a", autoPublish: false, seen: [], jobs: [oldUnknown, ...history], loginRetryAfter: "2099-01-01T00:00:00Z", loginIssue: "TikTok: слишком много попыток" }));
   const child = spawn(process.execPath, [path.resolve("node_modules/tsx/dist/cli.mjs"), path.resolve("worker/tiktok.ts")], {
     cwd: root, env: { ...process.env, TIKTOK_TRANSPORT: "browser", TIKTOK_BROWSER_HOST: "127.0.0.1", TIKTOK_BROWSER_PORT: "0", TIKTOK_BROWSER_TOKEN: "test-secret" }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
   });
@@ -55,6 +55,8 @@ test("real worker persists immutable jobs, deduplicates, protects access and ret
       return { code: response.status, data: await response.json() };
     };
     assert.equal((await request("status", undefined, "wrong")).code, 401);
+    assert.equal((await request("login", {})).code, 400, "persisted cooldown must reject login before launching a browser");
+    assert.equal((await request("status")).data.loginRetryAfter, "2099-01-01T00:00:00Z");
     assert.ok((await request("status")).data.jobs.some((j: TikTokJob) => j.id === "old-unknown"));
     assert.equal((await request("enqueue", { projectId: "p", style: "ai_film" })).code, 400, "missing selected version must not fall back to a different video");
     assert.equal((await request("enqueue", { projectId: "p", scheduledAt: "invalid" })).code, 400);

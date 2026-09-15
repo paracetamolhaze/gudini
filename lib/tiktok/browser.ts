@@ -5,10 +5,18 @@ import { TIKTOK_DIR, type TikTokJob } from "./state";
 export const UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload";
 export class LoginRequired extends Error {}
 
+/** Let the owner choose a method; never request a QR token on opening the dialog. */
+export async function openLoginPage(page: Page, qrPaused: boolean): Promise<void> {
+  await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  if (qrPaused) {
+    await page.getByText("Use phone / email / username", { exact: true }).click({ timeout: 15_000 });
+  }
+}
+
 /** One dedicated persistent profile, never the owner's normal browser. */
 export async function openTikTokBrowser(): Promise<BrowserContext> {
   return chromium.launchPersistentContext(path.join(TIKTOK_DIR, "profile"), {
-    headless: true, viewport: { width: 1280, height: 900 }, locale: "en-US",
+    headless: process.env.TIKTOK_BROWSER_HEADLESS !== "false", viewport: { width: 1280, height: 900 }, locale: "en-US",
     ...(process.env.TIKTOK_BROWSER_CHANNEL ? { channel: process.env.TIKTOK_BROWSER_CHANNEL } : {}),
   });
 }

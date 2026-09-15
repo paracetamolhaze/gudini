@@ -56,7 +56,7 @@ export default function TikTokBrowserSettings() {
       {state?.connected && <Button size="sm" variant="ghost" disabled={busy || state.busy} onClick={() => void act("disconnect")}>Отключить</Button>}
     </div>
     {state?.login && <div style={{ marginTop: 16 }}>
-      <p>Войдите в TikTok ниже. Удобнее выбрать <b>Use QR code</b> и отсканировать код приложением TikTok. Затем нажмите «Я вошёл».</p>
+      <p>Выберите способ входа в TikTok ниже. Если QR отклоняется, используйте <b>Use phone / email / username</b>. После входа нажмите «Я вошёл».</p>
       {image && <img src={image} draggable={false} alt="Окно входа в отдельную сессию TikTok" style={{ width: "100%", maxWidth: 960, cursor: "pointer", borderRadius: 8, touchAction: "none" }}
         onPointerDown={e => { if (busy) return; e.currentTarget.setPointerCapture(e.pointerId); const r = e.currentTarget.getBoundingClientRect(); pointer.current = { x: (e.clientX - r.left) * 1280 / r.width, y: (e.clientY - r.top) * 900 / r.height }; }}
         onPointerCancel={() => { pointer.current = null; }}

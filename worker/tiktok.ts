@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import type { BrowserContext, Page } from "playwright";
 import { getProject, listProjects, projectDir } from "../lib/store";
 import { TIKTOK_DIR, readTikTokState, writeTikTokState, recoverJobs, type TikTokJob } from "../lib/tiktok/state";
-import { LoginRequired, needsLogin, openTikTokBrowser, preparePost, submitPost, uploadControl, UPLOAD_URL } from "../lib/tiktok/browser";
+import { LoginRequired, needsLogin, openTikTokBrowser, openLoginPage, preparePost, submitPost, uploadControl, UPLOAD_URL } from "../lib/tiktok/browser";
 import { observeLogin, LOGIN_BACKOFF_MS, LOGIN_RATE_LIMIT_MESSAGE, type LoginSignal } from "../lib/tiktok/loginDiagnostics";
 
 const state = readTikTokState();
@@ -29,7 +29,8 @@ async function browserPage() {
     context.on("close", () => { context = undefined; page = undefined; });
   }
   if (!page || page.isClosed()) {
-    page = await context.newPage();
+    page = context.pages()[0] ?? await context.newPage();
+    for (const extra of context.pages()) if (extra !== page) await extra.close();
     observeLogin(page, signal => {
       loginSignals.push(signal); if (loginSignals.length > 20) loginSignals.shift();
       if (signal.rateLimited && login) {
@@ -131,7 +132,7 @@ function status() {
   return {
     connected: state.connected, account: state.account ? "TikTok" : null,
     autoPublish: state.autoPublish, login, busy,
-    error: lastError || (state.loginIssue ? state.loginIssue + (retryMinutes ? ` Пауза в проекте: ещё ${retryMinutes} мин.` : "") : ""), loginSignals,
+    error: lastError || (state.loginIssue ? state.loginIssue + (retryMinutes ? ` Пауза для QR: ещё ${retryMinutes} мин. Можно выбрать вход по телефону или почте.` : "") : ""), loginSignals,
     loginRetryAfter: state.loginRetryAfter,
     jobs: state.jobs.filter((job, index) => ["queued", "running", "needs_login", "unknown"].includes(job.status) || index >= state.jobs.length - 30)
       .reverse().map(({ video, cover, key, account, ...job }) => job),
@@ -160,14 +161,14 @@ async function command(action: string, body: any) {
   }
   if (busy) throw new Error("Сейчас идёт публикация. Дождитесь её завершения.");
   if (action === "login") {
-    if (Date.parse(state.loginRetryAfter ?? "") > Date.now()) throw new Error(LOGIN_RATE_LIMIT_MESSAGE);
-    state.loginIssue = undefined; state.loginRetryAfter = undefined; loginSignals.length = 0; persist();
+    const qrPaused = Date.parse(state.loginRetryAfter ?? "") > Date.now();
+    loginSignals.length = 0;
     login = true; loginUntil = Date.now() + 15 * 60_000;
     try {
-      const p = await browserPage(); await p.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 45_000 });
-      // Studio redirects after DOMContentLoaded; do not inspect the URL too early.
-      const qr = p.getByText("Use QR code", { exact: true });
-      await qr.click({ timeout: 15_000 }).catch(() => {});
+      const p = await browserPage();
+      // Do not start another rejected QR flow automatically. TikTok explicitly
+      // offers phone/email login; a QR cooldown must not disable that alternative.
+      await openLoginPage(p, qrPaused);
     }
     catch (e) { login = false; await context?.close(); throw e; }
     return status();
@@ -206,6 +207,7 @@ async function command(action: string, body: any) {
     const waiting = state.jobs.filter(j => ["queued", "needs_login"].includes(j.status));
     if (waiting.some(j => j.account !== account)) throw new Error("В очереди ролики для другого аккаунта. Войдите в исходный аккаунт или отмените их.");
     state.account = account; state.connected = true;
+    state.loginIssue = undefined; state.loginRetryAfter = undefined;
     for (const job of waiting) if (job.status === "needs_login") { job.status = "queued"; job.message = "Вход восстановлен, продолжаем публикацию."; }
     persist(); login = false; await context?.close(); return status();
   }

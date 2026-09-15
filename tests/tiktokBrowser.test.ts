@@ -55,7 +55,6 @@ test("real worker persists immutable jobs, deduplicates, protects access and ret
       return { code: response.status, data: await response.json() };
     };
     assert.equal((await request("status", undefined, "wrong")).code, 401);
-    assert.equal((await request("login", {})).code, 400, "persisted cooldown must reject login before launching a browser");
     assert.equal((await request("status")).data.loginRetryAfter, "2099-01-01T00:00:00Z");
     assert.ok((await request("status")).data.jobs.some((j: TikTokJob) => j.id === "old-unknown"));
     assert.equal((await request("enqueue", { projectId: "p", style: "ai_film" })).code, 400, "missing selected version must not fall back to a different video");

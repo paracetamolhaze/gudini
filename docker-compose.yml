@@ -42,7 +42,7 @@ services:
   tiktok-browser:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.tiktok
     container_name: gudini-tiktok-browser
     restart: unless-stopped
     command: ["npm", "run", "worker:tiktok"]

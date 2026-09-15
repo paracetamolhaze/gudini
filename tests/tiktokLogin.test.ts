@@ -2,6 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { observeLogin, loginSignal } from '../lib/tiktok/loginDiagnostics';
+import { openLoginPage } from '../lib/tiktok/browser';
+
+test('opening login does not request a QR; QR cooldown still allows offered email login', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route('https://www.tiktok.com/**', route => route.fulfill({ contentType: 'text/html', body: `<button onclick="document.body.dataset.qr='requested'">Use QR code</button><button onclick="document.body.dataset.method='email'">Use phone / email / username</button>` }));
+    await openLoginPage(page, false);
+    assert.equal(await page.locator('body').getAttribute('data-qr'), null);
+    await openLoginPage(page, true);
+    assert.equal(await page.locator('body').getAttribute('data-qr'), null);
+    assert.equal(await page.locator('body').getAttribute('data-method'), 'email');
+  } finally { await browser.close(); }
+});
 
 test('TikTok rate limit stops QR polling instead of leaving a scannable dead session', async () => {
   const browser = await chromium.launch({ headless: true });

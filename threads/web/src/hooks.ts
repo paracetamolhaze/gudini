@@ -40,7 +40,7 @@ export type Route = { page: string; id: string | null; query: URLSearchParams };
 function parse(): Route {
   const rel = window.location.pathname.startsWith(PREFIX) ? window.location.pathname.slice(PREFIX.length) : window.location.pathname;
   const parts = rel.split("/").filter(Boolean);
-  return { page: parts[0] ?? "posts", id: parts[1] ?? null, query: new URLSearchParams(window.location.search) };
+  return { page: parts[0] ?? "home", id: parts[1] ?? null, query: new URLSearchParams(window.location.search) };
 }
 
 export function useRoute(): [Route, (path: string) => void] {

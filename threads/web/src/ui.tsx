@@ -21,6 +21,7 @@ export function Badge({ tone = "neutral", children, title }: { tone?: Tone; chil
 export const STATUS_TONE: Record<string, Tone> = {
   OK: "success",
   PUBLISHED: "success",
+  PARTIAL: "warn",
   SENT: "success",
   QA_PASSED: "success",
   VERIFIED: "success",
@@ -67,6 +68,7 @@ export const STATUS_LABEL: Record<string, string> = {
   SCHEDULED: "запланирован",
   PUBLISHING: "публикуется",
   PUBLISHED: "опубликован",
+  PARTIAL: "опубликован частично",
   PENDING: "ожидает решения",
   SENDING: "отправляется",
   SENT: "отправлен",

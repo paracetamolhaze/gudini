@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { NetworkError, ServerError, ThreadsError, TimeoutError } from "../threads/errors.js";
 import { PublishUnknownStateError, type AttemptStore } from "../platforms/attempts.js";
 import { splitIntoThreadParts } from "../shared/threadSplit.js";
-import { XDuplicateContentError, type XClient } from "./client.js";
+import { XDuplicateContentError, type XClient, type XPost } from "./client.js";
 
 /**
  * Idempotent publishing to X. POST /2/tweets is never blindly retried: after a timeout the post may
@@ -28,6 +28,9 @@ export interface XPublishResult {
 
 const isTransient = (err: unknown): boolean => err instanceof TimeoutError || err instanceof NetworkError || err instanceof ServerError;
 
+/** A read that can itself fail: "nothing found" and "could not look" are different answers. */
+type Probe<T> = { read: true; value: T } | { read: false; error: unknown };
+
 const mimeFor = (file: string): string => (/\.png$/i.test(file) ? "image/png" : /\.webp$/i.test(file) ? "image/webp" : "image/jpeg");
 
 export class XPublisher {
@@ -45,16 +48,34 @@ export class XPublisher {
     }
   }
 
-  /** X normalises whitespace a little; compare on collapsed text. */
-  private async findRecent(text: string, since: Date, replyToId?: string): Promise<string | null> {
+  /**
+   * X normalises whitespace a little; compare on collapsed text. A timeline we could not read comes
+   * back as `read: false` — never as "the post is not there", which would license a second send.
+   */
+  private async findRecent(text: string, since: Date, replyToId?: string): Promise<Probe<string | null>> {
     const wanted = text.replace(/\s+/g, " ").trim();
-    const posts = await this.client.myRecentPosts({ max: 30, startTime: new Date(since.getTime() - 5 * 60_000) }).catch(() => []);
+    let posts: XPost[];
+    try {
+      posts = await this.client.myRecentPosts({ max: 30, startTime: new Date(since.getTime() - 5 * 60_000) });
+    } catch (err) {
+      return { read: false, error: err };
+    }
     for (const p of posts) {
       if (p.text.replace(/\s+/g, " ").trim() !== wanted && !p.text.replace(/\s+/g, " ").trim().startsWith(wanted.slice(0, 200))) continue;
       if (replyToId && !p.referenced_tweets?.some((r) => r.type === "replied_to" && r.id === replyToId)) continue;
-      return p.id;
+      return { read: true, value: p.id };
     }
-    return null;
+    return { read: true, value: null };
+  }
+
+  /**
+   * The timeline was unreadable, so the earlier send may be live. Keep the attempt UNKNOWN and give
+   * the queue back the original (usually retryable) error instead of posting again.
+   */
+  private async holdUnknown(key: string, cause: unknown): Promise<Error> {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    await this.store.update(key, { status: "UNKNOWN", error: `publish outcome unknown: не удалось прочитать ленту X, повторная публикация отменена: ${reason}` });
+    return cause instanceof Error ? cause : new ThreadsError(reason, 0, "(local)");
   }
 
   async publish(req: XPublishRequest): Promise<XPublishResult> {
@@ -65,11 +86,12 @@ export class XPublisher {
     }
     if (existing) {
       // Something was sent earlier and the outcome never reached us.
-      const found = await this.findRecent(req.text, existing.createdAt, req.replyToId);
-      if (found) {
-        await this.store.update(req.key, { status: "PUBLISHED", postId: found, error: null });
-        return { id: found, permalink: await this.permalink(found), recovered: true };
+      const recent = await this.findRecent(req.text, existing.createdAt, req.replyToId);
+      if (recent.read && recent.value) {
+        await this.store.update(req.key, { status: "PUBLISHED", postId: recent.value, error: null });
+        return { id: recent.value, permalink: await this.permalink(recent.value), recovered: true };
       }
+      if (!recent.read) throw await this.holdUnknown(req.key, recent.error);
     } else {
       const started = await this.store.start(req.key, req.kind);
       if (!started) {
@@ -98,11 +120,13 @@ export class XPublisher {
     } catch (err) {
       if (isTransient(err) || err instanceof XDuplicateContentError) {
         await this.store.update(req.key, { status: "UNKNOWN", error: `publish outcome unknown: ${(err as Error).message}` });
-        const found = await this.findRecent(req.text, startedAt, req.replyToId);
-        if (found) {
-          await this.store.update(req.key, { status: "PUBLISHED", postId: found, error: null });
-          return { id: found, permalink: await this.permalink(found), recovered: true };
+        const recent = await this.findRecent(req.text, startedAt, req.replyToId);
+        if (recent.read && recent.value) {
+          await this.store.update(req.key, { status: "PUBLISHED", postId: recent.value, error: null });
+          return { id: recent.value, permalink: await this.permalink(recent.value), recovered: true };
         }
+        // Could not look: leave the attempt UNKNOWN (not "needs a human") and let the queue retry.
+        if (!recent.read) throw err;
         if (err instanceof XDuplicateContentError) {
           await this.store.update(req.key, { status: "FAILED", error: `unknown state: X rejected the text as a duplicate, but the post was not found among recent posts` });
           throw new PublishUnknownStateError("X отклонил текст как дубликат, но сам пост не найден; проверьте аккаунт перед повтором.");

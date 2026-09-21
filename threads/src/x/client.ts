@@ -56,11 +56,23 @@ export class XReplyNotAllowedError extends PermissionError {}
 export class XDuplicateContentError extends ValidationError {}
 
 const POST_FIELDS = "author_id,conversation_id,created_at,in_reply_to_user_id,referenced_tweets";
-const URL_RE = /\bhttps?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|xyz|co|ru|me|app|fi|gg|ai)\b(?:\/\S*)?/i;
+
+/**
+ * One definition of "there is a link here", bare domains included. Exported so that whoever strips
+ * links out of a text uses the same rule as the check that prices a post as a link post — a domain
+ * that only one of them recognises is a silent 10x on the bill.
+ */
+export const URL_PATTERN = /\bhttps?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|xyz|co|ru|me|app|fi|gg|ai)\b(?:\/\S*)?/i;
+
+/** Fresh global matcher for the same rule, with the whitespace in front, for removing links. */
+export const urlStripPattern = (): RegExp => new RegExp(`\\s*(?:${URL_PATTERN.source})`, "gi");
 
 export function containsUrl(text: string): boolean {
-  return URL_RE.test(text);
+  return URL_PATTERN.test(text);
 }
+
+/** 403 texts that really are about the reply restriction, as opposed to any other refusal. */
+const REPLY_RESTRICTION_RE = /repl(?:y|ies|ying)|conversation/i;
 
 export function xErrorFor(status: number, endpoint: string, body: string, opts: { isReply?: boolean } = {}): ThreadsError {
   let detail = body.trim().slice(0, 600);
@@ -78,7 +90,15 @@ export function xErrorFor(status: number, endpoint: string, body: string, opts: 
   if (status === 402) return new PermissionError(`${message}. Похоже, на балансе X API закончились кредиты.`, status, endpoint, parts, "credits");
   if (status === 403) {
     if (/duplicate/i.test(detail)) return new XDuplicateContentError(message, status, endpoint, parts);
-    if (opts.isReply) return new XReplyNotAllowedError(`${message}. X принимает ответы через API только авторам, которые упомянули или процитировали аккаунт.`, status, endpoint, parts, "reply");
+    const says = `${title} ${detail}`;
+    // Only a refusal that actually names replies is the reply restriction. A blanket 403 (app rights
+    // reset to Read-only, suspended account) must keep its own text, or the owner fixes the wrong thing.
+    if (opts.isReply && REPLY_RESTRICTION_RE.test(says)) {
+      return new XReplyNotAllowedError(`${message}. X принимает ответы через API только авторам, которые упомянули или процитировали аккаунт.`, status, endpoint, parts, "reply");
+    }
+    if (/app permissions|oauth1|not configured/i.test(says)) {
+      return new PermissionError(`${message}. Похоже, у приложения X сброшены права: включите Read and write и перевыпустите Access Token.`, status, endpoint, parts, "app-permissions");
+    }
     return new PermissionError(message, status, endpoint, parts);
   }
   if (status === 404) return new NotFoundError(message, status, endpoint, parts);

@@ -2,6 +2,7 @@ import type { z } from "zod";
 import { env, type Env } from "../config/env.js";
 import { logger } from "../shared/logger.js";
 import { AnthropicProvider } from "./anthropic.js";
+import { ClaudeBridgeProvider } from "./claudeBridge.js";
 import { DEFAULT_PRICING, estimateCostUsd, type PricingTable } from "./costs.js";
 import { OpenAiCompatibleProvider } from "./openaiCompatible.js";
 import {
@@ -18,8 +19,8 @@ import { StructuredOutputError, jsonSchemaFor, parseStructured } from "./structu
 
 /**
  * Task → (provider, model) routing plus the cost ledger. Model ids are written as `provider:model`
- * (`openrouter:anthropic/claude-sonnet-5`, `anthropic:claude-sonnet-5`, `gemini:gemini-3.5-flash`);
- * a bare model id uses the default provider from LLM_PROVIDER.
+ * (`openrouter:anthropic/claude-sonnet-5`, `anthropic:claude-sonnet-5`, `gemini:gemini-3.5-flash`,
+ * `claude-bridge:claude-opus-5`); a bare model id uses the default provider from LLM_PROVIDER.
  */
 
 export interface ModelSettings {
@@ -88,10 +89,15 @@ export interface TextCallOptions {
 export const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
 
 export function defaultModels(e: Env): ModelSettings {
-  const fallback = e.LLM_PROVIDER === "anthropic" ? "claude-sonnet-5" : e.LLM_PROVIDER === "gemini" ? "gemini-3.5-flash" : e.LLM_PROVIDER === "openai" ? "gpt-5-mini" : DEFAULT_MODEL;
+  const bridge = e.LLM_PROVIDER === "claude-bridge";
+  const fallback = bridge
+    ? e.CLAUDE_BRIDGE_MODEL || "claude-sonnet-5"
+    : e.LLM_PROVIDER === "anthropic" ? "claude-sonnet-5" : e.LLM_PROVIDER === "gemini" ? "gemini-3.5-flash" : e.LLM_PROVIDER === "openai" ? "gpt-5-mini" : DEFAULT_MODEL;
+  // Posts speak in the owner's voice, so the writer may run a stronger model than the rest of the tasks.
+  const writerFallback = bridge ? e.CLAUDE_BRIDGE_MODEL_WRITER || fallback : fallback;
   return {
     analysis: e.LLM_MODEL_ANALYSIS || fallback,
-    writer: e.LLM_MODEL_WRITER || fallback,
+    writer: e.LLM_MODEL_WRITER || writerFallback,
     reply: e.LLM_MODEL_REPLY || fallback,
     vision: e.LLM_MODEL_VISION || fallback,
     translation: e.LLM_MODEL_TRANSLATION || fallback,
@@ -159,6 +165,10 @@ export class LlmRouter {
         break;
       case "anthropic":
         p = new AnthropicProvider({ apiKey: e.ANTHROPIC_API_KEY || (e.LLM_PROVIDER === "anthropic" ? e.LLM_API_KEY : "") });
+        break;
+      case "claude-bridge":
+        // Local CLI on the Windows host: the owner's subscription writes the text, nothing is billed as API.
+        p = new ClaudeBridgeProvider({ baseUrl: e.CLAUDE_BRIDGE_URL ?? "", token: e.CLAUDE_BRIDGE_TOKEN });
         break;
       case "openai-compatible":
         if (!e.LLM_BASE_URL) throw new LlmError("openai-compatible", "LLM_BASE_URL is required for the openai-compatible provider");

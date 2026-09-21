@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { decidePublish } from "../../src/services/publishing/gate.js";
+import { STUCK_PUBLISHING_MINUTES, recoverStuckPublishing, summarizeOutcomes } from "../../src/services/publishing/pipeline.js";
 import { decideSlot, hourInZone } from "../../src/services/publishing/schedule.js";
 import { recheckDynamicFacts } from "../../src/services/publishing/freshness.js";
 import { ThreadsPublisher, type AttemptRecord, type AttemptStore } from "../../src/threads/publisher.js";
@@ -52,6 +53,58 @@ test("scheduling respects the daily cap, the minimum gap and preferred hours; P0
   assert.equal(late.kind, "at");
   if (late.kind === "at") assert.equal(hourInZone(late.at, "Europe/Moscow"), 9);
   assert.equal(decideSlot({ ...base, now: night, lastPublishedAt: null, postsToday: 0, priority: "P0" }).kind, "now");
+});
+
+test("a publish lock left by a killed process is released and the draft goes back to the queue", async () => {
+  const statements: string[] = [];
+  const logged: Array<{ event: string; level: string; draftId: string | null | undefined }> = [];
+  const ids = await recoverStuckPublishing({
+    run: async (text) => {
+      statements.push(text);
+      return [{ id: "d1" }, { id: "d2" }];
+    },
+    log: async (event, _message, refs, _details, level) => {
+      logged.push({ event, level: level ?? "info", draftId: refs?.draftId });
+    },
+  });
+  assert.deepEqual(ids, ["d1", "d2"]);
+  const sql = statements[0] ?? "";
+  assert.match(sql, /status = 'PUBLISHING'/, "only stuck locks are touched");
+  assert.match(sql, new RegExp(`interval '${STUCK_PUBLISHING_MINUTES} minutes'`), "the lock has a lifetime");
+  assert.match(sql, /THEN 'PARTIAL'/, "a post already out on one platform stays partial");
+  assert.match(sql, /ELSE 'APPROVED'/, "a post that never went out is publishable again");
+  // The owner has to see that a post was interrupted, not just find it silently republished.
+  assert.equal(logged.length, 2);
+  assert.ok(
+    logged.every((l) => l.event === "POST_PUBLISH_FAILED" && l.level === "warn"),
+    "every released lock is audited as a warning",
+  );
+  assert.deepEqual(
+    logged.map((l) => l.draftId),
+    ["d1", "d2"],
+  );
+});
+
+test("a platform switched off mid-send leaves the draft partial, not published", () => {
+  const offDuringSend = summarizeOutcomes([
+    { platform: "threads", status: "published", postId: "p1" },
+    { platform: "x", status: "skipped", reason: "платформа выключена в настройках" },
+  ]);
+  assert.equal(offDuringSend.anyOut, true);
+  assert.equal(offDuringSend.partial, true, "the post still owes X");
+  assert.match(offDuringSend.problems, /выключена/);
+  const brokenToken = summarizeOutcomes([
+    { platform: "threads", status: "published", postId: "p1" },
+    { platform: "x", status: "failed", reason: "401 token expired" },
+  ]);
+  assert.equal(brokenToken.partial, true);
+  const complete = summarizeOutcomes([
+    { platform: "threads", status: "published", postId: "p1" },
+    { platform: "x", status: "already", postId: "p2" },
+  ]);
+  assert.equal(complete.partial, false);
+  assert.equal(complete.problems, "");
+  assert.equal(summarizeOutcomes([{ platform: "x", status: "skipped", reason: "платформа выключена в настройках" }]).anyOut, false);
 });
 
 const vf = (over: Partial<VerifiedFact>): VerifiedFact => ({ claim: "", type: "price", certainty: "FACT", confidence: 0.9, requiresVerification: true, isDynamic: true, asset: "BTC", value: null, unit: "USD", status: "VERIFIED", evidence: null, observedValue: null, checkedAt: null, ...over });

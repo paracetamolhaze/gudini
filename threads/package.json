@@ -17,7 +17,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "tsx --test tests/unit/*.test.ts",
     "test:integration": "tsx --test tests/integration/*.test.ts",
-    "backup": "node scripts/backup.mjs"
+    "backup": "node scripts/backup.mjs",
+    "bridge": "node scripts/claude-bridge.mjs"
   },
   "engines": {
     "node": ">=22"

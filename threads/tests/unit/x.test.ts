@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { authorizationHeader, percentEncode, sign, signatureBaseString } from "../../src/x/oauth1.js";
-import { XClient, XDuplicateContentError, XReplyNotAllowedError, containsUrl, type XUsageKind } from "../../src/x/client.js";
+import { XClient, XDuplicateContentError, XReplyNotAllowedError, containsUrl, urlStripPattern, type XUsageKind } from "../../src/x/client.js";
 import { XPublisher } from "../../src/x/publisher.js";
 import { stripLinks } from "../../src/platforms/x.js";
 import { splitIntoThreadParts } from "../../src/shared/threadSplit.js";
-import { AuthenticationError, RateLimitError } from "../../src/threads/errors.js";
+import { AuthenticationError, PermissionError, RateLimitError } from "../../src/threads/errors.js";
 import type { AttemptRecord, AttemptStore } from "../../src/platforms/attempts.js";
 
 const creds = { consumerKey: "ck", consumerSecret: "CONSUMER-SECRET-VALUE", accessToken: "at", accessSecret: "ACCESS-SECRET-VALUE" };
@@ -74,7 +74,7 @@ test("X client: posts, replies and quotes go to /2/tweets with an OAuth header, 
 });
 
 test("X client: typed errors — reply restriction, duplicate content, auth, rate limit", async () => {
-  const forbidden = client(fakeX(() => ({ status: 403, json: { title: "Forbidden", detail: "You are not permitted to perform this action." } })).fetchImpl);
+  const forbidden = client(fakeX(() => ({ status: 403, json: { title: "Forbidden", detail: "You are not allowed to reply to this Tweet." } })).fetchImpl);
   await assert.rejects(forbidden.createPost({ text: "hi", replyToId: "1" }), XReplyNotAllowedError);
   const dup = client(fakeX(() => ({ status: 403, json: { detail: "You are not allowed to create a Tweet with duplicate content." } })).fetchImpl);
   await assert.rejects(dup.createPost({ text: "hi" }), XDuplicateContentError);
@@ -83,6 +83,28 @@ test("X client: typed errors — reply restriction, duplicate content, auth, rat
   const empty = new XClient({ credentials: { ...creds, accessSecret: "" }, fetchImpl: fakeX(() => ({})).fetchImpl });
   assert.equal(empty.hasCredentials, false);
   await assert.rejects(empty.me(), AuthenticationError);
+});
+
+test("X client: a 403 counts as the reply restriction only when X says the refusal is about replies", async () => {
+  const restricted = client(fakeX(() => ({ status: 403, json: { title: "Forbidden", detail: "You are not allowed to reply to this conversation." } })).fetchImpl);
+  await assert.rejects(restricted.createPost({ text: "hi", replyToId: "1" }), XReplyNotAllowedError);
+
+  // App rights reset to Read-only: filing this as "they never mentioned us" would send the owner
+  // to answer by hand for a week instead of to the app settings.
+  const readOnly = client(fakeX(() => ({ status: 403, json: { title: "Forbidden", detail: "Your client app is not configured with the appropriate oauth1 app permissions for this endpoint." } })).fetchImpl);
+  await assert.rejects(readOnly.createPost({ text: "hi", replyToId: "1" }), (err: unknown) => {
+    assert.ok(err instanceof PermissionError, "expected a permission error");
+    assert.ok(!(err instanceof XReplyNotAllowedError), `a Read-only app must not be reported as a reply restriction: ${(err as Error).message}`);
+    assert.match((err as Error).message, /oauth1 app permissions/);
+    return true;
+  });
+
+  const generic = client(fakeX(() => ({ status: 403, json: { title: "Forbidden", detail: "You are not permitted to perform this action." } })).fetchImpl);
+  await assert.rejects(generic.createPost({ text: "hi", replyToId: "1" }), (err: unknown) => {
+    assert.ok(!(err instanceof XReplyNotAllowedError), `a blanket 403 must keep its own text: ${(err as Error).message}`);
+    assert.match((err as Error).message, /not permitted to perform this action/);
+    return true;
+  });
 });
 
 test("X client: mentions resolve authors and every returned post is billed as a read", async () => {
@@ -144,11 +166,44 @@ test("X publisher: a published key is never sent twice, and a duplicate rejectio
   assert.deepEqual([recovered.id, recovered.recovered], ["p77", true]);
 });
 
+test("X publisher: a timeline it could not read never licenses a second post", async () => {
+  let creates = 0;
+  const fake = fakeX((call) => {
+    if (call.url.includes("/users/me")) return { json: { data: { id: "42", username: "me" } } };
+    if (call.method === "POST") {
+      creates++;
+      return { json: { data: { id: `p${creates}` } } };
+    }
+    return { status: 429, json: { title: "Too Many Requests" } }; // the owned read is rate limited
+  });
+  const store = memoryStore();
+  // The previous round timed out after X had already accepted the post.
+  store.rows.set("draft:9:x", { idempotencyKey: "draft:9:x", status: "UNKNOWN", containerId: null, postId: null, error: "publish outcome unknown: timeout", createdAt: new Date() });
+  const pub = new XPublisher(client(fake.fetchImpl), store);
+  await assert.rejects(pub.publish({ key: "draft:9:x", kind: "post", text: "закрыл лонг BTC" }), RateLimitError);
+  assert.equal(creates, 0, "a post that may already be live must not be sent again while the timeline is unreadable");
+  assert.equal(store.rows.get("draft:9:x")!.status, "UNKNOWN", "the attempt stays recoverable for the next round");
+});
+
+test("X publisher: a failed recovery read after a duplicate rejection is retried, not handed to a human", async () => {
+  const fake = fakeX((call) => {
+    if (call.url.includes("/users/me")) return { json: { data: { id: "42", username: "me" } } };
+    if (call.method === "POST") return { status: 403, json: { detail: "You are not allowed to create a Tweet with duplicate content." } };
+    return { status: 429, json: { title: "Too Many Requests" } };
+  });
+  const store = memoryStore();
+  await assert.rejects(new XPublisher(client(fake.fetchImpl), store).publish({ key: "draft:10:x", kind: "post", text: "лонг ETH" }), XDuplicateContentError);
+  assert.equal(store.rows.get("draft:10:x")!.status, "UNKNOWN");
+  assert.ok(!/unknown state/i.test(store.rows.get("draft:10:x")!.error ?? ""), "an unreadable timeline is not a reason to stop the queue");
+});
+
 test("X text rules: links are detected and stripped, long text splits at the platform limit", () => {
   assert.equal(containsUrl("читай https://site.com/a?b=1"), true);
   assert.equal(containsUrl("разбор на hyperliquid.xyz"), true);
   assert.equal(containsUrl("BTC x10, вход 61 200, т.к. тренд"), false);
   assert.equal(stripLinks("Закрыл лонг.\nhttps://app.hyperliquid.xyz/trade\nДальше смотрю ETH"), "Закрыл лонг.\nДальше смотрю ETH");
+  // The exported pattern is what stripLinks must use: a bare domain is a link for the price too.
+  assert.equal("разбор на app.hyperliquid.xyz сегодня".replace(urlStripPattern(), ""), "разбор на сегодня");
   const parts = splitIntoThreadParts("Слово ".repeat(120).trim(), 280);
   assert.ok(parts.length >= 3 && parts.every((p) => p.length <= 280), `parts: ${parts.map((p) => p.length).join(",")}`);
   assert.match(parts[0]!, /^1\/\d /);

@@ -389,7 +389,11 @@ test("Hyperliquid: fills become trades; a fresh winner gets a card and a post, a
   const draft = await getDraft(btc!.draft_id);
   assert.deepEqual([draft!.kind, draft!.status, draft!.platforms, draft!.image_asset_id], ["TRADE", "DRAFT", ["threads"], btc!.card_asset_id], draft!.review_reason ?? "");
   assert.match(draft!.text, /\+34\.1%/);
-  assert.equal(draft!.facts_json!.facts.length, 6);
+  // Every number the writer may use: the trade itself plus the market context read off the same candles.
+  const claims = draft!.facts_json!.facts.map((f) => f.claim).join(" | ");
+  for (const needle of ["Entry price", "Exit price", "Return on margin", "Leverage used", "Net PnL"]) assert.match(claims, new RegExp(needle), claims);
+  assert.ok(draft!.facts_json!.facts.length > 6, `market context must reach the writer: ${claims}`);
+  assert.ok(draft!.facts_json!.facts.every((f) => f.status === "VERIFIED" && typeof f.value === "number"), claims);
   const asset = await one<{ status: string; final_path: string; width: number }>("SELECT status, final_path, width FROM media_assets WHERE id = $1", [btc!.card_asset_id]);
   assert.deepEqual([asset!.status, asset!.width, existsSync(asset!.final_path)], ["QA_PASSED", 1440, true]);
 

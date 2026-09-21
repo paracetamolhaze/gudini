@@ -18,20 +18,41 @@ import { recheckDynamicFacts } from "./freshness.js";
 import { decideSlot } from "./schedule.js";
 import { newId } from "../../shared/ids.js";
 
+/** A publish lock older than this was left behind by a dead process: an honest send never takes that long (Threads waits up to 90 s, plus X). */
+export const STUCK_PUBLISHING_MINUTES = 15;
+/** How long a PARTIAL draft waits before the missing platform is tried again, and how many are tried per tick. */
+const PARTIAL_RETRY_MINUTES = 5;
+const PARTIAL_RETRY_BATCH = 5;
+
+export interface TickResult {
+  published: number;
+  scheduled: number;
+  reviewed: number;
+  /** PARTIAL drafts finished off in this tick. */
+  resent: number;
+  /** Publish locks left by a dead process and handed back to the queue. */
+  recovered: number;
+  /** Drafts whose publish attempt ended in an error; the tick carried on with the rest. */
+  failed: number;
+  blocked: string | null;
+}
+
 /**
- * publisher:tick — every minute: expire, route AUTO drafts through the gate, schedule approved
- * drafts into slots, and publish what is due (respecting caps and the minimum gap).
+ * publisher:tick — every minute: expire, recover abandoned publish locks, route AUTO drafts through
+ * the gate, schedule approved drafts into slots, publish what is due (respecting caps and the
+ * minimum gap) and finish off drafts that only reached some of their platforms.
  * publisher:publish — one draft to every target platform, re-checking the kill switch and
  * freshness right before the send. Platforms succeed or fail independently: a post that reached
  * Threads but not X is PARTIAL, and a retry only sends what is still missing.
  */
-export async function publisherTick(): Promise<{ published: number; scheduled: number; reviewed: number; blocked: string | null }> {
+export async function publisherTick(): Promise<TickResult> {
   const settings = await loadSettings(true);
   const expiredDrafts = await expireDrafts();
   for (const id of expiredDrafts) await audit("POST_EXPIRED", "Черновик просрочен и не будет опубликован", { draftId: id });
+  const recovered = (await recoverStuckPublishing()).length;
   await expireCandidates();
-  if (settings.killSwitch) return { published: 0, scheduled: 0, reviewed: 0, blocked: "kill switch" };
-  if (settings.mode === "OFF") return { published: 0, scheduled: 0, reviewed: 0, blocked: "mode OFF" };
+  if (settings.killSwitch) return { published: 0, scheduled: 0, reviewed: 0, resent: 0, recovered, failed: 0, blocked: "kill switch" };
+  if (settings.mode === "OFF") return { published: 0, scheduled: 0, reviewed: 0, resent: 0, recovered, failed: 0, blocked: "mode OFF" };
 
   let reviewed = 0;
   let scheduled = 0;
@@ -65,6 +86,7 @@ export async function publisherTick(): Promise<{ published: number; scheduled: n
   const order = { P0: 0, P1: 1, P2: 2, P3: 3 } as const;
   approved.sort((a, b) => order[a.priority] - order[b.priority] || (a.scheduled_at?.getTime() ?? 0) - (b.scheduled_at?.getTime() ?? 0));
   let published = 0;
+  let failed = 0;
   let lastAt = await lastPublishedAt();
   let postsToday = await postsPublishedToday(settings.schedule.timezone);
   for (const d of approved) {
@@ -94,14 +116,80 @@ export async function publisherTick(): Promise<{ published: number; scheduled: n
       }
       continue;
     }
-    const result = await publishDraft(d.id, { manual: d.approved_by_user });
+    const result = await publishInTick(d);
+    if (!result || result.kind === "failed") {
+      failed++;
+      continue;
+    }
     if (result.kind === "published") {
       published++;
       lastAt = new Date();
       postsToday++;
     }
   }
-  return { published, scheduled, reviewed, blocked: null };
+
+  // PARTIAL drafts get their own pass: they already spent a slot and a day's quota, so the missing
+  // platform must not wait for a new slot. Putting them in the list above would let decideSlot
+  // rewrite them to SCHEDULED and lose the fact that half the post is already out.
+  let resent = 0;
+  for (const d of await partialDraftsToResend()) {
+    const result = await publishInTick(d);
+    if (!result || result.kind === "failed") failed++;
+    else if (result.kind === "published" && !result.partial) resent++;
+  }
+
+  return { published, scheduled, reviewed, resent, recovered, failed, blocked: null };
+}
+
+/**
+ * publisher:tick is queued with attempts:1, so an exception from one draft would end the tick and
+ * leave every other ready draft unpublished for a minute or more. Failures are logged and skipped.
+ */
+async function publishInTick(d: DraftRow): Promise<PublishOutcome | null> {
+  try {
+    return await publishDraft(d.id, { manual: d.approved_by_user });
+  } catch (err) {
+    await audit("POST_PUBLISH_FAILED", `Публикация не удалась (${errorMessage(err)}); остальные черновики этого прохода публикуются дальше`, { draftId: d.id, candidateId: d.candidate_id }, null, "warn");
+    return null;
+  }
+}
+
+/** PARTIAL drafts that have waited long enough: a dead platform must not be hammered every minute. */
+async function partialDraftsToResend(): Promise<DraftRow[]> {
+  return query<DraftRow>(
+    `SELECT * FROM drafts
+      WHERE status = 'PARTIAL'
+        AND updated_at < now() - interval '${PARTIAL_RETRY_MINUTES} minutes'
+        AND (expires_at IS NULL OR expires_at > now())
+      ORDER BY updated_at ASC LIMIT ${PARTIAL_RETRY_BATCH}`,
+  );
+}
+
+export type StuckLockRow = { id: string };
+export interface RecoverDeps {
+  run?: (text: string, params?: unknown[]) => Promise<StuckLockRow[]>;
+  log?: typeof audit;
+}
+
+/**
+ * A process killed between taking the PUBLISHING lock and releasing it (deploy, OOM, SIGKILL)
+ * leaves the draft locked forever: the tick only looks at APPROVED/SCHEDULED, expireDrafts ignores
+ * PUBLISHING, the gate blocks that status and the API answers 409. So the lock has a lifetime, and
+ * the draft goes back to whoever can finish it — PARTIAL if something already went out.
+ */
+export async function recoverStuckPublishing(deps: RecoverDeps = {}): Promise<string[]> {
+  const run = deps.run ?? query;
+  const log = deps.log ?? audit;
+  const rows = await run(
+    `UPDATE drafts SET status = CASE WHEN EXISTS (SELECT 1 FROM publications p WHERE p.draft_id = drafts.id) THEN 'PARTIAL' ELSE 'APPROVED' END,
+            error = 'публикация прервана перезапуском, повтор', updated_at = now()
+      WHERE status = 'PUBLISHING' AND updated_at < now() - interval '${STUCK_PUBLISHING_MINUTES} minutes'
+      RETURNING id`,
+  );
+  for (const row of rows) {
+    await log("POST_PUBLISH_FAILED", `Публикация оборвалась на перезапуске: черновик висел в статусе PUBLISHING больше ${STUCK_PUBLISHING_MINUTES} минут и возвращён в очередь`, { draftId: row.id }, null, "warn");
+  }
+  return rows.map((r) => r.id);
 }
 
 /** News and market moves follow the autoPost flag; trade posts have their own switch; the owner's topics always wait for the owner. */
@@ -117,6 +205,17 @@ function gateScore(d: DraftRow, candidateScore: number | null): number | null {
 }
 
 export type PlatformOutcome = { platform: PlatformId; status: "published" | "already" | "failed" | "skipped"; postId?: string; permalink?: string | null; reason?: string };
+
+/**
+ * What one pass over the platforms means for the draft. A platform switched off while the post was
+ * going out owes the same as one that failed: the draft stays PARTIAL and is finished off later,
+ * instead of looking published while the second half of the post is lost.
+ */
+export function summarizeOutcomes(outcomes: PlatformOutcome[]): { anyOut: boolean; partial: boolean; problems: string } {
+  const anyOut = outcomes.some((o) => o.status === "published" || o.status === "already");
+  const unfinished = outcomes.filter((o) => o.status === "failed" || o.status === "skipped");
+  return { anyOut, partial: unfinished.length > 0, problems: unfinished.map((o) => `${PLATFORM_LABEL[o.platform]}: ${o.reason}`).join("; ") };
+}
 
 export type PublishOutcome =
   | { kind: "published"; publicationId: string; platformPostId: string; dryRun: boolean; partial: boolean; platforms: PlatformOutcome[] }
@@ -268,11 +367,8 @@ export async function publishDraft(draftId: string, opts: { manual: boolean }): 
       }
     }
 
-    const ok = outcomes.filter((o) => o.status === "published" || o.status === "already");
-    const failed = outcomes.filter((o) => o.status === "failed");
-    const problems = [...failed, ...outcomes.filter((o) => o.status === "skipped")].map((o) => `${PLATFORM_LABEL[o.platform]}: ${o.reason}`).join("; ");
-    if (ok.length && firstPublication) {
-      const partial = failed.length > 0;
+    const { anyOut, partial, problems } = summarizeOutcomes(outcomes);
+    if (anyOut && firstPublication) {
       await updateDraft(draftId, { status: partial ? "PARTIAL" : "PUBLISHED", error: partial ? problems : null });
       if (candidate) await setCandidateStatus(candidate.id, "PUBLISHED");
       if (draft.trade_id) await query(`UPDATE hl_trades SET post_status = 'POSTED', updated_at = now() WHERE id = $1`, [draft.trade_id]);

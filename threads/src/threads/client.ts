@@ -438,7 +438,9 @@ export class ThreadsClient {
 
   async publishContainer(containerId: string): Promise<string> {
     const uid = await this.userId();
-    const published = await this.call<{ id?: string }>(`/${uid}/threads_publish`, { method: "POST", params: { creation_id: containerId } });
+    // Never retried here: a timeout may mean the post is already out, and re-sending the same
+    // creation_id turns that into a rejection. The publisher keeps the attempt UNKNOWN and recovers.
+    const published = await this.call<{ id?: string }>(`/${uid}/threads_publish`, { method: "POST", params: { creation_id: containerId }, noRetry: true });
     if (!published.id) throw new ThreadsError(`threads_publish for ${containerId} returned no post id`, 0, `/${uid}/threads_publish`);
     return String(published.id);
   }

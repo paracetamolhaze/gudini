@@ -51,7 +51,7 @@ const envSchema = z.object({
   COINGECKO_API_KEY: z.string().optional().default(""),
 
   /** Default provider for every task; per-task models may name another provider (provider:model). */
-  LLM_PROVIDER: z.enum(["openrouter", "openai", "anthropic", "gemini", "openai-compatible"]).default("openrouter"),
+  LLM_PROVIDER: z.enum(["openrouter", "openai", "anthropic", "gemini", "openai-compatible", "claude-bridge"]).default("openrouter"),
   LLM_API_KEY: z.string().optional().default(""),
   LLM_BASE_URL: optionalUrl,
   OPENROUTER_API_KEY: z.string().optional().default(""),
@@ -64,6 +64,15 @@ const envSchema = z.object({
   LLM_MODEL_VISION: z.string().optional().default(""),
   LLM_MODEL_TRANSLATION: z.string().optional().default(""),
   LLM_MODEL_EMBEDDING: z.string().optional().default(""),
+
+  /**
+   * Локальный мост к Claude Code на Windows (scripts/claude-bridge.mjs): тексты пишет подписка
+   * владельца, а не платный API. Без URL и токена провайдер claude-bridge не работает.
+   */
+  CLAUDE_BRIDGE_URL: optionalUrl,
+  CLAUDE_BRIDGE_TOKEN: z.string().optional().default(""),
+  CLAUDE_BRIDGE_MODEL: z.string().optional().default(""),
+  CLAUDE_BRIDGE_MODEL_WRITER: z.string().optional().default(""),
 
   AUTOPILOT_MODE: z.enum(["OFF", "DRAFT", "REVIEW", "AUTO"]).default("DRAFT"),
   DRY_RUN: bool,
@@ -113,6 +122,7 @@ export const SECRET_ENV_KEYS = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "GEMINI_API_KEY",
+  "CLAUDE_BRIDGE_TOKEN",
   "SITE_PASSWORD",
   "DATABASE_URL",
   "REDIS_URL",

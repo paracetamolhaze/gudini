@@ -32,6 +32,16 @@ export interface PublishResult {
 
 const isTransient = (err: unknown): boolean => err instanceof TimeoutError || err instanceof NetworkError || err instanceof ServerError;
 
+/**
+ * The outcome of a read that can itself fail. "Read it, the post is not there" and "could not read"
+ * must never collapse into one value: the first allows a re-send, the second forbids it.
+ */
+type Probe<T> = { read: true; value: T } | { read: false; error: unknown };
+
+const unreadable = (error: unknown): Probe<never> => ({ read: false, error });
+
+type ContainerState = Awaited<ReturnType<ThreadsClient["containerStatus"]>>;
+
 export class ThreadsPublisher {
   constructor(
     private readonly client: ThreadsClient,
@@ -39,23 +49,48 @@ export class ThreadsPublisher {
     private readonly opts: { recoveryWindowMinutes?: number } = {},
   ) {}
 
-  /** Look for a post with exactly this text among recent posts (created after the attempt started). */
-  private async findRecentPost(text: string, since: Date, replyToId?: string): Promise<{ id: string; permalink: string | null } | null> {
+  /**
+   * Look for a post with exactly this text among recent posts (created after the attempt started).
+   * A failed read comes back as `read: false`, never as "no such post".
+   */
+  private async findRecentPost(text: string, since: Date, replyToId?: string): Promise<Probe<{ id: string; permalink: string | null } | null>> {
     const sinceSec = Math.floor((since.getTime() - 5 * 60_000) / 1000);
     const wanted = text.trim();
-    if (replyToId) {
-      // Replies do not appear under /threads; scan the reply feed of the account.
-      const page = await this.client.myReplies({ limit: 50, since: sinceSec }).catch(() => null);
-      for (const m of page?.data ?? []) {
-        if ((m.text ?? "").trim() === wanted && m.replied_to?.id === replyToId) return { id: m.id, permalink: m.permalink ?? null };
+    try {
+      if (replyToId) {
+        // Replies do not appear under /threads; scan the reply feed of the account.
+        const page = await this.client.myReplies({ limit: 50, since: sinceSec });
+        for (const m of page.data ?? []) {
+          if ((m.text ?? "").trim() === wanted && m.replied_to?.id === replyToId) return { read: true, value: { id: m.id, permalink: m.permalink ?? null } };
+        }
+        return { read: true, value: null };
       }
-      return null;
+      const page = await this.client.myPosts({ limit: 25, since: sinceSec });
+      for (const m of page.data ?? []) {
+        if ((m.text ?? "").trim() === wanted) return { read: true, value: { id: m.id, permalink: m.permalink ?? null } };
+      }
+      return { read: true, value: null };
+    } catch (err) {
+      return unreadable(err);
     }
-    const page = await this.client.myPosts({ limit: 25, since: sinceSec }).catch(() => null);
-    for (const m of page?.data ?? []) {
-      if ((m.text ?? "").trim() === wanted) return { id: m.id, permalink: m.permalink ?? null };
+  }
+
+  private async probeContainer(containerId: string): Promise<Probe<ContainerState>> {
+    try {
+      return { read: true, value: await this.client.containerStatus(containerId) };
+    } catch (err) {
+      return unreadable(err);
     }
-    return null;
+  }
+
+  /**
+   * A probe we could not read means the post may already be live. Keep the attempt UNKNOWN and hand
+   * the original (usually retryable) error back to the queue: arriving late beats posting twice.
+   */
+  private async holdUnknown(key: string, what: string, cause: unknown): Promise<Error> {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    await this.store.update(key, { status: "UNKNOWN", error: `publish outcome unknown: ${what}: ${reason}` });
+    return cause instanceof Error ? cause : new ThreadsError(`${what}: ${reason}`, 0, "(local)");
   }
 
   private async permalinkOf(id: string): Promise<string | null> {
@@ -76,24 +111,28 @@ export class ThreadsPublisher {
       throw new PublishUnknownStateError(`Attempt ${req.key} is in an unknown state; a human must check Threads before retrying: ${existing.error}`);
     }
 
-    // Recovery: something was sent earlier and we never learned the outcome.
-    if (existing && (existing.status === "UNKNOWN" || existing.status === "CONTAINER_CREATED")) {
-      const found = await this.findRecentPost(req.text, existing.createdAt, req.replyToId);
-      if (found) {
-        await this.store.update(req.key, { status: "PUBLISHED", postId: found.id, error: null });
-        return { id: found.id, permalink: found.permalink, recovered: true, containerId: existing.containerId };
+    // Recovery: something may have been sent earlier and we never learned the outcome. FAILED goes
+    // through here too — the call can reach Meta and still come back as an error (an expired
+    // container after a retried publish, a timeout turned into a rejection).
+    if (existing && (existing.status === "UNKNOWN" || existing.status === "CONTAINER_CREATED" || existing.status === "FAILED")) {
+      const recent = await this.findRecentPost(req.text, existing.createdAt, req.replyToId);
+      if (recent.read && recent.value) {
+        await this.store.update(req.key, { status: "PUBLISHED", postId: recent.value.id, error: null });
+        return { id: recent.value.id, permalink: recent.value.permalink, recovered: true, containerId: existing.containerId };
       }
+      if (!recent.read) throw await this.holdUnknown(req.key, "не удалось прочитать ленту аккаунта, повторная публикация отменена", recent.error);
       if (existing.containerId) {
-        const status = await this.client.containerStatus(existing.containerId).catch(() => null);
-        if (status?.status === "PUBLISHED") {
+        const probe = await this.probeContainer(existing.containerId);
+        if (!probe.read) throw await this.holdUnknown(req.key, `не удалось прочитать статус контейнера ${existing.containerId}, повторная публикация отменена`, probe.error);
+        if (probe.value.status === "PUBLISHED") {
           // Meta says it went out but we cannot see it — stop here rather than risk a duplicate.
           await this.store.update(req.key, { status: "FAILED", error: `unknown state: container ${existing.containerId} reports PUBLISHED but the post was not found in recent posts` });
           throw new PublishUnknownStateError(`Container ${existing.containerId} is PUBLISHED but the post could not be located; check the account before retrying.`);
         }
-        if (status?.status === "FINISHED") {
+        if (probe.value.status === "FINISHED") {
           return this.publishContainer(req, existing.containerId, existing.createdAt);
         }
-        // ERROR / EXPIRED / unknown → fall through and create a fresh container.
+        // ERROR / EXPIRED / IN_PROGRESS → nothing is public; fall through and create a fresh container.
       }
     } else if (!existing) {
       const started = await this.store.start(req.key, req.kind);
@@ -141,11 +180,12 @@ export class ThreadsPublisher {
       if (isTransient(err)) {
         // The publish call may have gone through. Mark UNKNOWN; the next attempt recovers instead of re-sending.
         await this.store.update(req.key, { status: "UNKNOWN", error: `publish outcome unknown: ${(err as Error).message}` });
-        const found = await this.findRecentPost(req.text, startedAt, req.replyToId);
-        if (found) {
-          await this.store.update(req.key, { status: "PUBLISHED", postId: found.id, error: null });
-          return { id: found.id, permalink: found.permalink, recovered: true, containerId };
+        const recent = await this.findRecentPost(req.text, startedAt, req.replyToId);
+        if (recent.read && recent.value) {
+          await this.store.update(req.key, { status: "PUBLISHED", postId: recent.value.id, error: null });
+          return { id: recent.value.id, permalink: recent.value.permalink, recovered: true, containerId };
         }
+        // Found nothing, or could not look: either way the attempt stays UNKNOWN for the next round.
         throw err;
       }
       await this.store.update(req.key, { status: "FAILED", error: (err as Error).message });

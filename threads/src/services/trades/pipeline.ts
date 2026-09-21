@@ -38,13 +38,21 @@ async function candlesFor(trade: TradeRow): Promise<Array<{ t: number; c: number
   return candles.map((c) => ({ t: c.t, c: Number(c.c) })).filter((c) => Number.isFinite(c.c));
 }
 
+/** The signature on the card: whatever the owner typed, else the handle of the account the post goes to. */
+async function cardHandle(settings: Settings): Promise<string> {
+  const typed = settings.trades.handle.trim();
+  if (typed) return typed;
+  const row = await one<{ username: string }>(`SELECT username FROM accounts WHERE platform = ANY($1::text[]) ORDER BY platform = $2 DESC, updated_at DESC LIMIT 1`, [["threads", "x"], settings.platforms.threads.enabled ? "threads" : "x"]).catch(() => null);
+  return row?.username ?? "";
+}
+
 export async function renderCardForTrade(trade: TradeRow, settings: Settings): Promise<{ assetId: string; file: string; candles: Array<{ t: number; c: number }> }> {
   if (trade.status !== "CLOSED" || trade.exit_px === null || !trade.closed_at) throw new Error("карточка рисуется только для закрытой сделки");
   const candles = await candlesFor(trade).catch(() => []);
   const image = await renderTradeCard(
     { coin: trade.coin, direction: trade.direction, leverage: trade.leverage, entryPx: trade.entry_px, exitPx: trade.exit_px, netPnl: trade.net_pnl, roePct: trade.roe_pct, movePct: trade.move_pct, openedAt: trade.opened_at, closedAt: trade.closed_at, size: trade.max_size, candles },
     // The card carries the full address on purpose: the point is that the trade can be checked in the explorer.
-    { showUsd: settings.trades.showUsd, showSize: settings.trades.showSize, wallet: settings.trades.showWallet ? trade.wallet : null, handle: settings.trades.handle, language: settings.platforms.x.enabled && settings.platforms.x.language === "en" && !settings.platforms.threads.enabled ? "en" : "ru", timezone: settings.schedule.timezone },
+    { showUsd: settings.trades.showUsd, showSize: settings.trades.showSize, wallet: settings.trades.showWallet ? trade.wallet : null, handle: await cardHandle(settings), language: settings.platforms.x.enabled && settings.platforms.x.language === "en" && !settings.platforms.threads.enabled ? "en" : "ru", timezone: settings.schedule.timezone },
   );
   const assetId = newId();
   const dir = path.join(env().DATA_DIR, "media", assetId);

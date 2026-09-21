@@ -94,9 +94,12 @@ const WRITER = {
 class ScriptedLlm implements LlmProvider {
   readonly name = "fake";
   calls: string[] = [];
+  /** Schema name the provider should refuse, to play a provider outage. */
+  fail: string | null = null;
   async complete(req: LlmRequest): Promise<LlmResponse> {
     const schema = req.jsonSchema?.name ?? "text";
     this.calls.push(schema);
+    if (this.fail && schema === this.fail) throw new Error("openrouter: HTTP 403 — Key limit exceeded (total limit)");
     let answer: unknown;
     switch (schema) {
       case "SourceAnalysis":
@@ -480,4 +483,42 @@ test("one post, two platforms: X fails → PARTIAL, and a retry only sends what 
   assert.deepEqual(rows.map((r) => r.platform), ["threads", "x"]);
   assert.equal(await postsPublishedLast24h(), countBefore + 1, "a cross-post counts once against the daily cap");
   setPlatformForTests("x", null);
+});
+
+test("a move whose post could not be written is not lost: the next scan writes it", async () => {
+  const { scanMovers } = await import("../../src/services/market/movers.js");
+  const { HyperliquidClient, setHyperliquidForTests } = await import("../../src/hyperliquid/client.js");
+  await query("DELETE FROM market_moves");
+  await query("DELETE FROM drafts WHERE kind = 'MOVER'");
+  setHyperliquidForTests(new HyperliquidClient({ fetchImpl: (async () => new Response("[]", { status: 200 })) as typeof fetch }));
+  await saveSettings({ mode: "REVIEW", killSwitch: false, movers: { enabled: true, maxPostsPerDay: 2, minChange24hPct: 15, minChange1hPct: 8, minVolumeUsd: 20_000_000 } });
+  const coins = [
+    { id: "aster", symbol: "aster", name: "Aster", current_price: 2.5, market_cap: 4e8, market_cap_rank: 120, total_volume: 5e8, price_change_percentage_1h_in_currency: 1, price_change_percentage_24h_in_currency: 31.2 },
+    { id: "tether", symbol: "usdt", name: "Tether", current_price: 1, market_cap: 1e11, market_cap_rank: 3, total_volume: 9e10, price_change_percentage_1h_in_currency: 0, price_change_percentage_24h_in_currency: 40 },
+  ];
+  const fetchImpl = (async () => new Response(JSON.stringify(coins), { status: 200 })) as typeof fetch;
+
+  // The writer is down (this is exactly what a spent OpenRouter key looks like).
+  scripted.fail = "MoverPost";
+  const failed = await scanMovers({ fetchImpl });
+  assert.deepEqual([failed.found, failed.drafted], [1, 0], JSON.stringify(failed));
+  assert.match(failed.error ?? "", /key limit/i);
+  const held = await one<{ status: string; draft_id: string | null; reason: string }>("SELECT status, draft_id, reason FROM market_moves WHERE symbol = $1", ["ASTER"]);
+  assert.deepEqual([held!.status, held!.draft_id], ["FOUND", null], "the move stays on the list, ready for another try");
+  assert.match(held!.reason, /пост не написан/);
+  assert.equal((await query("SELECT 1 FROM market_moves WHERE symbol = $1", ["USDT"])).length, 0, "stablecoins are never a market move");
+
+  // Writer is back: the same move is picked up again without being found again.
+  scripted.fail = null;
+  const retried = await scanMovers({ fetchImpl });
+  assert.deepEqual([retried.found, retried.drafted, retried.error], [0, 1, null], JSON.stringify(retried));
+  const done = await one<{ status: string; draft_id: string }>("SELECT status, draft_id FROM market_moves WHERE symbol = $1", ["ASTER"]);
+  assert.equal(done!.status, "DRAFTED");
+  assert.equal((await getDraft(done!.draft_id))!.kind, "MOVER");
+
+  // A third scan neither duplicates the move nor the post.
+  const third = await scanMovers({ fetchImpl });
+  assert.deepEqual([third.found, third.drafted], [0, 0], JSON.stringify(third));
+  assert.equal((await query("SELECT 1 FROM drafts WHERE kind = 'MOVER'")).length, 1);
+  setHyperliquidForTests(null);
 });

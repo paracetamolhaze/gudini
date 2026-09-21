@@ -4,7 +4,7 @@ import { env } from "../../config/env.js";
 import { loadSettings, type Settings } from "../../config/settings.js";
 import { one, query } from "../../db/pool.js";
 import { insertDraft, recentPublishedTexts } from "../../db/repos/drafts.js";
-import { fillsForCoin, getTrade, insertFills, knownLeverage, lastFillTime, rememberLeverage, tradePostsToday, updateTrade, upsertTrade, type TradeRow } from "../../db/repos/trades.js";
+import { fillsForCoin, getTrade, insertFills, knownLeverage, lastFillTime, listTrades, rememberLeverage, tradePostsToday, updateTrade, upsertTrade, type TradeRow } from "../../db/repos/trades.js";
 import { hyperliquid, isPerpCoin, isWalletAddress } from "../../hyperliquid/client.js";
 import { defaultTargets } from "../../platforms/index.js";
 import { errorMessage } from "../../shared/logger.js";
@@ -147,7 +147,6 @@ export async function syncTrades(): Promise<TradeSyncResult> {
   const { inserted, coins } = await insertFills(wallet, fills);
   result.newFills = inserted;
 
-  const freshlyClosed: TradeRow[] = [];
   for (const coin of coins) {
     const built = buildTradesForCoin(await fillsForCoin(wallet, coin));
     for (const t of built) {
@@ -156,19 +155,17 @@ export async function syncTrades(): Promise<TradeSyncResult> {
         leverage = await hl.leverageFor(wallet, coin).catch(() => null);
         if (leverage !== null) await rememberLeverage(wallet, coin, leverage);
       }
-      const { row, justClosed } = await upsertTrade(wallet, t, leverage, roePct(t, leverage));
+      const { justClosed } = await upsertTrade(wallet, t, leverage, roePct(t, leverage));
       result.tradesTouched++;
-      if (justClosed) {
-        result.closedNow++;
-        freshlyClosed.push(row);
-      }
+      if (justClosed) result.closedNow++;
     }
   }
 
-  // Only trades that closed recently are drafted on their own; the history stays available by button.
+  // Trades closed within the last day that still have no verdict are looked at on every sync — so a post
+  // that could not be written (writer down) is retried; older history stays available by button.
   const thresholds = { minPnlUsd: settings.trades.minPnlUsd, minRoePct: settings.trades.minRoePct, requireBoth: settings.trades.requireBoth };
-  for (const trade of freshlyClosed) {
-    if (trade.post_status !== "NONE") continue;
+  const undecided: TradeRow[] = (await listTrades({ wallet, status: "CLOSED", limit: 60 })).filter((t) => t.post_status === "NONE" && !t.draft_id);
+  for (const trade of undecided) {
     const verdict = worthPosting({ status: trade.status, netPnl: trade.net_pnl, roePct: trade.roe_pct, movePct: trade.move_pct }, thresholds);
     if (!verdict.ok) {
       await updateTrade(trade.id, { post_status: "SKIPPED", skip_reason: verdict.reason });
@@ -185,6 +182,7 @@ export async function syncTrades(): Promise<TradeSyncResult> {
       if (out.kind === "draft") result.drafted++;
     } catch (err) {
       result.error = errorMessage(err);
+      break; // the writer is down: one failure speaks for the whole sync, the next one retries
     }
   }
   if (inserted || result.closedNow) await audit("TRADES_SYNCED", `Hyperliquid: новых исполнений ${inserted}, закрыто сделок ${result.closedNow}, постов подготовлено ${result.drafted}`, {}, { wallet: shortWallet(wallet) });

@@ -119,14 +119,14 @@ async function moverPostsToday(timezone: string): Promise<number> {
   return row?.n ?? 0;
 }
 
-export async function scanMovers(): Promise<{ scanned: number; found: number; drafted: number; error: string | null }> {
+export async function scanMovers(opts: { fetchImpl?: typeof fetch } = {}): Promise<{ scanned: number; found: number; drafted: number; error: string | null }> {
   const settings = await loadSettings(true);
   const out = { scanned: 0, found: 0, drafted: 0, error: null as string | null };
   if (!settings.movers.enabled) return { ...out, error: "поиск движений выключен" };
   if (settings.mode === "OFF" || settings.killSwitch) return out;
   let coins: MarketCoin[];
   try {
-    coins = await fetchTopCoins(settings.movers.topN);
+    coins = await fetchTopCoins(settings.movers.topN, opts.fetchImpl ?? fetch);
   } catch (err) {
     return { ...out, error: errorMessage(err) };
   }
@@ -152,7 +152,9 @@ export async function scanMovers(): Promise<{ scanned: number; found: number; dr
     }
   }
   out.found = fresh.length;
-  for (const move of fresh) {
+  // Everything found recently that still has no post — so a move whose post could not be written is retried.
+  const pending = (await query<MoveRow>(`SELECT * FROM market_moves WHERE status = 'FOUND' AND draft_id IS NULL AND detected_at >= now() - interval '6 hours' ORDER BY abs(change_pct) DESC LIMIT 20`)).map((r) => normalize(r)!);
+  for (const move of pending) {
     if ((await moverPostsToday(settings.schedule.timezone)) >= settings.movers.maxPostsPerDay) {
       await query(`UPDATE market_moves SET status = 'SKIPPED', reason = $2 WHERE id = $1`, [move.id, `дневной лимит постов о движениях (${settings.movers.maxPostsPerDay}) — пост можно сделать кнопкой`]);
       continue;
@@ -161,8 +163,12 @@ export async function scanMovers(): Promise<{ scanned: number; found: number; dr
       await createMoverDraft(move.id);
       out.drafted++;
     } catch (err) {
+      // The writer is down (no key, no credits): one failure speaks for the whole scan. The moves stay
+      // on the list and a post can still be asked for by button once the writer is back.
       out.error = errorMessage(err);
-      await query(`UPDATE market_moves SET status = 'FAILED', reason = $2 WHERE id = $1`, [move.id, errorMessage(err)]);
+      await query(`UPDATE market_moves SET reason = $2 WHERE id = $1`, [move.id, `пост не написан: ${errorMessage(err).slice(0, 300)}`]);
+      await audit("POST_VALIDATION_FAILED", `Пост о движении ${move.symbol} не написан: ${errorMessage(err).slice(0, 300)}`, {}, { moveId: move.id }, "error");
+      break;
     }
   }
   return out;

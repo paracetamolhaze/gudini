@@ -114,6 +114,12 @@ class ScriptedLlm implements LlmProvider {
       case "ReplyReview":
         answer = { cryptoRelevant: true, addsValue: true, grounded: true, safe: true, reason: "Полезное пояснение механизма" };
         break;
+      case "TradePost":
+        answer = { text: "Закрыл лонг по BTC: вход 60 500, выход 62 600, плечо x10. Вышло +34.1% на маржу за пару часов. Забрал своё и не стал пересиживать.", xText: "Закрыл лонг BTC: 60 500 → 62 600, x10, +34.1% на маржу. Забрал своё.", confidence: 90 };
+        break;
+      case "MoverPost":
+        answer = { text: "SOL за сутки +18.4%, цена уже $212.4. Явной причины пока не вижу — просто смотрю, как рынок переваривает движение, и не лезу в догонку.", xText: "SOL +18.4% за сутки, уже $212.4. Причины не вижу, в догонку не лезу.", confidence: 88 };
+        break;
       case "TopicPost":
         answer = { text: "Рост активности сети не гарантирует рост токена. Важно, кто платит комиссии и получает ли токен часть этой ценности. Число транзакций без такой связи мало говорит об инвестиционном спросе.", cryptoRelevant: true };
         break;
@@ -133,6 +139,7 @@ function fakeThreads() {
   const replies: Array<{ id: string; text: string; username: string; root: string; parent: string; timestamp: string }> = [];
   let n = 0;
   const calls: string[] = [];
+  const images: string[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input.toString());
     const method = init?.method ?? "GET";
@@ -142,6 +149,8 @@ function fakeThreads() {
     if (p === "/me") return json({ id: "777", username: "ru_crypto" });
     if (method === "POST" && p === "/777/threads") {
       const text = String((init?.body as URLSearchParams).get("text") ?? "");
+      const imageUrl = (init?.body as URLSearchParams).get("image_url");
+      if (imageUrl) images.push(imageUrl);
       const id = `c${++n}`;
       (posts as unknown as Record<string, unknown>)[`pending:${id}`] = text;
       return json({ id });
@@ -167,7 +176,7 @@ function fakeThreads() {
     }
     return json({ error: { message: `unhandled ${method} ${p}`, code: 100 } }, 400);
   }) as typeof fetch;
-  return { fetchImpl, posts, replies, calls };
+  return { fetchImpl, posts, replies, calls, images };
 }
 
 const post = (id: string, author: string, text: string): NormalizedPost => ({
@@ -188,13 +197,13 @@ const scripted = new ScriptedLlm();
 
 before(async () => {
   await runMigrations();
-  await getPool().query(`TRUNCATE sources, source_posts, event_clusters, content_candidates, drafts, media_assets, publication_attempts, publications, interactions, conversation_messages, discovered_posts, style_examples, draft_feedback, prompt_versions, jobs, audit_logs, llm_calls, insight_snapshots, recommendations, settings, accounts RESTART IDENTITY CASCADE`);
+  await getPool().query(`TRUNCATE sources, source_posts, event_clusters, content_candidates, drafts, media_assets, publication_attempts, publications, interactions, conversation_messages, discovered_posts, style_examples, draft_feedback, prompt_versions, jobs, audit_logs, llm_calls, insight_snapshots, recommendations, settings, accounts, platform_usage, hl_fills, hl_trades, hl_leverage, market_moves RESTART IDENTITY CASCADE`);
   wireLlm();
   llm().registerProvider("fake", scripted);
   await saveSettings({ mode: "REVIEW", dryRun: false, killSwitch: false, models: { analysis: "fake:m", writer: "fake:m", reply: "fake:m", vision: "fake:m", translation: "fake:m", embedding: "" } });
   setThreadsClientForTests(new ThreadsClient({ accessToken: "test-token", userId: "777", minRequestIntervalMs: 0, maxRetries: 0, fetchImpl: fake.fetchImpl }));
   setMarketDataForTests({ name: "fake", async getQuote() { return { symbol: "BTC", name: "Bitcoin", priceUsd: 101_900, change24hPct: 2.1, change7dPct: 4, marketCapUsd: 2e12, volume24hUsd: 4e10, fetchedAt: new Date(), provider: "fake" }; } });
-  await query(`INSERT INTO accounts (platform, username, threads_user_id) VALUES ('threads','ru_crypto','777')`);
+  await query(`INSERT INTO accounts (platform, username, platform_user_id) VALUES ('threads','ru_crypto','777')`);
 });
 
 after(async () => {
@@ -257,8 +266,9 @@ test("E2E: foreign blogger post → candidate → facts → Russian draft → ap
   assert.equal(published.kind, "published", JSON.stringify(published));
   assert.equal(fake.posts.length, 1);
   assert.equal(fake.posts[0]!.text, draft!.text);
-  const publication = await one<{ threads_post_id: string; permalink: string; dry_run: boolean }>(`SELECT threads_post_id, permalink, dry_run FROM publications`);
-  assert.equal(publication!.threads_post_id, fake.posts[0]!.id);
+  const publication = await one<{ platform: string; platform_post_id: string; permalink: string; dry_run: boolean }>(`SELECT platform, platform_post_id, permalink, dry_run FROM publications`);
+  assert.equal(publication!.platform_post_id, fake.posts[0]!.id);
+  assert.equal(publication!.platform, "threads", "X is not connected, so the draft only targeted Threads");
   assert.equal(publication!.dry_run, false);
   assert.equal((await getDraft(draft!.id))!.status, "PUBLISHED");
   assert.equal((await getCandidate(candidate!.id))!.status, "PUBLISHED");
@@ -332,4 +342,142 @@ test("a user-scheduled topic publishes with automatic news publishing disabled",
   const outcome = await publisherTick();
   assert.equal(outcome.published, 1, JSON.stringify(outcome));
   assert.equal((await getDraft(topic.id))?.status, "PUBLISHED");
+});
+
+test("Hyperliquid: fills become trades; a fresh winner gets a card and a post, a loser never does", async () => {
+  const { HyperliquidClient, setHyperliquidForTests } = await import("../../src/hyperliquid/client.js");
+  const { syncTrades } = await import("../../src/services/trades/pipeline.js");
+  const wallet = `0x${"ab12".repeat(10)}`;
+  const now = Date.now();
+  const h = 3_600_000;
+  const base = { dir: "", hash: "0xabc", oid: 1, crossed: true, feeToken: "USDC" };
+  const fills = [
+    { ...base, coin: "BTC", px: "60000", sz: "0.5", side: "B", time: now - 4 * h, startPosition: "0", closedPnl: "0", fee: "9", tid: 101 },
+    { ...base, coin: "BTC", px: "61000", sz: "0.5", side: "B", time: now - 3.5 * h, startPosition: "0.5", closedPnl: "0", fee: "9", tid: 102 },
+    { ...base, coin: "BTC", px: "62000", sz: "0.4", side: "A", time: now - 2 * h, startPosition: "1", closedPnl: "600", fee: "7", tid: 103 },
+    { ...base, coin: "BTC", px: "63000", sz: "0.6", side: "A", time: now - 1 * h, startPosition: "0.6", closedPnl: "1500", fee: "11", tid: 104 },
+    { ...base, coin: "ETH", px: "3000", sz: "1", side: "A", time: now - 3 * h, startPosition: "0", closedPnl: "0", fee: "1", tid: 201 },
+    { ...base, coin: "ETH", px: "3100", sz: "1", side: "B", time: now - 2.5 * h, startPosition: "-1", closedPnl: "-100", fee: "1", tid: 202 },
+    { ...base, coin: "@107", px: "1", sz: "10", side: "B", time: now - 2 * h, startPosition: "0", closedPnl: "0", fee: "0.1", tid: 301 },
+  ];
+  const asked: string[] = [];
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { type: string; startTime?: number };
+    asked.push(body.type);
+    const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+    if (body.type === "userFillsByTime") return json(fills.filter((f) => f.time >= (body.startTime ?? 0)));
+    if (body.type === "clearinghouseState") return json({ assetPositions: [] });
+    if (body.type === "activeAssetData") return json({ leverage: { type: "cross", value: 10 } });
+    if (body.type === "candleSnapshot") return json(Array.from({ length: 40 }, (_, i) => ({ t: now - 5 * h + i * 450_000, T: 0, o: "0", c: String(60_000 + i * 80), h: "0", l: "0", v: "0" })));
+    return json({});
+  }) as typeof fetch;
+  setHyperliquidForTests(new HyperliquidClient({ fetchImpl }));
+  await saveSettings({ mode: "REVIEW", killSwitch: false, dryRun: false, trades: { enabled: true, wallet, handle: "ru_crypto" } });
+
+  const first = await syncTrades();
+  assert.deepEqual([first.error, first.newFills, first.closedNow, first.drafted], [null, 6, 2, 1], JSON.stringify(first));
+  const btc = await one<{ status: string; direction: string; net_pnl: string; leverage: string; roe_pct: string; post_status: string; draft_id: string; card_asset_id: string }>("SELECT * FROM hl_trades WHERE coin = $1", ["BTC"]);
+  assert.deepEqual([btc!.status, btc!.direction, Number(btc!.net_pnl), Number(btc!.leverage), Number(btc!.roe_pct), btc!.post_status], ["CLOSED", "LONG", 2064, 10, 34.12, "DRAFTED"]);
+  const eth = await one<{ post_status: string; skip_reason: string; net_pnl: string }>("SELECT post_status, skip_reason, net_pnl FROM hl_trades WHERE coin = $1", ["ETH"]);
+  assert.deepEqual([eth!.post_status, Number(eth!.net_pnl)], ["SKIPPED", -102]);
+  assert.match(eth!.skip_reason, /не в плюсе/);
+  assert.equal((await query("SELECT 1 FROM hl_fills WHERE coin = $1", ["@107"])).length, 0, "spot fills are not perp trades");
+
+  const draft = await getDraft(btc!.draft_id);
+  assert.deepEqual([draft!.kind, draft!.status, draft!.platforms, draft!.image_asset_id], ["TRADE", "DRAFT", ["threads"], btc!.card_asset_id], draft!.review_reason ?? "");
+  assert.match(draft!.text, /\+34\.1%/);
+  assert.equal(draft!.facts_json!.facts.length, 6);
+  const asset = await one<{ status: string; final_path: string; width: number }>("SELECT status, final_path, width FROM media_assets WHERE id = $1", [btc!.card_asset_id]);
+  assert.deepEqual([asset!.status, asset!.width, existsSync(asset!.final_path)], ["QA_PASSED", 1440, true]);
+
+  // the same fills again change nothing
+  const again = await syncTrades();
+  assert.deepEqual([again.newFills, again.drafted], [0, 0]);
+  assert.equal((await query("SELECT 1 FROM drafts WHERE kind = $1", ["TRADE"])).length, 1);
+
+  // published with the card; the trade is marked as posted
+  await query("UPDATE publications SET published_at = now() - make_interval(hours => 3)");
+  const out = await publishDraft(draft!.id, { manual: true });
+  assert.equal(out.kind, "published", JSON.stringify(out));
+  assert.equal(fake.images.at(-1), `https://example.test/threads/media/public/${btc!.card_asset_id}/final.jpg`);
+  assert.equal((await one<{ post_status: string }>("SELECT post_status FROM hl_trades WHERE coin = $1", ["BTC"]))!.post_status, "POSTED");
+  assert.ok(asked.includes("activeAssetData") && asked.includes("candleSnapshot"));
+  setHyperliquidForTests(null);
+});
+
+test("a loud market move becomes a draft built only from verified numbers", async () => {
+  const { createMoverDraft, getMove } = await import("../../src/services/market/movers.js");
+  const move = await one<{ id: string }>(
+    "INSERT INTO market_moves (symbol, name, coingecko_id, direction, period, change_pct, price, market_cap, volume_24h, rank, day) VALUES ($1,$2,$3,$4,$5,18.44,212.4,1e11,9.1e9,5,current_date) RETURNING id",
+    ["SOL", "Solana", "solana", "UP", "24h"],
+  );
+  const created = await createMoverDraft(move!.id);
+  const draft = await getDraft(created.draftId);
+  assert.deepEqual([draft!.kind, draft!.status, draft!.type], ["MOVER", "DRAFT", "MOVER"], draft!.review_reason ?? "");
+  assert.ok(draft!.expires_at && draft!.expires_at.getTime() - Date.now() < 9 * 3_600_000, "a market move goes stale within hours");
+  assert.equal((await getMove(move!.id))!.status, "DRAFTED");
+  assert.deepEqual((await createMoverDraft(move!.id)).draftId, created.draftId, "asking twice returns the same draft");
+});
+
+test("one post, two platforms: X fails → PARTIAL, and a retry only sends what is still missing", async () => {
+  const { setPlatformForTests } = await import("../../src/platforms/index.js");
+  const { insertDraft } = await import("../../src/db/repos/drafts.js");
+  const { postsPublishedLast24h } = await import("../../src/db/repos/publishing.js");
+  const sent: Array<[string, string]> = [];
+  let failX = true;
+  setPlatformForTests("x", {
+    id: "x",
+    label: "X",
+    maxChars: () => 280,
+    publicReplyChannel: () => "manual_or_quote",
+    configured: () => true,
+    async me() {
+      return { id: "42", username: "me_x" };
+    },
+    async publishPost(req) {
+      if (failX) throw new Error("X API 503: over capacity");
+      sent.push([req.key, req.text]);
+      return { id: `x${sent.length}`, permalink: `https://x.com/me_x/status/x${sent.length}`, parts: 1, recovered: false };
+    },
+    async publishReply() {
+      throw new Error("not used");
+    },
+    async fetchInbox() {
+      return { items: [], conversations: new Map(), notice: null };
+    },
+    async searchPosts() {
+      return { found: [], error: null };
+    },
+    async metrics() {
+      return { views: 0, likes: 0, replies: 0, reposts: 0, quotes: 0, shares: 0 };
+    },
+  });
+  await saveSettings({ mode: "REVIEW", killSwitch: false, dryRun: false });
+  const threadsBefore = fake.posts.length;
+  const countBefore = await postsPublishedLast24h();
+  const xText = "Фандинг — плата за перекос толпы. Держишь перп долго — он тихо ест результат.";
+  const draft = await insertDraft({ candidateId: null, kind: "TOPIC", platforms: ["threads", "x"], type: "EXPLAINER", text: "Фандинг на бессрочных контрактах — это плата за перекос толпы. Держишь позицию долго против перекоса — она тихо съедает результат.", textX: xText, hook: null, body: null, sourceSummary: "фандинг", sourceUrls: [], confidence: 90, riskScore: 5, status: "APPROVED", reviewReason: null, priority: "P2", promptVersion: "t", model: null, validation: null, variants: [], expiresAt: null });
+
+  const first = await publishDraft(draft.id, { manual: true });
+  assert.equal(first.kind, "published", JSON.stringify(first));
+  if (first.kind !== "published") return;
+  assert.deepEqual([first.partial, first.platforms.map((p) => `${p.platform}:${p.status}`)], [true, ["threads:published", "x:failed"]]);
+  const partial = await getDraft(draft.id);
+  assert.equal(partial!.status, "PARTIAL");
+  assert.match(partial!.error!, /X: X API 503/);
+  assert.equal(fake.posts.length, threadsBefore + 1);
+
+  failX = false;
+  const second = await publishDraft(draft.id, { manual: true });
+  assert.equal(second.kind, "published", JSON.stringify(second));
+  if (second.kind !== "published") return;
+  assert.deepEqual(second.platforms.map((p) => `${p.platform}:${p.status}`), ["threads:already", "x:published"]);
+  assert.equal(fake.posts.length, threadsBefore + 1, "Threads is never posted twice");
+  assert.deepEqual(sent, [[`draft:${draft.id}:x`, xText]]);
+  const done = await getDraft(draft.id);
+  assert.deepEqual([done!.status, done!.error], ["PUBLISHED", null]);
+  const rows = await query<{ platform: string }>("SELECT platform FROM publications WHERE draft_id = $1 ORDER BY platform", [draft.id]);
+  assert.deepEqual(rows.map((r) => r.platform), ["threads", "x"]);
+  assert.equal(await postsPublishedLast24h(), countBefore + 1, "a cross-post counts once against the daily cap");
+  setPlatformForTests("x", null);
 });

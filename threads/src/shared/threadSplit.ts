@@ -9,18 +9,19 @@ export const THREADS_MAX_THREAD_CHARS = THREADS_MAX_CHARS * THREADS_MAX_PARTS;
 
 const LABEL = (i: number, n: number) => `${i}/${n} `;
 
-export function splitIntoThreadParts(text: string): string[] {
+/** `maxChars` is the platform limit of one post (Threads 500, X 280 without Premium). */
+export function splitIntoThreadParts(text: string, maxChars: number = THREADS_MAX_CHARS): string[] {
   const raw = text.replace(/\n{3,}/g, "\n\n").trim();
   if (!raw) return [];
-  if (raw.length <= THREADS_MAX_CHARS) return [raw];
+  if (raw.length <= maxChars) return [raw];
 
   const labelReserve = 6;
-  const bodyBudget = THREADS_MAX_CHARS - labelReserve;
+  const bodyBudget = maxChars - labelReserve;
   let n = Math.min(THREADS_MAX_PARTS, Math.max(2, Math.ceil(raw.length / bodyBudget)));
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const parts = packParts(raw, n, bodyBudget);
-    if (parts && parts.every((p) => p.length <= THREADS_MAX_CHARS)) return parts;
+    if (parts && parts.every((p) => p.length <= maxChars)) return parts;
     n = Math.min(THREADS_MAX_PARTS, n + 1);
   }
   return hardSlice(raw, Math.min(THREADS_MAX_PARTS, n), bodyBudget);

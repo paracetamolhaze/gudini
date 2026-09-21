@@ -1,13 +1,27 @@
 import { one, query } from "../pool.js";
+import type { PlatformId } from "../../platforms/types.js";
+import type { VerifiedFact } from "../../services/analysis/schemas.js";
 
-export type DraftStatus = "GENERATING" | "DRAFT" | "NEEDS_REVIEW" | "APPROVED" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "REJECTED" | "FAILED" | "EXPIRED";
+/** PARTIAL: out on at least one platform, still owed to another (retry publishes only what is missing). */
+export type DraftStatus = "GENERATING" | "DRAFT" | "NEEDS_REVIEW" | "APPROVED" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "PARTIAL" | "REJECTED" | "FAILED" | "EXPIRED";
+
+/** NEWS — from a source candidate; TOPIC — the owner's own subject; TRADE — a closed Hyperliquid trade; MOVER — a loud market move. */
+export type DraftKind = "NEWS" | "TOPIC" | "TRADE" | "MOVER";
 
 export interface DraftRow {
   id: string;
   candidate_id: string | null;
   approved_by_user: boolean;
+  kind: DraftKind;
   type: string;
+  /** Main text (Threads length). */
   text: string;
+  /** Short variant for X; null means "use `text`". */
+  text_x: string | null;
+  platforms: PlatformId[];
+  trade_id: string | null;
+  /** Facts for drafts that have no candidate (trades, movers): validation and freshness read them. */
+  facts_json: { facts: VerifiedFact[] } | null;
   hook: string | null;
   body: string | null;
   source_summary: string | null;
@@ -31,8 +45,13 @@ export interface DraftRow {
 
 export async function insertDraft(input: {
   candidateId: string | null;
+  kind?: DraftKind;
   type: string;
   text: string;
+  textX?: string | null;
+  platforms?: PlatformId[];
+  tradeId?: string | null;
+  facts?: VerifiedFact[] | null;
   hook: string | null;
   body: string | null;
   sourceSummary: string | null;
@@ -47,10 +66,13 @@ export async function insertDraft(input: {
   validation: unknown;
   variants: unknown;
   expiresAt: Date | null;
+  imageAssetId?: string | null;
 }): Promise<DraftRow> {
   const row = await one<DraftRow>(
-    `INSERT INTO drafts (candidate_id, type, text, hook, body, source_summary, source_urls_json, confidence, risk_score, status, review_reason, priority, prompt_version, model, validation_json, variants_json, expires_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17) RETURNING *`,
+    `INSERT INTO drafts (candidate_id, type, text, hook, body, source_summary, source_urls_json, confidence, risk_score, status, review_reason, priority, prompt_version, model, validation_json, variants_json, expires_at,
+                         kind, text_x, platforms, trade_id, facts_json, image_asset_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,
+             $18,$19,$20::text[],$21,$22::jsonb,$23) RETURNING *`,
     [
       input.candidateId,
       input.type,
@@ -69,6 +91,12 @@ export async function insertDraft(input: {
       JSON.stringify(input.validation ?? null),
       JSON.stringify(input.variants ?? null),
       input.expiresAt,
+      input.kind ?? (input.candidateId ? "NEWS" : "TOPIC"),
+      input.textX ?? null,
+      input.platforms?.length ? input.platforms : ["threads"],
+      input.tradeId ?? null,
+      input.facts ? JSON.stringify({ facts: input.facts }) : null,
+      input.imageAssetId ?? null,
     ],
   );
   if (!row) throw new Error("insert draft returned no row");
@@ -79,7 +107,7 @@ export async function getDraft(id: string): Promise<DraftRow | null> {
   return one<DraftRow>(`SELECT * FROM drafts WHERE id = $1`, [id]);
 }
 
-export async function listDrafts(opts: { status?: string | string[]; limit?: number; before?: string }): Promise<DraftRow[]> {
+export async function listDrafts(opts: { status?: string | string[]; kind?: string | string[]; platform?: string; limit?: number; before?: string }): Promise<DraftRow[]> {
   const params: unknown[] = [];
   const conds: string[] = [];
   const push = (v: unknown) => {
@@ -90,6 +118,11 @@ export async function listDrafts(opts: { status?: string | string[]; limit?: num
     const list = Array.isArray(opts.status) ? opts.status : opts.status.split(",");
     conds.push(`status = ANY(${push(list)}::text[])`);
   }
+  if (opts.kind) {
+    const list = Array.isArray(opts.kind) ? opts.kind : opts.kind.split(",");
+    conds.push(`kind = ANY(${push(list)}::text[])`);
+  }
+  if (opts.platform) conds.push(`${push(opts.platform)} = ANY(platforms)`);
   if (opts.before) conds.push(`created_at < ${push(opts.before)}`);
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   return query<DraftRow>(`SELECT * FROM drafts ${where} ORDER BY created_at DESC LIMIT ${push(Math.min(200, opts.limit ?? 50))}`, params);
@@ -99,6 +132,9 @@ export async function updateDraft(
   id: string,
   patch: Partial<{
     text: string;
+    text_x: string | null;
+    platforms: PlatformId[];
+    facts_json: { facts: VerifiedFact[] } | null;
     hook: string | null;
     body: string | null;
     status: DraftStatus;
@@ -110,6 +146,8 @@ export async function updateDraft(
     confidence: number | null;
     priority: DraftRow["priority"];
     approved_by_user: boolean;
+    model: string | null;
+    prompt_version: string | null;
   }>,
 ): Promise<DraftRow | null> {
   const sets: string[] = [];
@@ -119,6 +157,9 @@ export async function updateDraft(
     sets.push(`${col} = $${params.length}${cast}`);
   };
   if (patch.text !== undefined) add("text", patch.text);
+  if (patch.text_x !== undefined) add("text_x", patch.text_x);
+  if (patch.platforms !== undefined) add("platforms", patch.platforms, "::text[]");
+  if (patch.facts_json !== undefined) add("facts_json", patch.facts_json === null ? null : JSON.stringify(patch.facts_json), "::jsonb");
   if (patch.hook !== undefined) add("hook", patch.hook);
   if (patch.body !== undefined) add("body", patch.body);
   if (patch.status !== undefined) add("status", patch.status);
@@ -130,6 +171,8 @@ export async function updateDraft(
   if (patch.confidence !== undefined) add("confidence", patch.confidence);
   if (patch.priority !== undefined) add("priority", patch.priority);
   if (patch.approved_by_user !== undefined) add("approved_by_user", patch.approved_by_user);
+  if (patch.model !== undefined) add("model", patch.model);
+  if (patch.prompt_version !== undefined) add("prompt_version", patch.prompt_version);
   if (!sets.length) return getDraft(id);
   params.push(id);
   return one<DraftRow>(`UPDATE drafts SET ${sets.join(", ")}, updated_at = now() WHERE id = $${params.length} RETURNING *`, params);
@@ -150,7 +193,7 @@ export async function draftsForCandidate(candidateId: string): Promise<DraftRow[
 
 export async function recentPublishedTexts(limit = 10): Promise<string[]> {
   const rows = await query<{ text: string }>(
-    `SELECT published_text AS text FROM publications ORDER BY published_at DESC LIMIT $1`,
+    `SELECT text FROM (SELECT DISTINCT ON (COALESCE(draft_id::text, id::text)) published_text AS text, published_at FROM publications ORDER BY COALESCE(draft_id::text, id::text), published_at DESC) t ORDER BY published_at DESC LIMIT $1`,
     [limit],
   );
   const drafts = await query<{ text: string }>(`SELECT text FROM drafts WHERE status IN ('DRAFT','NEEDS_REVIEW','APPROVED','SCHEDULED') ORDER BY created_at DESC LIMIT $1`, [limit]);

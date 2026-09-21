@@ -28,6 +28,8 @@ export async function repeatableSpecs(): Promise<RepeatableSpec[]> {
     { queue: "engagement", name: "engagement:poll", everyMs: minutes(s.engagement.pollMinutes) },
     { queue: "analytics", name: "analytics:insights", everyMs: minutes(s.analytics.insightsPollMinutes) },
     { queue: "analytics", name: "analytics:recommend", everyMs: minutes(24 * 60) },
+    { queue: "trades", name: "trades:sync", everyMs: minutes(s.trades.pollMinutes) },
+    { queue: "market", name: "market:scan", everyMs: minutes(s.movers.pollMinutes) },
   ];
 }
 

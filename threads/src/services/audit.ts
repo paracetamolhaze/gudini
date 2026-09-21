@@ -53,6 +53,9 @@ export const AUDIT_EVENTS = [
   "PROMPT_ACTIVATED",
   "TOKEN_REFRESHED",
   "JOB_FAILED",
+  "TRADES_SYNCED",
+  "TRADE_SKIPPED",
+  "MARKET_MOVE",
 ] as const;
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 

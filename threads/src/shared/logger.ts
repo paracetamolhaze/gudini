@@ -57,6 +57,7 @@ export function errorMessage(err: unknown): string {
 export function scrubSecrets(text: string): string {
   return text
     .replace(/access_token=[^&\s"']+/gi, "access_token=[redacted]")
+    .replace(/oauth_(consumer_key|token|signature)="[^"]+"/gi, 'oauth_$1="[redacted]"')
     .replace(/\b(sk-[A-Za-z0-9_-]{8,}|sk-ant-[A-Za-z0-9_-]{8,}|TH[A-Z0-9]{20,}|EAA[A-Za-z0-9]{20,})\b/g, "[redacted]")
     .replace(/Bearer\s+[A-Za-z0-9._-]{8,}/g, "Bearer [redacted]");
 }

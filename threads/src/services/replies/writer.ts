@@ -11,6 +11,8 @@ export const replyTextSchema = z.object({
   confidence: z.number().min(0).max(100),
 });
 
+export type ReplyLanguage = "ru" | "en";
+
 export interface ReplyWriterContext {
   ourPost: string;
   ourFactsText?: string;
@@ -23,20 +25,34 @@ export interface ReplyWriterContext {
   refs?: LlmRefs;
   router?: LlmRouter;
   promptOverride?: { prompt: string; label: string };
+  /** First-person voice of the owner (services/persona.ts). */
+  persona?: string;
+  platformLabel?: string;
+  /** Platform limit for one reply (X: 280). */
+  maxChars?: number;
+  /** People are answered in the language they wrote in. */
+  language?: ReplyLanguage;
 }
 
 export interface ReplyViolation {
-  code: "TEMPLATE_OPENER" | "TOO_LONG" | "EMPTY" | "HYPE" | "MEANINGLESS" | "STRAY_NUMBER" | "NOT_RUSSIAN" | "FINANCIAL_ADVICE";
+  code: "TEMPLATE_OPENER" | "TOO_LONG" | "EMPTY" | "HYPE" | "MEANINGLESS" | "STRAY_NUMBER" | "NOT_RUSSIAN" | "WRONG_LANGUAGE" | "FINANCIAL_ADVICE";
   message: string;
   severity: "block" | "warn";
 }
 
-const TEMPLATES = /^(отличн(ый|ая|ое) (вопрос|мнение|замечание)|интересн(ое|ый|ая) (мнение|вопрос|мысль)|полностью согласен|спасибо за (вопрос|комментарий)|хороший вопрос|great question|thanks for)/iu;
-const MEANINGLESS = /^(🔥+|согласен[.!]*|точно[.!]*|100%[.!]*|факт[.!]*|база[.!]*|\+1|да[.!]*|это точно[.!]*)$/iu;
-const HYPE = /(покупа(ем|й|йте)|100x|иксы|гарантирован|точно (полетит|вырастет)|to the moon|туземун)/iu;
-const ADVICE = /(советую (купить|продать|зайти|выйти)|бери(те)? (сейчас|пока)|заходи(те)? (сейчас|пока)|фиксируй(те)?|шорти(те)?|лонгуй(те)?)/iu;
+const TEMPLATES = /^(отличн(ый|ая|ое) (вопрос|мнение|замечание)|интересн(ое|ый|ая) (мнение|вопрос|мысль)|полностью согласен|спасибо за (вопрос|комментарий)|хороший вопрос|great (question|point|take)|thanks for|good question|interesting (point|take))/iu;
+const MEANINGLESS = /^(🔥+|согласен[.!]*|точно[.!]*|100%[.!]*|факт[.!]*|база[.!]*|\+1|да[.!]*|это точно[.!]*|this[.!]*|facts?[.!]*|agreed?[.!]*|true[.!]*|lfg[.!]*|gm[.!]*)$/iu;
+const HYPE = /(покупа(ем|й|йте)|100x|иксы|гарантирован|точно (полетит|вырастет)|to the moon|туземун|guaranteed|can't lose|free money)/iu;
+const ADVICE = /(советую (купить|продать|зайти|выйти)|бери(те)? (сейчас|пока)|заходи(те)? (сейчас|пока)|фиксируй(те)?|шорти(те)?|лонгуй(те)?|you should (buy|sell|long|short)|buy (now|the dip)|ape in)/iu;
 
-export function validateReply(text: string, context: { ourPost: string; ourFactsText?: string; maxChars?: number }): ReplyViolation[] {
+/** Cyrillic comment → Russian answer, anything else → English. */
+export function replyLanguageFor(comment: string): ReplyLanguage {
+  const cyr = (comment.match(/[а-яё]/giu) ?? []).length;
+  const lat = (comment.match(/[a-z]/giu) ?? []).length;
+  return cyr >= lat || lat < 6 ? "ru" : "en";
+}
+
+export function validateReply(text: string, context: { ourPost: string; ourFactsText?: string; maxChars?: number; language?: ReplyLanguage }): ReplyViolation[] {
   const v: ReplyViolation[] = [];
   const t = text.trim();
   const max = context.maxChars ?? 300;
@@ -48,7 +64,9 @@ export function validateReply(text: string, context: { ourPost: string; ourFacts
   if (ADVICE.test(t)) v.push({ code: "FINANCIAL_ADVICE", message: "похоже на финансовый совет", severity: "block" });
   const cyr = (t.match(/[а-яё]/giu) ?? []).length;
   const lat = (t.match(/[a-z]/giu) ?? []).length;
-  if (cyr < 5 || cyr < lat) v.push({ code: "NOT_RUSSIAN", message: "ответ не на русском", severity: "block" });
+  if ((context.language ?? "ru") === "ru") {
+    if (cyr < 5 || cyr < lat) v.push({ code: "NOT_RUSSIAN", message: "ответ не на русском", severity: "block" });
+  } else if (lat < 5 || lat < cyr) v.push({ code: "WRONG_LANGUAGE", message: "ответ не на английском, хотя человек писал по-английски", severity: "block" });
   // Numbers in a reply must already exist in our post or facts — a reply is not the place to introduce data.
   const allowed = extractNumbers(`${context.ourPost}\n${context.ourFactsText ?? ""}`).map((n) => n.value);
   for (const n of extractNumbers(t)) {
@@ -61,20 +79,24 @@ export function validateReply(text: string, context: { ourPost: string; ourFacts
 
 export async function writeReply(ctx: ReplyWriterContext): Promise<{ text: string; askedQuestion: boolean; confidence: number; violations: ReplyViolation[]; model: string; promptVersion: string }> {
   const router = ctx.router ?? llm();
-  const chain = ctx.chain.length ? ctx.chain.map((m) => `${m.isOurs ? "МЫ" : `@${m.username}`}: ${m.text.replace(/\s+/g, " ").slice(0, 400)}`).join("\n") : "(нет)";
+  const maxChars = ctx.maxChars ?? 300;
+  const language = ctx.language ?? "ru";
+  const chain = ctx.chain.length ? ctx.chain.map((m) => `${m.isOurs ? "Я" : `@${m.username}`}: ${m.text.replace(/\s+/g, " ").slice(0, 400)}`).join("\n") : "(нет)";
   const kindLine =
     ctx.kind === "public"
-      ? "Это чужой публичный пост: мы заходим в разговор как сторонний участник и должны что-то добавить по существу (факт из нашего поста/контекста, уточнение, полезный вопрос). Никаких «согласен», «🔥», «100%»."
+      ? "Это чужой публичный пост: я захожу в разговор как сторонний участник и должен что-то добавить по существу (факт, уточнение механики, полезный вопрос). Никаких «согласен», «🔥», «100%»."
       : ctx.kind === "mention"
-        ? "Нас упомянули в чужом посте: ответь по существу упоминания."
-        : "Комментарий под нашим постом: ответь конкретно на то, что написал человек, учитывая цепочку.";
+        ? "Меня упомянули в чужом посте: ответь по существу упоминания."
+        : "Комментарий под моим постом: ответь конкретно на то, что написал человек, учитывая цепочку.";
   const user = `${kindLine}
+${ctx.platformLabel ? `Площадка: ${ctx.platformLabel}.` : ""}
 ${ctx.wantQuestion ? "Закончи уместным встречным вопросом, чтобы развить разговор." : "Не задавай вопрос, если он не нужен."}
+${language === "en" ? "Человек пишет по-английски — ответь на естественном разговорном английском." : "Отвечай по-русски."}
 
-НАШ ПОСТ / КОНТЕКСТ:
+МОЙ ПОСТ / КОНТЕКСТ:
 ${ctx.ourPost.slice(0, 1200)}
 ${ctx.ourFactsText ? `\nФАКТЫ, на которые можно опираться (числа только отсюда):\n${ctx.ourFactsText.slice(0, 1200)}` : ""}
-${ctx.styleExamples?.length ? `\nПРИМЕРЫ ГОЛОСА:\n${ctx.styleExamples.slice(0, 3).map((s) => `- ${s.slice(0, 200)}`).join("\n")}` : ""}
+${ctx.styleExamples?.length ? `\nПРИМЕРЫ МОЕГО ГОЛОСА:\n${ctx.styleExamples.slice(0, 3).map((s) => `- ${s.slice(0, 200)}`).join("\n")}` : ""}
 
 <untrusted_source_content>
 ЦЕПОЧКА:
@@ -84,18 +106,18 @@ ${chain}
 ${ctx.comment.slice(0, 1500)}
 </untrusted_source_content>
 
-Напиши ответ (1–3 предложения, до 300 символов) и верни JSON.`;
+Напиши ответ (1–3 предложения, до ${maxChars} символов) и верни JSON.`;
   const { data, response } = await router.structured({
     task: "reply",
     operation: ctx.kind === "public" ? "engagement:write" : "reply:write",
     schema: replyTextSchema,
     schemaName: "ReplyText",
-    system: `${ctx.promptOverride?.prompt ?? REPLY_SYSTEM_PROMPT}\n${CRYPTO_REPLY_POLICY}`,
+    system: `${ctx.persona ? `${ctx.persona}\n\n` : ""}${ctx.promptOverride?.prompt ?? REPLY_SYSTEM_PROMPT}\n${CRYPTO_REPLY_POLICY}`,
     messages: [{ role: "user", content: user }],
     maxTokens: 600,
     temperature: 0.6,
     refs: ctx.refs,
   });
   const text = data.text.trim();
-  return { text, askedQuestion: data.askedQuestion, confidence: data.confidence, violations: validateReply(text, { ourPost: ctx.ourPost, ourFactsText: ctx.ourFactsText }), model: `${response.provider}:${response.model}`, promptVersion: ctx.promptOverride?.label ?? "reply_writer_builtin" };
+  return { text, askedQuestion: data.askedQuestion, confidence: data.confidence, violations: validateReply(text, { ourPost: ctx.ourPost, ourFactsText: ctx.ourFactsText, maxChars, language }), model: `${response.provider}:${response.model}`, promptVersion: ctx.promptOverride?.label ?? "reply_writer_builtin" };
 }

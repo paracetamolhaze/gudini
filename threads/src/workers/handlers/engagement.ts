@@ -8,4 +8,4 @@ registerHandler("replies", "replies:send", async (job) => {
   const { interactionId, manual } = job.data as { interactionId: string; manual?: boolean };
   return sendInteraction(interactionId, { manual: manual === true });
 });
-registerHandler("engagement", "engagement:poll", async () => pollEngagement());
+registerHandler("engagement", "engagement:poll", async (job) => pollEngagement({ force: (job.data as { force?: boolean } | undefined)?.force === true }));

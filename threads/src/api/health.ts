@@ -5,6 +5,8 @@ import { threadsClient } from "../threads/index.js";
 import { llm } from "../llm/index.js";
 import { env } from "../config/env.js";
 import { errorMessage, scrubSecrets } from "../shared/logger.js";
+import { PLATFORM_LABEL, platform, type PlatformId } from "../platforms/index.js";
+import { xClient } from "../x/index.js";
 
 /**
  * /health          liveness + summary of every dependency
@@ -35,6 +37,19 @@ export async function checkThreads(): Promise<{ ok: boolean; message: string; us
   }
 }
 
+/** Identity check on any platform: reports the handle, never a key. */
+export async function checkPlatform(id: PlatformId): Promise<{ ok: boolean; message: string; username?: string; userId?: string }> {
+  if (id === "threads") return checkThreads();
+  const adapter = platform(id);
+  if (!adapter.configured()) return { ok: false, message: "ключи X не заданы (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)" };
+  try {
+    const me = await adapter.me();
+    return { ok: true, message: `connected as @${me.username}`, username: me.username, userId: me.id };
+  } catch (err) {
+    return { ok: false, message: scrubSecrets(errorMessage(err)) };
+  }
+}
+
 export async function checkLlm(): Promise<{ ok: boolean; message: string; tasks: Array<{ task: string; model: string; ok: boolean; message: string }> }> {
   const tasks = await llm().test();
   const ok = tasks.length > 0 && tasks.every((t) => t.ok);
@@ -47,12 +62,14 @@ export function registerHealthRoutes(app: FastifyInstance, prefix: string): void
     return {
       status: db.ok && redis.ok ? "ok" : "degraded",
       service: "gudini-threads",
-      version: "0.1.0",
+      version: "0.2.0",
+      platforms: Object.keys(PLATFORM_LABEL),
       mode: env().AUTOPILOT_MODE,
       dryRun: env().DRY_RUN,
       db,
       redis,
       threadsConfigured: threadsClient().hasToken,
+      xConfigured: xClient().hasCredentials,
       uptimeSec: Math.round(process.uptime()),
     };
   });
@@ -66,6 +83,10 @@ export function registerHealthRoutes(app: FastifyInstance, prefix: string): void
   });
   app.get(`${prefix}/health/threads`, async (_req, reply) => {
     const r = await checkThreads();
+    return reply.code(r.ok ? 200 : 503).send(r);
+  });
+  app.get(`${prefix}/health/x`, async (_req, reply) => {
+    const r = await checkPlatform("x");
     return reply.code(r.ok ? 200 : 503).send(r);
   });
   app.get(`${prefix}/health/llm`, async (_req, reply) => {

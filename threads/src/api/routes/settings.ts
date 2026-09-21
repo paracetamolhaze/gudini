@@ -14,6 +14,9 @@ export function registerSettingsRoutes(app: FastifyInstance, api: string): void 
       env: {
         // presence only — values never leave the server
         threadsToken: Boolean(e.THREADS_ACCESS_TOKEN),
+        xKeys: { apiKey: Boolean(e.X_API_KEY), apiSecret: Boolean(e.X_API_SECRET), accessToken: Boolean(e.X_ACCESS_TOKEN), accessSecret: Boolean(e.X_ACCESS_SECRET) },
+        hyperliquidWalletEnv: Boolean(e.HYPERLIQUID_WALLET),
+        coingeckoKey: Boolean(e.COINGECKO_API_KEY),
         llmProvider: e.LLM_PROVIDER,
         keys: {
           openrouter: Boolean(e.OPENROUTER_API_KEY || (e.LLM_PROVIDER === "openrouter" && e.LLM_API_KEY)),

@@ -1,95 +1,112 @@
-import { loadSettings } from "../../config/settings.js";
+import { loadSettings, type Settings } from "../../config/settings.js";
 import { one, query } from "../../db/pool.js";
-import { insertInteraction, updateInteraction } from "../../db/repos/interactions.js";
-import { threadsClient } from "../../threads/index.js";
-import { PermissionError } from "../../threads/errors.js";
+import { insertInteraction, updateInteraction, type InteractionDelivery } from "../../db/repos/interactions.js";
+import { activePlatforms, type FoundPost, type PlatformAdapter } from "../../platforms/index.js";
 import { audit } from "../audit.js";
 import { errorMessage } from "../../shared/logger.js";
 import { getActivePrompt } from "../promptVersions.js";
+import { personaBlock } from "../persona.js";
 import { REPLY_PROMPT_NAME, REPLY_SYSTEM_PROMPT } from "../replies/prompts.js";
-import { writeReply } from "../replies/writer.js";
-import { sendInteraction } from "../replies/pipeline.js";
+import { replyLanguageFor, writeReply } from "../replies/writer.js";
+import { ownUsername, sendInteraction } from "../replies/pipeline.js";
 import { publicRepliesLimit } from "../limits.js";
 import { scorePosts, type DiscoveredPost } from "./scoring.js";
-import { normalizeThreadsMedia } from "../sources/normalize.js";
 
 /**
- * Public engagement: keyword search → score → reply where we can add value. Hard caps are enforced
- * at send time; discovery itself rotates a few keywords per tick to stay far below the 2,200/day
- * search budget.
+ * Public engagement: find other people's posts → score → say something of substance.
+ *   Threads — keyword search, replies through the API (hard caps enforced at send time).
+ *   X       — the API refuses cold replies, so a found post becomes either a prepared reply the owner
+ *             posts by hand (manual) or a quote post (quote). Every found post is billed, so X is
+ *             searched a few times a day within the read budget, not on every tick.
  */
-async function ownUsername(): Promise<string> {
-  const row = await one<{ username: string }>(`SELECT username FROM accounts ORDER BY updated_at DESC LIMIT 1`);
-  return row?.username ?? "";
+async function cursor<T>(key: string): Promise<T | null> {
+  const row = await one<{ value: T }>(`SELECT value FROM settings WHERE key = $1`, [key]);
+  return row?.value ?? null;
 }
 
-export async function discoverPosts(keywords: string[], opts: { lookbackHours: number; perKeyword: number }): Promise<{ found: DiscoveredPost[]; error: string | null }> {
-  const client = threadsClient();
-  const own = (await ownUsername()).toLowerCase();
-  const sinceSec = Math.max(1688540400, Math.floor((Date.now() - opts.lookbackHours * 3_600_000) / 1000));
-  const found: DiscoveredPost[] = [];
-  let error: string | null = null;
-  for (const q of keywords) {
-    try {
-      const page = await client.keywordSearch({ q, searchType: "RECENT", since: sinceSec, limit: Math.min(50, opts.perKeyword) });
-      for (const m of page.data ?? []) {
-        if (m.is_reply === true || !m.id) continue;
-        if ((m.username ?? "").toLowerCase() === own) continue;
-        const p = normalizeThreadsMedia(m);
-        if (!p || !p.text) continue;
-        found.push({ id: m.id, username: p.authorUsername, text: p.text, publishedAt: p.publishedAt, keyword: q });
-      }
-    } catch (err) {
-      error = err instanceof PermissionError ? `keyword_search: нужно разрешение ${err.scope ?? "threads_keyword_search"} (без Advanced Access поиск ограничен своими постами)` : errorMessage(err);
-      break;
-    }
+async function setCursor(key: string, value: unknown): Promise<void> {
+  await query(`INSERT INTO settings (key, value) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, [key, JSON.stringify(value)]);
+}
+
+/** Threads rotates three keywords per tick; X runs one owner-defined query a few times a day. */
+async function keywordsFor(adapter: PlatformAdapter, settings: Settings, force: boolean): Promise<string[] | null> {
+  if (adapter.id === "x") {
+    if (settings.platforms.x.engagementMode === "off") return null;
+    // Half of the read budget is kept for comments under own posts; each search returns at least 10 posts.
+    const searchesPerDay = Math.max(1, Math.floor(settings.platforms.x.dailyReadBudget / 20));
+    const minGapMs = Math.max(3_600_000, Math.floor(86_400_000 / searchesPerDay));
+    const last = await cursor<{ at?: number }>("x_search_cursor");
+    if (!force && last?.at && Date.now() - last.at < minGapMs) return null;
+    await setCursor("x_search_cursor", { at: Date.now() });
+    return ["x:search"];
   }
-  return { found, error };
+  const keywords = settings.engagement.watchKeywords.map((k) => k.trim()).filter(Boolean);
+  if (!keywords.length) return null;
+  const start = (await cursor<{ i?: number }>("engagement_cursor"))?.i ?? 0;
+  const pick = [0, 1, 2].map((n) => keywords[(start + n) % keywords.length]!).filter((v, i, a) => a.indexOf(v) === i);
+  await setCursor("engagement_cursor", { i: (start + pick.length) % keywords.length });
+  return pick;
 }
 
-export async function pollEngagement(): Promise<{ discovered: number; queued: number; sent: number; error: string | null }> {
-  const settings = await loadSettings(true);
-  const empty = { discovered: 0, queued: 0, sent: 0, error: null as string | null };
-  if (settings.mode === "OFF" || settings.killSwitch) return empty;
-  if (!threadsClient().hasToken) return empty;
-  if (settings.mode === "AUTO" && settings.flags.autoPublicReplies && !(await publicRepliesLimit(settings)).allowed) return empty;
-  const keywords = settings.engagement.watchKeywords.map((k) => k.trim()).filter(Boolean);
-  if (!keywords.length) return empty;
-  // Rotate: three keywords per tick, starting where the last tick stopped.
-  const cursorRow = await one<{ value: { i?: number } }>(`SELECT value FROM settings WHERE key = 'engagement_cursor'`);
-  const start = cursorRow?.value?.i ?? 0;
-  const pick = [0, 1, 2].map((n) => keywords[(start + n) % keywords.length]!).filter((v, i, a) => a.indexOf(v) === i);
-  await query(`INSERT INTO settings (key, value) VALUES ('engagement_cursor', $1::jsonb) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, [JSON.stringify({ i: (start + pick.length) % keywords.length })]);
+function deliveryFor(adapter: PlatformAdapter, settings: Settings): InteractionDelivery {
+  if (adapter.publicReplyChannel() === "api") return "api";
+  return settings.platforms.x.engagementMode === "quote" ? "quote" : "manual";
+}
 
-  const { found, error } = await discoverPosts(pick, { lookbackHours: 24, perKeyword: 25 });
-  if (error) await audit("ENGAGEMENT_SKIPPED", error, {}, null, "warn");
-  const fresh: DiscoveredPost[] = [];
-  for (const p of found) {
+export async function pollEngagement(opts: { force?: boolean } = {}): Promise<{ discovered: number; queued: number; sent: number; error: string | null }> {
+  const settings = await loadSettings(true);
+  const total = { discovered: 0, queued: 0, sent: 0, error: null as string | null };
+  if (settings.mode === "OFF" || settings.killSwitch) return total;
+  const errors: string[] = [];
+  for (const adapter of activePlatforms(settings)) {
+    const r = await pollPlatform(adapter, settings, opts.force === true).catch((err) => ({ discovered: 0, queued: 0, sent: 0, error: `${adapter.label}: ${errorMessage(err)}` }));
+    total.discovered += r.discovered;
+    total.queued += r.queued;
+    total.sent += r.sent;
+    if (r.error) errors.push(r.error);
+  }
+  total.error = errors.length ? errors.join("; ") : null;
+  return total;
+}
+
+async function pollPlatform(adapter: PlatformAdapter, settings: Settings, force: boolean): Promise<{ discovered: number; queued: number; sent: number; error: string | null }> {
+  const empty = { discovered: 0, queued: 0, sent: 0, error: null as string | null };
+  const p = adapter.id;
+  const delivery = deliveryFor(adapter, settings);
+  if (delivery !== "manual" && settings.mode === "AUTO" && settings.flags.autoPublicReplies && !(await publicRepliesLimit(settings)).allowed) return empty;
+  const keywords = await keywordsFor(adapter, settings, force);
+  if (!keywords) return empty;
+
+  const { found, error } = await adapter.searchPosts({ keywords, lookbackHours: 24, perKeyword: p === "x" ? 10 : 25, ownUsername: await ownUsername(p) });
+  if (error) await audit("ENGAGEMENT_SKIPPED", error, {}, { platform: p }, "warn");
+  const fresh: FoundPost[] = [];
+  for (const f of found) {
     const inserted = await one<{ id: string }>(
-      `INSERT INTO discovered_posts (threads_post_id, username, text, permalink, published_at, keyword, status) VALUES ($1,$2,$3,$4,$5,$6,'FOUND') ON CONFLICT (threads_post_id) DO NOTHING RETURNING id`,
-      [p.id, p.username, p.text, null, p.publishedAt, p.keyword],
+      `INSERT INTO discovered_posts (platform, platform_post_id, username, text, permalink, published_at, keyword, status) VALUES ($1,$2,$3,$4,$5,$6,$7,'FOUND') ON CONFLICT (platform, platform_post_id) DO NOTHING RETURNING id`,
+      [p, f.id, f.username, f.text, f.permalink, f.publishedAt, f.keyword],
     );
-    if (inserted) fresh.push(p);
+    if (inserted) fresh.push(f);
   }
   if (!fresh.length) return { ...empty, error };
-  const scored = await scorePosts(fresh, { minimumScore: settings.engagement.minimumScore });
+  const byId = new Map(fresh.map((f) => [f.id, f]));
+  const scored = await scorePosts(fresh.map((f): DiscoveredPost => ({ id: f.id, username: f.username, text: f.text, publishedAt: f.publishedAt, keyword: f.keyword })), { minimumScore: settings.engagement.minimumScore });
   let queued = 0;
   let sent = 0;
   for (const s of scored) {
-    await query(`UPDATE discovered_posts SET scores_json = $2::jsonb, total_score = $3, status = $4, reason = $5, updated_at = now() WHERE threads_post_id = $1`, [s.id, JSON.stringify({ ...s.scores, angle: s.angle }), s.scores.total, s.worth ? "QUEUED" : "SKIPPED", s.reason]);
+    await query(`UPDATE discovered_posts SET scores_json = $3::jsonb, total_score = $4, status = $5, reason = $6, updated_at = now() WHERE platform = $1 AND platform_post_id = $2`, [p, s.id, JSON.stringify({ ...s.scores, angle: s.angle }), s.scores.total, s.worth ? "QUEUED" : "SKIPPED", s.reason]);
     if (!s.worth) {
-      await audit("ENGAGEMENT_SKIPPED", `@${s.username}: ${s.reason}`, {}, { postId: s.id, scores: s.scores });
+      await audit("ENGAGEMENT_SKIPPED", `${adapter.label} @${s.username}: ${s.reason}`, {}, { platform: p, postId: s.id, scores: s.scores });
       continue;
     }
-    const row = await insertInteraction({ type: "PUBLIC_POST_REPLY", targetPostId: s.id, targetReplyId: null, rootPostId: s.id, publicationId: null, targetUsername: s.username, targetText: s.text, targetPermalink: null, targetPublishedAt: s.publishedAt });
+    const row = await insertInteraction({ platform: p, delivery, type: "PUBLIC_POST_REPLY", targetPostId: s.id, targetReplyId: null, rootPostId: s.id, publicationId: null, targetUsername: s.username, targetText: s.text, targetPermalink: byId.get(s.id)?.permalink ?? null, targetPublishedAt: s.publishedAt });
     if (!row) continue;
-    await query(`UPDATE discovered_posts SET interaction_id = $2 WHERE threads_post_id = $1`, [s.id, row.id]);
-    await audit("ENGAGEMENT_FOUND", `Релевантный пост @${s.username} (балл ${s.scores.total}): ${s.text.slice(0, 100)}\nЧто добавить: ${s.angle}`, { interactionId: row.id }, { scores: s.scores });
+    await query(`UPDATE discovered_posts SET interaction_id = $3 WHERE platform = $1 AND platform_post_id = $2`, [p, s.id, row.id]);
+    await audit("ENGAGEMENT_FOUND", `${adapter.label}: релевантный пост @${s.username} (балл ${s.scores.total}): ${s.text.slice(0, 100)}\nЧто добавить: ${s.angle}`, { interactionId: row.id }, { platform: p, scores: s.scores });
     queued++;
     const prompt = await getActivePrompt(REPLY_PROMPT_NAME, REPLY_SYSTEM_PROMPT);
     let written;
     try {
-      written = await writeReply({ ourPost: `Контекст: ${s.angle}`, comment: s.text, commenter: s.username, chain: [], kind: "public", wantQuestion: false, refs: { interactionId: row.id }, promptOverride: { prompt: prompt.prompt, label: prompt.label } });
+      written = await writeReply({ ourPost: `Контекст: ${s.angle}`, comment: s.text, commenter: s.username, chain: [], kind: "public", wantQuestion: false, refs: { interactionId: row.id }, promptOverride: { prompt: prompt.prompt, label: prompt.label }, persona: personaBlock(settings), platformLabel: adapter.label, maxChars: Math.min(300, adapter.maxChars()), language: replyLanguageFor(s.text) });
     } catch (err) {
       await updateInteraction(row.id, { status: "FAILED", error: errorMessage(err) });
       await audit("ENGAGEMENT_SKIPPED", `Не удалось написать ответ @${s.username}: ${errorMessage(err)}`, { interactionId: row.id }, null, "error");
@@ -102,10 +119,10 @@ export async function pollEngagement(): Promise<{ discovered: number; queued: nu
       await audit("ENGAGEMENT_GENERATED", `Ответ @${s.username} не прошёл валидацию: ${written.violations.map((v) => v.message).join("; ")}`, { interactionId: row.id }, null, "warn");
       continue;
     }
-    const autoAllowed = settings.mode === "AUTO" && settings.flags.autoPublicReplies && written.confidence >= settings.replies.minConfidence && written.violations.length === 0;
+    const autoAllowed = delivery !== "manual" && settings.mode === "AUTO" && settings.flags.autoPublicReplies && written.confidence >= settings.replies.minConfidence && written.violations.length === 0;
     if (!autoAllowed) {
-      await updateInteraction(row.id, { status: "DRAFT" });
-      await audit("ENGAGEMENT_GENERATED", `Ответ на пост @${s.username} готов к проверке: ${written.text}`, { interactionId: row.id });
+      await updateInteraction(row.id, { status: "DRAFT", reason: delivery === "manual" ? "X не принимает ответы чужим авторам через API — отправьте подготовленный текст кнопкой «Открыть в X»" : s.reason });
+      await audit("ENGAGEMENT_GENERATED", `${adapter.label}: ответ на пост @${s.username} готов${delivery === "manual" ? " к ручной отправке" : " к проверке"}: ${written.text}`, { interactionId: row.id });
       continue;
     }
     await updateInteraction(row.id, { status: "APPROVED" });

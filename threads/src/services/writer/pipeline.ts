@@ -11,6 +11,9 @@ import { getActivePrompt } from "../promptVersions.js";
 import { WRITER_PROMPT_NAME, WRITER_SYSTEM_PROMPT } from "./prompts.js";
 import { composeDraft } from "./russianWriter.js";
 import type { StyleExample } from "./styleRetrieval.js";
+import { personaBlock } from "../persona.js";
+import { defaultTargets } from "../../platforms/index.js";
+import { adaptForX } from "./xVariant.js";
 
 /**
  * Candidate → draft. Idempotent per candidate unless `force` (Regenerate): an existing live draft
@@ -50,6 +53,7 @@ export async function generateDraftForCandidate(candidateId: string, opts: { for
       variants: settings.writer.variantsPerDraft,
       maxStyleExamples: settings.writer.maxStyleExamples,
       promptOverride: { prompt: prompt.prompt, label: prompt.label },
+      persona: personaBlock(settings),
       refs: { candidateId },
     });
   } catch (err) {
@@ -67,8 +71,15 @@ export async function generateDraftForCandidate(candidateId: string, opts: { for
   }
   const needsReview = !composed.chosen || composed.reviewReasons.length > 0;
   const status: DraftRow["status"] = needsReview ? "NEEDS_REVIEW" : "DRAFT";
+  // X gets its own short variant; a failed adaptation never costs us the draft itself.
+  const targets = defaultTargets(settings);
+  const xVariant = await (targets.includes("x") ? adaptForX({ text: chosen.text, settings, refs: { candidateId } }) : Promise.resolve({ text: null, problem: null, model: null })).catch((err) => ({ text: null, problem: `вариант для X не написан: ${errorMessage(err)}`, model: null }));
+  if (xVariant.problem) await audit("POST_VALIDATION_FAILED", xVariant.problem, { candidateId }, null, "warn");
   const draft = await insertDraft({
     candidateId,
+    kind: "NEWS",
+    platforms: targets,
+    textX: xVariant.text,
     type: chosen.variant.type,
     text: chosen.text,
     hook: chosen.variant.hook,

@@ -21,6 +21,8 @@ export interface WriterContext {
   variants: number;
   maxStyleExamples: number;
   promptOverride?: { prompt: string; label: string };
+  /** First-person voice of the owner (services/persona.ts), put in front of the system prompt. */
+  persona?: string;
   refs?: LlmRefs;
   now?: Date;
 }
@@ -87,7 +89,9 @@ function rankVariant(v: ComposedVariant, analysis: SourceAnalysis): number {
 
 export async function composeDraft(ctx: WriterContext, router: LlmRouter = llm()): Promise<ComposedDraft> {
   const types = variantTypesFor(ctx.analysis.contentKind, ctx.analysis.isBreaking, ctx.variants);
-  const system = ctx.promptOverride?.prompt ?? WRITER_SYSTEM_PROMPT;
+  const system = `${ctx.persona ? `${ctx.persona}
+
+` : ""}${ctx.promptOverride?.prompt ?? WRITER_SYSTEM_PROMPT}`;
   const promptVersion = ctx.promptOverride?.label ?? `${WRITER_PROMPT_NAME}_builtin`;
   const { data, response } = await router.structured({
     task: "writer",

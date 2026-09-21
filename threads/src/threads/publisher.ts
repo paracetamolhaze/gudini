@@ -1,6 +1,10 @@
 import type { ThreadsClient } from "./client.js";
 import { TimeoutError, NetworkError, ServerError, ContainerError, ThreadsError } from "./errors.js";
 import { THREADS_MAX_CHARS, splitIntoThreadParts } from "../shared/threadSplit.js";
+import { PublishUnknownStateError, type AttemptRecord, type AttemptStore } from "../platforms/attempts.js";
+
+export { PublishUnknownStateError };
+export type { AttemptRecord, AttemptStore };
 
 /**
  * Idempotent publishing. Every send is keyed; the attempt record survives crashes and timeouts.
@@ -10,22 +14,6 @@ import { THREADS_MAX_CHARS, splitIntoThreadParts } from "../shared/threadSplit.j
  * Thread parts (1/n) are separate attempts (`${key}:part2`…) so a failure after part 1 resumes
  * at part 2 instead of posting part 1 twice.
  */
-export interface AttemptRecord {
-  idempotencyKey: string;
-  status: "STARTED" | "CONTAINER_CREATED" | "PUBLISHED" | "FAILED" | "UNKNOWN";
-  containerId: string | null;
-  threadsPostId: string | null;
-  error: string | null;
-  createdAt: Date;
-}
-
-export interface AttemptStore {
-  get(key: string): Promise<AttemptRecord | null>;
-  /** Insert STARTED; returns false if the key already exists (concurrent worker). */
-  start(key: string, kind: string): Promise<boolean>;
-  update(key: string, patch: Partial<Pick<AttemptRecord, "status" | "containerId" | "threadsPostId" | "error">>): Promise<void>;
-}
-
 export interface PublishRequest {
   key: string;
   kind: "post" | "reply";
@@ -40,13 +28,6 @@ export interface PublishResult {
   permalink: string | null;
   recovered: boolean;
   containerId: string | null;
-}
-
-export class PublishUnknownStateError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PublishUnknownStateError";
-  }
 }
 
 const isTransient = (err: unknown): boolean => err instanceof TimeoutError || err instanceof NetworkError || err instanceof ServerError;
@@ -88,8 +69,8 @@ export class ThreadsPublisher {
 
   async publish(req: PublishRequest): Promise<PublishResult> {
     const existing = await this.store.get(req.key);
-    if (existing?.status === "PUBLISHED" && existing.threadsPostId) {
-      return { id: existing.threadsPostId, permalink: await this.permalinkOf(existing.threadsPostId), recovered: true, containerId: existing.containerId };
+    if (existing?.status === "PUBLISHED" && existing.postId) {
+      return { id: existing.postId, permalink: await this.permalinkOf(existing.postId), recovered: true, containerId: existing.containerId };
     }
     if (existing?.status === "FAILED" && /unknown state/i.test(existing.error ?? "")) {
       throw new PublishUnknownStateError(`Attempt ${req.key} is in an unknown state; a human must check Threads before retrying: ${existing.error}`);
@@ -99,7 +80,7 @@ export class ThreadsPublisher {
     if (existing && (existing.status === "UNKNOWN" || existing.status === "CONTAINER_CREATED")) {
       const found = await this.findRecentPost(req.text, existing.createdAt, req.replyToId);
       if (found) {
-        await this.store.update(req.key, { status: "PUBLISHED", threadsPostId: found.id, error: null });
+        await this.store.update(req.key, { status: "PUBLISHED", postId: found.id, error: null });
         return { id: found.id, permalink: found.permalink, recovered: true, containerId: existing.containerId };
       }
       if (existing.containerId) {
@@ -119,7 +100,7 @@ export class ThreadsPublisher {
       if (!started) {
         // Another worker holds this key; let its outcome stand.
         const again = await this.store.get(req.key);
-        if (again?.status === "PUBLISHED" && again.threadsPostId) return { id: again.threadsPostId, permalink: await this.permalinkOf(again.threadsPostId), recovered: true, containerId: again.containerId };
+        if (again?.status === "PUBLISHED" && again.postId) return { id: again.postId, permalink: await this.permalinkOf(again.postId), recovered: true, containerId: again.containerId };
         throw new ThreadsError(`attempt ${req.key} is already in progress`, 0, "(local)");
       }
     }
@@ -162,7 +143,7 @@ export class ThreadsPublisher {
         await this.store.update(req.key, { status: "UNKNOWN", error: `publish outcome unknown: ${(err as Error).message}` });
         const found = await this.findRecentPost(req.text, startedAt, req.replyToId);
         if (found) {
-          await this.store.update(req.key, { status: "PUBLISHED", threadsPostId: found.id, error: null });
+          await this.store.update(req.key, { status: "PUBLISHED", postId: found.id, error: null });
           return { id: found.id, permalink: found.permalink, recovered: true, containerId };
         }
         throw err;
@@ -170,13 +151,13 @@ export class ThreadsPublisher {
       await this.store.update(req.key, { status: "FAILED", error: (err as Error).message });
       throw err;
     }
-    await this.store.update(req.key, { status: "PUBLISHED", threadsPostId: postId, error: null });
+    await this.store.update(req.key, { status: "PUBLISHED", postId: postId, error: null });
     return { id: postId, permalink: await this.permalinkOf(postId), recovered: false, containerId };
   }
 
   /** Publish text that may exceed the limit as a numbered thread; each part is resume-safe. */
-  async publishThread(req: PublishRequest): Promise<{ root: PublishResult; parts: number }> {
-    const parts = req.text.trim().length > THREADS_MAX_CHARS ? splitIntoThreadParts(req.text) : [req.text.trim()];
+  async publishThread(req: PublishRequest, maxChars: number = THREADS_MAX_CHARS): Promise<{ root: PublishResult; parts: number }> {
+    const parts = req.text.trim().length > maxChars ? splitIntoThreadParts(req.text, maxChars) : [req.text.trim()];
     if (parts.length === 0) throw new ThreadsError("nothing to publish", 0, "(local)");
     const root = await this.publish({ ...req, text: parts[0]! });
     for (let i = 1; i < parts.length; i++) {

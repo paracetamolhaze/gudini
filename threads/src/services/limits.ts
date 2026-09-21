@@ -1,5 +1,6 @@
 import { one } from "../db/pool.js";
 import type { Settings } from "../config/settings.js";
+import { postsPublishedLast24h } from "../db/repos/publishing.js";
 
 /** Hard caps computed from what was actually sent (publications / interactions), never from counters that can drift. */
 export interface LimitCheck {
@@ -30,8 +31,8 @@ export async function publicRepliesLimit(settings: Settings): Promise<LimitCheck
 }
 
 export async function postsLimit(settings: Settings): Promise<LimitCheck> {
-  const day = await one<{ n: number }>(`SELECT count(*)::int AS n FROM publications WHERE published_at >= now() - interval '24 hours'`);
-  const d = day?.n ?? 0;
+  // A post that went to both platforms counts once.
+  const d = await postsPublishedLast24h();
   const cap = Math.min(settings.limits.maxPostsPerDay, settings.schedule.maximumPostsPerDay);
   if (d >= cap) return { allowed: false, reason: `лимит постов за 24 часа ${d}/${cap}`, used: d, cap };
   return { allowed: true, reason: "", used: d, cap };

@@ -79,7 +79,7 @@ export async function startWorkers(concurrency: Partial<Record<QueueName, number
       },
       {
         connection: redisConnection().duplicate(),
-        concurrency: concurrency[name] ?? (name === "publisher" || name === "replies" || name === "engagement" ? 1 : 2),
+        concurrency: concurrency[name] ?? (["publisher", "replies", "engagement", "trades", "market"].includes(name) ? 1 : 2),
         lockDuration: 10 * 60_000,
         stalledInterval: 60_000,
       },

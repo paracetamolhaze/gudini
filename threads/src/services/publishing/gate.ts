@@ -36,7 +36,7 @@ export function decidePublish(input: GateInput): { route: GateRoute; reason: str
   if (input.mode !== "AUTO") return { route: "HOLD", reason: `режим ${input.mode}: автоматическая публикация выключена` };
   if (!input.autoPostEnabled) return { route: "HOLD", reason: "AUTO_POST_ENABLED=false" };
   if (input.draft.status === "NEEDS_REVIEW") return { route: "REVIEW", reason: `требует проверки: ${input.draft.reviewReason ?? "валидация"}` };
-  if (input.draft.status !== "DRAFT" && input.draft.status !== "APPROVED" && input.draft.status !== "SCHEDULED") return { route: "HOLD", reason: `статус ${input.draft.status}` };
+  if (!["DRAFT", "APPROVED", "SCHEDULED", "PARTIAL"].includes(input.draft.status)) return { route: "HOLD", reason: `статус ${input.draft.status}` };
   const risk = input.draft.riskScore ?? 100;
   const confidence = input.draft.confidence ?? 0;
   const score = input.draft.totalScore ?? 0;

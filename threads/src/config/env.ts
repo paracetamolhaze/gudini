@@ -38,6 +38,18 @@ const envSchema = z.object({
   THREADS_APP_SECRET: z.string().optional().default(""),
   THREADS_GRAPH_HOST: z.string().default("https://graph.threads.net"),
 
+  /** X API, OAuth 1.0a user context: four strings from the developer portal (app with Read and write). */
+  X_API_KEY: z.string().optional().default(""),
+  X_API_SECRET: z.string().optional().default(""),
+  X_ACCESS_TOKEN: z.string().optional().default(""),
+  X_ACCESS_SECRET: z.string().optional().default(""),
+  X_API_HOST: z.string().default("https://api.x.com"),
+
+  /** Public wallet address whose Hyperliquid fills become trade cards. Read-only: no private key anywhere. */
+  HYPERLIQUID_WALLET: z.string().optional().default(""),
+  HYPERLIQUID_API_HOST: z.string().default("https://api.hyperliquid.xyz"),
+  COINGECKO_API_KEY: z.string().optional().default(""),
+
   /** Default provider for every task; per-task models may name another provider (provider:model). */
   LLM_PROVIDER: z.enum(["openrouter", "openai", "anthropic", "gemini", "openai-compatible"]).default("openrouter"),
   LLM_API_KEY: z.string().optional().default(""),
@@ -91,6 +103,11 @@ export function setEnvForTests(next: Env | null): void {
 export const SECRET_ENV_KEYS = [
   "THREADS_ACCESS_TOKEN",
   "THREADS_APP_SECRET",
+  "X_API_KEY",
+  "X_API_SECRET",
+  "X_ACCESS_TOKEN",
+  "X_ACCESS_SECRET",
+  "COINGECKO_API_KEY",
   "LLM_API_KEY",
   "OPENROUTER_API_KEY",
   "OPENAI_API_KEY",

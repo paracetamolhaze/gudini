@@ -8,27 +8,32 @@ import { HttpError } from "../server.js";
 import { clampInt } from "../../shared/ids.js";
 import { audit } from "../../services/audit.js";
 import { validateDraft } from "../../services/writer/validate.js";
-import { query, one } from "../../db/pool.js";
+import { query } from "../../db/pool.js";
+import { loadSettings } from "../../config/settings.js";
+import { PLATFORM_IDS, defaultTargets, isPlatformId, type PlatformId } from "../../platforms/index.js";
+import { xVariantProblems } from "../../services/writer/xVariant.js";
 
 export function registerDraftRoutes(app: FastifyInstance, api: string): void {
   app.post(`${api}/drafts`, async (req) => {
-    const body = z.object({ topic: z.string().trim().min(5).max(1500) }).safeParse(req.body);
+    const body = z.object({ topic: z.string().trim().min(5).max(1500), platforms: z.array(z.enum(PLATFORM_IDS)).min(1).optional() }).safeParse(req.body);
     if (!body.success) throw new HttpError(400, "Напишите тему поста: от 5 до 1500 символов.");
-    const draft = await insertDraft({ candidateId: null, type: "EXPLAINER", text: "", hook: null, body: null, sourceSummary: body.data.topic, sourceUrls: [], confidence: null, riskScore: null, status: "GENERATING", reviewReason: null, priority: "P2", promptVersion: "topic_v1", model: null, validation: null, variants: [], expiresAt: null });
+    const platforms = body.data.platforms ?? defaultTargets(await loadSettings());
+    const draft = await insertDraft({ candidateId: null, kind: "TOPIC", platforms, type: "EXPLAINER", text: "", hook: null, body: null, sourceSummary: body.data.topic, sourceUrls: [], confidence: null, riskScore: null, status: "GENERATING", reviewReason: null, priority: "P2", promptVersion: "topic_v1", model: null, validation: null, variants: [], expiresAt: null });
     try { await enqueue("content", "content:topic", { draftId: draft.id }, { jobId: `topic-${draft.id}`, priority: 1 }); }
     catch { await updateDraft(draft.id, { status: "FAILED", error: "Не удалось запустить написание. Повторите из карточки поста." }); }
     return { id: draft.id };
   });
   app.get(`${api}/drafts`, async (req) => {
     const q = req.query as Record<string, string | undefined>;
-    const drafts = await listDrafts({ status: q.status, limit: clampInt(q.limit, 1, 200, 50), before: q.before });
+    const drafts = await listDrafts({ status: q.status, kind: q.kind, platform: isPlatformId(q.platform) ? q.platform : undefined, limit: clampInt(q.limit, 1, 200, 50), before: q.before });
+    const pubs = drafts.length ? await query<{ draft_id: string; platform: PlatformId; permalink: string | null; dry_run: boolean }>(`SELECT draft_id, platform, permalink, dry_run FROM publications WHERE draft_id = ANY($1::uuid[])`, [drafts.map((d) => d.id)]) : [];
     const candIds = drafts.map((d) => d.candidate_id).filter((x): x is string => Boolean(x));
     const cands = candIds.length ? await query<{ id: string; topic: string | null; category: string | null; total_score: number | null; risk_score: number | null; source_post_id: string }>(`SELECT id, topic, category, total_score, risk_score, source_post_id FROM content_candidates WHERE id = ANY($1::uuid[])`, [candIds]) : [];
     const byId = new Map(cands.map((c) => [c.id, c]));
     const assetIds = drafts.map((d) => d.image_asset_id).filter((x): x is string => Boolean(x));
     const assets = assetIds.length ? await query<{ id: string; status: string; final_path: string | null }>(`SELECT id, status, final_path FROM media_assets WHERE id = ANY($1::uuid[])`, [assetIds]) : [];
     const assetById = new Map(assets.map((a) => [a.id, a]));
-    return { drafts: drafts.map((d) => ({ ...d, candidate: d.candidate_id ? byId.get(d.candidate_id) ?? null : null, asset: d.image_asset_id ? assetById.get(d.image_asset_id) ?? null : null })) };
+    return { drafts: drafts.map((d) => ({ ...d, publications: pubs.filter((p) => p.draft_id === d.id), candidate: d.candidate_id ? byId.get(d.candidate_id) ?? null : null, asset: d.image_asset_id ? assetById.get(d.image_asset_id) ?? null : null })) };
   });
 
   app.get(`${api}/drafts/:id`, async (req) => {
@@ -39,26 +44,37 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const sourcePost = candidate ? await getSourcePost(candidate.source_post_id) : null;
     const assets = await query(`SELECT * FROM media_assets WHERE draft_id = $1 ORDER BY created_at ASC`, [id]);
     const feedback = await query(`SELECT * FROM draft_feedback WHERE draft_id = $1 ORDER BY created_at DESC`, [id]);
-    const publication = await one(`SELECT * FROM publications WHERE draft_id = $1`, [id]);
+    const publications = await query(`SELECT * FROM publications WHERE draft_id = $1 ORDER BY published_at ASC`, [id]);
+    const publication = publications[0] ?? null;
     const attempts = await query(`SELECT * FROM publication_attempts WHERE draft_id = $1 ORDER BY created_at DESC`, [id]);
-    return { draft, candidate, sourcePost, assets, feedback, publication, attempts };
+    return { draft, candidate, sourcePost, assets, feedback, publication, publications, attempts };
   });
 
-  const editBody = z.object({ text: z.string().min(1).max(3000) });
+  const editBody = z
+    .object({ text: z.string().min(1).max(3000).optional(), textX: z.string().max(3000).nullable().optional(), platforms: z.array(z.enum(PLATFORM_IDS)).min(1).optional() })
+    .refine((b) => b.text !== undefined || b.textX !== undefined || b.platforms !== undefined);
   app.put(`${api}/drafts/:id`, async (req) => {
     const { id } = req.params as { id: string };
     const parsed = editBody.safeParse(req.body);
-    if (!parsed.success) throw new HttpError(400, "text is required");
+    if (!parsed.success) throw new HttpError(400, "нужен text, textX или platforms");
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
     if (["GENERATING", "PUBLISHING", "PUBLISHED"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
     const candidate = draft.candidate_id ? await getCandidate(draft.candidate_id) : null;
-    const validation = validateDraft(parsed.data.text, candidate?.facts_json?.facts ?? [], { maxChars: 2500 });
+    const settings = await loadSettings();
+    const text = parsed.data.text ?? draft.text;
+    const textX = parsed.data.textX === undefined ? draft.text_x : parsed.data.textX?.trim() || null;
+    const facts = candidate?.facts_json?.facts ?? draft.facts_json?.facts ?? [];
+    const leverage = facts.find((fact) => fact.claim === "Leverage used")?.value;
+    const validation = validateDraft(text, facts, { maxChars: 2500, allowedMultiples: typeof leverage === "number" ? [Math.round(leverage)] : [] });
+    // The X text is the owner's to word; only the hard platform facts are reported (length, link cost).
+    const xNotes = textX ? xVariantProblems(textX, text, { maxChars: settings.platforms.x.maxChars, language: settings.platforms.x.language, allowLinks: settings.platforms.x.allowLinks }).filter((p) => /длина|ссылка/.test(p)) : [];
     // A human edit is trusted for wording; the validator still reports and blocks clearly forbidden content.
     const status = validation.blocking && validation.violations.some((v) => v.code === "FORBIDDEN_PHRASE") ? "NEEDS_REVIEW" : draft.status === "NEEDS_REVIEW" && !validation.blocking ? "DRAFT" : draft.status;
-    const updated = await updateDraft(id, { text: parsed.data.text, hook: null, body: null, validation_json: validation, status, review_reason: validation.violations.length ? validation.violations.map((v) => v.message).join("; ") : null });
+    const notes = [...validation.violations.map((v) => v.message), ...xNotes.map((n) => `X: ${n}`)];
+    const updated = await updateDraft(id, { text, text_x: textX, ...(parsed.data.platforms ? { platforms: parsed.data.platforms } : {}), hook: null, body: null, validation_json: validation, status, review_reason: notes.length ? notes.join("; ") : null });
     await audit("POST_GENERATED", `Черновик отредактирован вручную (${validation.violations.length} замечаний)`, { draftId: id, candidateId: draft.candidate_id }, { violations: validation.violations });
-    return { draft: updated, validation };
+    return { draft: updated, validation, xNotes };
   });
 
   app.post(`${api}/drafts/:id/approve`, async (req) => {
@@ -117,8 +133,10 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const { id } = req.params as { id: string };
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
-    if (!["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED", "FAILED"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
-    await updateDraft(id, { status: "APPROVED", scheduled_at: new Date(), review_reason: null, error: null, approved_by_user: true });
+    if (!["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED", "FAILED", "PARTIAL"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
+    // A partially published post keeps its status: the publisher only sends the platforms that are still missing.
+    if (draft.status === "PARTIAL") await updateDraft(id, { approved_by_user: true });
+    else await updateDraft(id, { status: "APPROVED", scheduled_at: new Date(), review_reason: null, error: null, approved_by_user: true });
     const jobId = await enqueue("publisher", "publisher:publish", { draftId: id, manual: true }, { priority: 1, jobId: `publish-${id}-${Date.now()}` });
     await audit("POST_APPROVED", "Черновик отправлен на немедленную публикацию", { draftId: id, candidateId: draft.candidate_id });
     return { queued: true, jobId };

@@ -102,6 +102,61 @@ export const settingsSchema = z.object({
     snapshotDays: z.number().int().min(1),
   }),
   pricing: z.record(z.string(), z.object({ input: z.number().min(0), output: z.number().min(0) })),
+  /** Where posts go. Threads is driven by its Graph API; X is pay-per-use and forbids cold API replies. */
+  platforms: z.object({
+    threads: z.object({ enabled: z.boolean(), maxChars: z.number().int().min(100).max(10_000) }),
+    x: z.object({
+      enabled: z.boolean(),
+      /** 280 without Premium; Premium accounts may raise it. */
+      maxChars: z.number().int().min(100).max(25_000),
+      language: z.enum(["ru", "en"]),
+      /** off — do not look at other people's posts; manual — draft a reply and let the owner post it by hand; quote — publish a quote post. */
+      engagementMode: z.enum(["off", "manual", "quote"]),
+      /** Posts X may bill us for reading per day (search + mentions). 0 = never read. */
+      dailyReadBudget: z.number().int().min(0).max(100_000),
+      /** A post with a link costs ~13x more on X, so links are stripped unless allowed. */
+      allowLinks: z.boolean(),
+      engagementQuery: z.string().max(400),
+      /** USD per unit; X changes these, the ledger uses whatever is set here. */
+      prices: z.object({ postCreate: z.number().min(0), postCreateUrl: z.number().min(0), postCreateSummoned: z.number().min(0), postRead: z.number().min(0), ownedRead: z.number().min(0), userRead: z.number().min(0) }),
+    }),
+  }),
+  /** Everything is written in the first person, as the owner. */
+  persona: z.object({
+    name: z.string().max(80),
+    bio: z.string().max(600),
+    tone: z.string().max(600),
+    rules: z.string().max(1200),
+  }),
+  /** Hyperliquid: closed profitable trades become a card + a post. Read-only public data by wallet address. */
+  trades: z.object({
+    enabled: z.boolean(),
+    wallet: z.string().max(64),
+    pollMinutes: z.number().int().min(2).max(720),
+    lookbackDays: z.number().int().min(1).max(90),
+    minPnlUsd: z.number().min(0),
+    minRoePct: z.number().min(0),
+    /** Both thresholds must pass (true) or either one (false). */
+    requireBoth: z.boolean(),
+    showUsd: z.boolean(),
+    showSize: z.boolean(),
+    showWallet: z.boolean(),
+    maxPostsPerDay: z.number().int().min(0).max(20),
+    /** Publish trade posts without a human look (still subject to mode AUTO, kill switch and validation). */
+    autoPublish: z.boolean(),
+    handle: z.string().max(60),
+  }),
+  /** Loud pumps and dumps across the market. */
+  movers: z.object({
+    enabled: z.boolean(),
+    pollMinutes: z.number().int().min(10).max(720),
+    topN: z.number().int().min(10).max(250),
+    minChange24hPct: z.number().min(1).max(1000),
+    minChange1hPct: z.number().min(1).max(1000),
+    minVolumeUsd: z.number().min(0),
+    maxPostsPerDay: z.number().int().min(0).max(20),
+    ignore: z.array(z.string()),
+  }),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
@@ -155,6 +210,50 @@ export function defaultSettings(): Settings {
     writer: { variantsPerDraft: 2, maxStyleExamples: 6, language: "ru" },
     analytics: { insightsPollMinutes: 180, snapshotDays: 14 },
     pricing: DEFAULT_PRICING,
+    platforms: {
+      threads: { enabled: true, maxChars: 500 },
+      x: {
+        enabled: true,
+        maxChars: 280,
+        language: "ru",
+        engagementMode: "manual",
+        dailyReadBudget: 60,
+        allowLinks: false,
+        engagementQuery: "(bitcoin OR btc OR ethereum OR solana OR hyperliquid OR крипта OR биткоин) -is:retweet -is:reply",
+        prices: { postCreate: 0.015, postCreateUrl: 0.2, postCreateSummoned: 0.01, postRead: 0.005, ownedRead: 0.001, userRead: 0.01 },
+      },
+    },
+    persona: {
+      name: "",
+      bio: "Частный крипто-трейдер. Торгую перпы на Hyperliquid, слежу за рынком и новостями.",
+      tone: "Живой разговорный русский, коротко и по делу, с самоиронией. Без канцелярита, без пафоса и без менторства.",
+      rules: "",
+    },
+    trades: {
+      enabled: true,
+      wallet: e.HYPERLIQUID_WALLET,
+      pollMinutes: 10,
+      lookbackDays: 14,
+      minPnlUsd: 50,
+      minRoePct: 5,
+      requireBoth: false,
+      showUsd: true,
+      showSize: false,
+      showWallet: false,
+      maxPostsPerDay: 3,
+      autoPublish: false,
+      handle: "",
+    },
+    movers: {
+      enabled: true,
+      pollMinutes: 30,
+      topN: 150,
+      minChange24hPct: 15,
+      minChange1hPct: 8,
+      minVolumeUsd: 20_000_000,
+      maxPostsPerDay: 2,
+      ignore: ["USDT", "USDC", "DAI", "USDE", "FDUSD", "USDS", "PYUSD", "TUSD", "WBTC", "WETH", "STETH", "WSTETH", "WEETH", "WBETH"],
+    },
   };
 }
 

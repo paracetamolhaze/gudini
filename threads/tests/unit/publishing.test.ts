@@ -76,7 +76,7 @@ function memoryStore(): AttemptStore & { rows: Map<string, AttemptRecord> } {
     },
     async start(key) {
       if (rows.has(key)) return false;
-      rows.set(key, { idempotencyKey: key, status: "STARTED", containerId: null, threadsPostId: null, error: null, createdAt: new Date() });
+      rows.set(key, { idempotencyKey: key, status: "STARTED", containerId: null, postId: null, error: null, createdAt: new Date() });
       return true;
     },
     async update(key, patch) {

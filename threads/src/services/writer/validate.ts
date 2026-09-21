@@ -127,7 +127,17 @@ const FORBIDDEN: Array<[RegExp, string]> = [
   [W("не является финансовой рекомендацией|nfa|dyor"), "шаблонный дисклеймер"],
 ];
 
-export function validateDraft(text: string, facts: VerifiedFact[], opts: { maxChars?: number; minChars?: number; hasRumorOrPrediction?: boolean } = {}): ValidationResult {
+export interface ValidateOptions {
+  maxChars?: number;
+  minChars?: number;
+  hasRumorOrPrediction?: boolean;
+  /** Language the text is supposed to be in (X may be run in English). */
+  language?: "ru" | "en";
+  /** Leverage of the owner's own trade: "x10"/"10x" with this number is a fact, not a promise of multiples. */
+  allowedMultiples?: number[];
+}
+
+export function validateDraft(text: string, facts: VerifiedFact[], opts: ValidateOptions = {}): ValidationResult {
   const violations: Violation[] = [];
   const t = text.trim();
   const maxChars = opts.maxChars ?? 500;
@@ -140,9 +150,13 @@ export function validateDraft(text: string, facts: VerifiedFact[], opts: { maxCh
   if (emoji > 2) violations.push({ code: "EMOJI_SPAM", message: `Слишком много emoji (${emoji})`, severity: "warn" });
   const cyr = (t.match(/[а-яё]/giu) ?? []).length;
   const lat = (t.match(/[a-z]/giu) ?? []).length;
-  if (cyr < 20 || cyr < lat) violations.push({ code: "NOT_RUSSIAN", message: "Текст не похож на русский пост", severity: "block" });
+  if ((opts.language ?? "ru") === "en") {
+    if (lat < 20 || lat < cyr) violations.push({ code: "NOT_RUSSIAN", message: "Текст для X должен быть на английском", severity: "block" });
+  } else if (cyr < 20 || cyr < lat) violations.push({ code: "NOT_RUSSIAN", message: "Текст не похож на русский пост", severity: "block" });
   for (const [re, label] of FORBIDDEN) {
     const m = t.match(re);
+    const multiple = m ? /^([0-9]{2,4}) ?x$/i.exec(m[0]) : null;
+    if (multiple && opts.allowedMultiples?.includes(Number(multiple[1]))) continue;
     if (m) violations.push({ code: "FORBIDDEN_PHRASE", message: `${label}: «${m[0]}»`, severity: "block" });
   }
 

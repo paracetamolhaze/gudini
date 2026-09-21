@@ -4,6 +4,9 @@ import { query } from "../../db/pool.js";
 import { enqueue, PRIORITY } from "../../queue/queues.js";
 import { expireDrafts } from "../../db/repos/drafts.js";
 import { audit } from "../../services/audit.js";
+import { writeTopic } from "../../services/writer/topic.js";
+
+registerHandler("content", "content:topic", async job => writeTopic((job.data as { draftId: string }).draftId));
 
 registerHandler("content", "content:generate", async (job) => {
   const { candidateId, force } = job.data as { candidateId: string; force?: boolean };

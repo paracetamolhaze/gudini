@@ -132,10 +132,10 @@ export function defaultSettings(): Settings {
       timezone: e.TIMEZONE,
     },
     limits: {
-      maxPublicRepliesPerHour: 3,
-      maxPublicRepliesPerDay: 15,
-      maxOwnRepliesPerHour: 10,
-      maxOwnRepliesPerDay: 60,
+      maxPublicRepliesPerHour: 2,
+      maxPublicRepliesPerDay: 6,
+      maxOwnRepliesPerHour: 6,
+      maxOwnRepliesPerDay: 30,
       maxPostsPerDay: 6,
     },
     sources: {
@@ -146,10 +146,10 @@ export function defaultSettings(): Settings {
     },
     engagement: {
       watchKeywords: ["bitcoin", "btc", "ethereum", "eth", "solana", "crypto", "крипта", "биткоин", "ETF", "stablecoin", "DeFi"],
-      minimumScore: 70,
+      minimumScore: 80,
       pollMinutes: 30,
     },
-    replies: { pollMinutes: 5, lookbackHours: 72, maxUnansweredPerPost: 20, minConfidence: 70 },
+    replies: { pollMinutes: 5, lookbackHours: 72, maxUnansweredPerPost: 20, minConfidence: 85 },
     images: { retries: 1, minFontPx: 14, maxImagesPerPost: 4 },
     expiry: { breakingHours: 24, normalHours: 72, evergreenHours: 24 * 14 },
     writer: { variantsPerDraft: 2, maxStyleExamples: 6, language: "ru" },

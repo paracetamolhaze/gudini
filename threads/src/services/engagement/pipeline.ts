@@ -9,6 +9,7 @@ import { getActivePrompt } from "../promptVersions.js";
 import { REPLY_PROMPT_NAME, REPLY_SYSTEM_PROMPT } from "../replies/prompts.js";
 import { writeReply } from "../replies/writer.js";
 import { sendInteraction } from "../replies/pipeline.js";
+import { publicRepliesLimit } from "../limits.js";
 import { scorePosts, type DiscoveredPost } from "./scoring.js";
 import { normalizeThreadsMedia } from "../sources/normalize.js";
 
@@ -51,6 +52,7 @@ export async function pollEngagement(): Promise<{ discovered: number; queued: nu
   const empty = { discovered: 0, queued: 0, sent: 0, error: null as string | null };
   if (settings.mode === "OFF" || settings.killSwitch) return empty;
   if (!threadsClient().hasToken) return empty;
+  if (settings.mode === "AUTO" && settings.flags.autoPublicReplies && !(await publicRepliesLimit(settings)).allowed) return empty;
   const keywords = settings.engagement.watchKeywords.map((k) => k.trim()).filter(Boolean);
   if (!keywords.length) return empty;
   // Rotate: three keywords per tick, starting where the last tick stopped.

@@ -14,7 +14,9 @@ export function registerReplyRoutes(app: FastifyInstance, api: string): void {
     const type = q.type === "public" ? "PUBLIC_POST_REPLY" : q.type === "mention" ? "MENTION" : q.type;
     let rows = await listInteractions({ type, status: q.status, limit: clampInt(q.limit, 1, 200, 50), before: q.before });
     if (q.type === "own") rows = rows.filter((r) => r.type !== "PUBLIC_POST_REPLY");
-    return { interactions: rows };
+    const ids = rows.map(r => r.publication_id).filter(Boolean);
+    const publications = ids.length ? await query<{ id: string; published_text: string }>(`SELECT id, published_text FROM publications WHERE id = ANY($1::uuid[])`, [ids]) : [];
+    return { interactions: rows.map(r => ({ ...r, parent_text: publications.find(p => p.id === r.publication_id)?.published_text ?? null })) };
   });
 
   app.get(`${api}/replies/:id`, async (req) => {

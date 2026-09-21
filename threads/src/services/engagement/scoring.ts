@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { llm, type LlmRouter } from "../../llm/index.js";
+import { CRYPTO_REPLY_POLICY } from "../replies/policy.js";
 
 /**
  * Which public posts deserve a reply from us. Deterministic spam/age filters, then one batched
@@ -78,7 +79,7 @@ export async function scorePosts(posts: DiscoveredPost[], opts: { minimumScore: 
       operation: "engagement:score",
       schema: engagementScoreSchema,
       schemaName: "EngagementScores",
-      system: ENGAGEMENT_SCORING_PROMPT,
+      system: `${ENGAGEMENT_SCORING_PROMPT}\n${CRYPTO_REPLY_POLICY}`,
       messages: [{ role: "user", content: `<untrusted_source_content>\n${list}\n</untrusted_source_content>\n\nОцени каждый пост (ids: ${batch.map((p) => p.id).join(", ")}).` }],
       maxTokens: 2500,
       temperature: 0.1,
@@ -93,7 +94,7 @@ export async function scorePosts(posts: DiscoveredPost[], opts: { minimumScore: 
       }
       const scores = { relevance: s.relevance, freshness, authorRelevance: s.authorRelevance, engagementPotential: s.engagementPotential, valueAdd: s.valueAdd, spamRisk: s.spamRisk, total: 0 };
       scores.total = totalScore(scores);
-      const worth = scores.total >= opts.minimumScore && s.valueAdd >= 50 && s.spamRisk < 40;
+      const worth = scores.total >= opts.minimumScore && s.relevance >= 75 && s.valueAdd >= 70 && s.spamRisk < 20 && s.angle.trim().length > 0;
       out.push({ ...p, scores, angle: s.angle, reason: worth ? `балл ${scores.total} ≥ ${opts.minimumScore}, можем добавить: ${s.angle}` : `балл ${scores.total} (valueAdd ${s.valueAdd}, spam ${s.spamRisk})`, worth });
     }
   }

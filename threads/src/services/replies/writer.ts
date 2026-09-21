@@ -2,6 +2,7 @@ import { z } from "zod";
 import { llm, type LlmRefs, type LlmRouter } from "../../llm/index.js";
 import { REPLY_SYSTEM_PROMPT } from "./prompts.js";
 import { extractNumbers } from "../writer/validate.js";
+import { CRYPTO_REPLY_POLICY } from "./policy.js";
 
 /** Short, specific, in-voice replies; validated against templates, length, hype and stray numbers. */
 export const replyTextSchema = z.object({
@@ -89,7 +90,7 @@ ${ctx.comment.slice(0, 1500)}
     operation: ctx.kind === "public" ? "engagement:write" : "reply:write",
     schema: replyTextSchema,
     schemaName: "ReplyText",
-    system: ctx.promptOverride?.prompt ?? REPLY_SYSTEM_PROMPT,
+    system: `${ctx.promptOverride?.prompt ?? REPLY_SYSTEM_PROMPT}\n${CRYPTO_REPLY_POLICY}`,
     messages: [{ role: "user", content: user }],
     maxTokens: 600,
     temperature: 0.6,

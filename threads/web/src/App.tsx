@@ -1,22 +1,20 @@
-import { useEffect, useState } from "react";
-import { get, post } from "./api";
-import { useFetch, useRoute } from "./hooks";
-import { Badge, ErrorBox, MODE_LABEL } from "./ui";
+import { useEffect } from "react";
+import { post, PREFIX } from "./api";
+import { useFetch, useRoute, useAction } from "./hooks";
+import { Button, ErrorBox } from "./ui";
+import Posts from "./pages/Posts";
+import Conversations from "./pages/Conversations";
+import SimpleSettings from "./pages/SimpleSettings";
 import Overview from "./pages/Overview";
+import Settings from "./pages/Settings";
 import Sources from "./pages/Sources";
-import Candidates from "./pages/Candidates";
-import Drafts from "./pages/Drafts";
-import Queue from "./pages/Queue";
-import Published from "./pages/Published";
-import Replies from "./pages/Replies";
-import Discovery from "./pages/Discovery";
-import Images from "./pages/Images";
-import Analytics from "./pages/Analytics";
 import Voice from "./pages/Voice";
-import Prompts from "./pages/Prompts";
-import SettingsPage from "./pages/Settings";
 import Logs from "./pages/Logs";
-
+import Replies from "./pages/Replies";
+import Candidates from "./pages/Candidates";
+import Prompts from "./pages/Prompts";
+import Analytics from "./pages/Analytics";
+import Images from "./pages/Images";
 export type OverviewData = {
   mode: "OFF" | "DRAFT" | "REVIEW" | "AUTO";
   killSwitch: boolean;
@@ -31,128 +29,38 @@ export type OverviewData = {
   queues: Record<string, { waiting: number; active: number; delayed: number; failed: number }>;
 };
 
-const PRIMARY = new Set(["overview", "sources", "drafts", "replies", "logs"]);
-const PAGES: Array<{ id: string; label: string; badge?: (o: OverviewData) => number }> = [
-  { id: "overview", label: "Обзор" },
-  { id: "sources", label: "Источники", badge: (o) => o.sources?.errors ?? 0 },
-  { id: "candidates", label: "Кандидаты" },
-  { id: "drafts", label: "Черновики", badge: (o) => o.today.drafts_waiting },
-  { id: "queue", label: "Очередь" },
-  { id: "published", label: "Опубликовано" },
-  { id: "replies", label: "Ответы", badge: (o) => o.today.needs_review },
-  { id: "discovery", label: "Чужие посты" },
-  { id: "images", label: "Картинки" },
-  { id: "analytics", label: "Аналитика" },
-  { id: "voice", label: "Голос" },
-  { id: "prompts", label: "Промпты" },
-  { id: "settings", label: "Настройки" },
-  { id: "logs", label: "Журнал" },
-];
 
 export default function App() {
   const [route, navigate] = useRoute();
-  const overview = useFetch<OverviewData>("/overview", { intervalMs: 15_000 });
-  const [killBusy, setKillBusy] = useState(false);
-  const [killError, setKillError] = useState("");
+  const overview = useFetch<OverviewData>("/overview", { intervalMs: 15000 });
+  const act = useAction();
   const o = overview.data;
-
-  useEffect(() => {
-    document.title = `${PAGES.find((p) => p.id === route.page)?.label ?? "Threads"} · Threads · Гудини`;
-  }, [route.page]);
-
-  async function toggleKill() {
-    if (!o) return;
-    const stop = !o.killSwitch;
-    if (stop && !confirm("Остановить автопилот? Новые публикации, ответы и работа с чужими постами будут запрещены немедленно.")) return;
-    setKillBusy(true);
-    setKillError("");
-    try {
-      await post("/kill-switch", { stop });
-      await overview.reload();
-    } catch (e) {
-      setKillError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setKillBusy(false);
-    }
-  }
-
-  const page = (() => {
-    switch (route.page) {
-      case "sources":
-        return <Sources />;
-      case "candidates":
-        return <Candidates navigate={navigate} />;
-      case "drafts":
-        return <Drafts id={route.id} navigate={navigate} />;
-      case "queue":
-        return <Queue navigate={navigate} />;
-      case "published":
-        return <Published />;
-      case "replies":
-        return <Replies id={route.id} navigate={navigate} />;
-      case "discovery":
-        return <Discovery navigate={navigate} />;
-      case "images":
-        return <Images navigate={navigate} />;
-      case "analytics":
-        return <Analytics />;
-      case "voice":
-        return <Voice />;
-      case "prompts":
-        return <Prompts />;
-      case "settings":
-        return <SettingsPage onSaved={() => void overview.reload()} />;
-      case "logs":
-        return <Logs />;
-      default:
-        return <Overview data={o} error={overview.error} navigate={navigate} reload={() => void overview.reload()} />;
-    }
-  })();
-
-  return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <a href="/" className="brand-name" style={{ color: "inherit" }}>Гудини</a>
-          <span className="brand-sub">/ Threads</span>
-        </div>
-        <nav className="nav">
-          {PAGES.filter((p) => PRIMARY.has(p.id)).map((p) => {
-            const n = o && p.badge ? p.badge(o) : 0;
-            return (
-              <a key={p.id} href={`${p.id}`} className={route.page === p.id ? "active" : ""} onClick={(e) => { e.preventDefault(); navigate(p.id); }}>
-                <span>{p.label}</span>
-                {n > 0 && <span className="count">{n}</span>}
-              </a>
-            );
-          })}
-          <details className="nav-more" open={!PRIMARY.has(route.page)}>
-            <summary>Ещё</summary>
-            {PAGES.filter((p) => !PRIMARY.has(p.id)).map((p) => (
-              <a key={p.id} href={`${p.id}`} className={route.page === p.id ? "active" : ""} onClick={(e) => { e.preventDefault(); navigate(p.id); }}>
-                <span>{p.label}</span>
-              </a>
-            ))}
-          </details>
-        </nav>
-      </aside>
-      <main className="main">
-        <div className="topbar">
-          <div className="topbar-left">
-            <h1 className="page-title">{PAGES.find((p) => p.id === route.page)?.label ?? "Обзор"}</h1>
-            {o && <Badge tone={o.mode === "AUTO" ? "success" : o.mode === "OFF" ? "error" : "accent"} title={`режим ${o.mode}`}>режим: {MODE_LABEL[o.mode] ?? o.mode}</Badge>}
-            {o?.dryRun && <Badge tone="warn" title="DRY_RUN: Threads только читается">пробный режим</Badge>}
-            {o?.killSwitch && <Badge tone="error">ОСТАНОВЛЕН</Badge>}
-          </div>
-          <button className={`kill ${o?.killSwitch ? "active" : ""}`} onClick={() => void toggleKill()} disabled={killBusy || !o}>
-            {o?.killSwitch ? "ВОЗОБНОВИТЬ АВТОПИЛОТ" : "ОСТАНОВИТЬ АВТОПИЛОТ"}
-          </button>
-        </div>
-        <ErrorBox text={killError} />
-        {page}
-      </main>
-    </div>
-  );
+  const titles: Record<string,string> = { posts: "Посты", drafts: "Посты", replies: "Ответы мне", discovery: "Чужие посты", settings: "Настройки", advanced: "Подключение", voice: "Стиль общения", sources: "Источники", logs: "История действий", overview: "Подключение", candidates: "Найденные темы", prompts: "Промпты", analytics: "Статистика", images: "Изображения" };
+  const title = titles[route.page] ?? "Посты";
+  useEffect(() => { document.title = `${title} · Threads · Гудини`; }, [title]);
+  const nav = [["posts", "Посты"], ["replies", "Ответы мне"], ["discovery", "Чужие посты"]];
+  const page = (() => { switch(route.page) {
+    case "replies": return route.id ? <Replies id={route.id} navigate={navigate} /> : <Conversations key="own" kind="own" navigate={navigate} />;
+    case "discovery": return <Conversations key="public" kind="public" navigate={navigate} />;
+    case "settings": return <SimpleSettings navigate={navigate} changed={() => void overview.reload()} />;
+    case "advanced": return <Settings onSaved={() => void overview.reload()} />;
+    case "sources": return <Sources />;
+    case "voice": return <Voice />;
+    case "logs": return <Logs />;
+    case "prompts": return <Prompts />;
+    case "candidates": return <Candidates navigate={navigate} />;
+    case "analytics": return <Analytics />;
+    case "images": return <Images navigate={navigate} />;
+    case "overview": return <Overview data={o} error={overview.error} navigate={navigate} reload={() => void overview.reload()} />;
+    default: return <Posts id={route.id} navigate={navigate} />;
+  } })();
+  const connected = o?.health.threads.ok && o.readiness.llmKey;
+  const paused = o?.killSwitch || o?.mode === "OFF";
+  return <div className="threads-shell"><header className="threads-header"><a className="brand-name" href="/">Гудини <span className="dim">/ Threads</span></a><a href={`${PREFIX}/settings`} onClick={e => { e.preventDefault(); navigate("settings"); }}>Настройки</a></header>
+    <nav className="threads-nav" aria-label="Threads">{nav.map(([id,label]) => <a key={id} href={`${PREFIX}/${id}`} className={route.page === id || (id === "posts" && ["drafts","queue","published"].includes(route.page)) ? "active" : ""} onClick={e => { e.preventDefault(); navigate(id!); }}>{label}</a>)}</nav>
+    <main className="threads-main"><div className="workspace-heading"><h1>{title}</h1>{o && <Button tone="ghost" busy={act.busy !== null} onClick={() => void act.run("Режим изменён", async () => { if (o.mode === "OFF") await post("/mode", { mode: "AUTO" }); await post("/kill-switch", { stop: !paused }); }, overview.reload)}>{paused ? "Возобновить" : "Пауза"}</Button>}</div>
+      <ErrorBox text={act.error || overview.error} />
+      {o && <div className={`automation-status ${connected && !paused && !o.dryRun ? "running" : ""}`}><span className="status-dot" /><span>{!connected ? (!o.health.threads.ok ? "Подключите Threads для публикаций и автоответов" : "Подключите ИИ для написания постов") : paused ? "Автоматика на паузе" : o.dryRun ? "Пробный запуск — отправки выключены" : `Ответы мне: ${o.mode === "AUTO" && o.flags.autoOwnReplies ? "автоматически" : "выключены"} · Чужие посты: ${o.mode === "AUTO" && o.flags.autoPublicReplies ? "автоматически" : "выключены"}`}</span>{!connected && <button className="btn btn-ghost btn-sm" onClick={() => navigate("overview")}>Подключение</button>}</div>}
+      {page}
+    </main></div>;
 }
-
-export { get, post };

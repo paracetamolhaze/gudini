@@ -60,7 +60,7 @@ function ReplyDetail({ id, navigate }: { id: string; navigate: (p: string) => vo
   const [text, setText] = useState("");
   useEffect(() => {
     if (data) setText(data.interaction.our_text ?? "");
-  }, [data?.interaction.our_text, data]);
+  }, [data?.interaction.id, data?.interaction.our_text]);
   if (error && !data) return <ErrorBox text={error} />;
   if (!data) return <div className="muted">Загрузка…</div>;
   const r = data.interaction;
@@ -72,7 +72,7 @@ function ReplyDetail({ id, navigate }: { id: string; navigate: (p: string) => vo
         <div className="row"><Button size="sm" tone="ghost" onClick={() => navigate("replies")}>← к списку</Button><Status value={r.status} /><Label value={r.type} />{r.decision && <Label value={r.decision} tone="accent" />}</div>
         <div className="row">
           {editable && <Button tone="primary" disabled={text === (r.our_text ?? "")} onClick={() => run("Сохранить", () => put(`/replies/${id}`, { text }))}>Сохранить</Button>}
-          {editable && <Button tone="primary" disabled={!text.trim()} onClick={() => { if (confirm("Отправить ответ в Threads?")) run("Отправить", () => post(`/replies/${id}/send`)); }}>Отправить</Button>}
+          {editable && <Button tone="primary" busy={act.busy !== null} disabled={!text.trim()} onClick={() => run("Отправить", async () => { if (text !== r.our_text) await put(`/replies/${id}`, { text }); return post(`/replies/${id}/send`); })}>Отправить</Button>}
           {editable && <Button onClick={() => run("Перегенерировать", () => post(`/replies/${id}/regenerate`))}>Написать заново</Button>}
           {editable && <Button tone="danger" onClick={() => run("Пропустить", () => post(`/replies/${id}/skip`))}>Пропустить</Button>}
         </div>

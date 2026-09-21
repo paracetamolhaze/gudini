@@ -1,10 +1,11 @@
 import { one, query } from "../pool.js";
 
-export type DraftStatus = "DRAFT" | "NEEDS_REVIEW" | "APPROVED" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "REJECTED" | "FAILED" | "EXPIRED";
+export type DraftStatus = "GENERATING" | "DRAFT" | "NEEDS_REVIEW" | "APPROVED" | "SCHEDULED" | "PUBLISHING" | "PUBLISHED" | "REJECTED" | "FAILED" | "EXPIRED";
 
 export interface DraftRow {
   id: string;
   candidate_id: string | null;
+  approved_by_user: boolean;
   type: string;
   text: string;
   hook: string | null;
@@ -108,6 +109,7 @@ export async function updateDraft(
     error: string | null;
     confidence: number | null;
     priority: DraftRow["priority"];
+    approved_by_user: boolean;
   }>,
 ): Promise<DraftRow | null> {
   const sets: string[] = [];
@@ -127,6 +129,7 @@ export async function updateDraft(
   if (patch.error !== undefined) add("error", patch.error);
   if (patch.confidence !== undefined) add("confidence", patch.confidence);
   if (patch.priority !== undefined) add("priority", patch.priority);
+  if (patch.approved_by_user !== undefined) add("approved_by_user", patch.approved_by_user);
   if (!sets.length) return getDraft(id);
   params.push(id);
   return one<DraftRow>(`UPDATE drafts SET ${sets.join(", ")}, updated_at = now() WHERE id = $${params.length} RETURNING *`, params);

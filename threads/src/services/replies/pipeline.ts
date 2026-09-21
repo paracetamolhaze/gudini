@@ -1,5 +1,7 @@
 import { loadSettings } from "../../config/settings.js";
-import { one, query } from "../../db/pool.js";
+import { one, query, getPool } from "../../db/pool.js";
+import { replyHold } from "./policy.js";
+import { reviewReply, passesReview } from "./review.js";
 import {
   conversationChain,
   getInteraction,
@@ -192,6 +194,22 @@ export async function processInteraction(id: string): Promise<"sent" | "draft" |
 }
 
 export async function sendInteraction(id: string, opts: { manual: boolean }): Promise<"sent" | "skipped" | "failed"> {
+  // Account-wide lock: both queues and manual sends share caps and cooldowns.
+  const client = await getPool().connect();
+  let locked = false;
+  try {
+    const lock = await client.query<{ ok: boolean }>("SELECT pg_try_advisory_lock(73120491) AS ok");
+    locked = lock.rows[0]?.ok === true;
+    if (!locked) return "skipped";
+    return await sendLocked(id, opts);
+  } finally {
+    let broken = false;
+    if (locked) await client.query("SELECT pg_advisory_unlock(73120491)").catch(() => { broken = true; });
+    client.release(broken);
+  }
+}
+
+async function sendLocked(id: string, opts: { manual: boolean }): Promise<"sent" | "skipped" | "failed"> {
   const settings = await loadSettings(true);
   const row = await getInteraction(id);
   if (!row || !row.our_text) return "skipped";
@@ -202,10 +220,31 @@ export async function sendInteraction(id: string, opts: { manual: boolean }): Pr
   const isPublic = row.type === "PUBLIC_POST_REPLY";
   const limit = isPublic ? await publicRepliesLimit(settings) : await ownRepliesLimit(settings);
   if (!limit.allowed) {
-    await audit("LIMIT_REACHED", `${limit.reason}; ответ @${row.target_username} остаётся в очереди`, { interactionId: id }, null, "warn");
+    await updateInteraction(id, { reason: `${limit.reason}; ответ подождёт` });
     return "skipped";
   }
-  const locked = await transitionInteraction(id, ["APPROVED", "DRAFT", "NEEDS_REVIEW", "FAILED"], "SENDING");
+  if (!opts.manual) {
+    if (row.status !== "APPROVED" || settings.mode !== "AUTO" || !(isPublic ? settings.flags.autoPublicReplies : settings.flags.autoOwnReplies)) return "skipped";
+    const recent = await query<{ our_text: string; target_username: string; root_post_id: string | null; type: string; sent_at: Date }>(`SELECT our_text, target_username, root_post_id, type, sent_at FROM interactions WHERE status = 'SENT' AND sent_at > now() - interval '24 hours'`);
+    const hold = replyHold({ text: row.our_text, username: row.target_username, rootId: row.root_post_id, public: isPublic, targetAt: row.target_published_at }, recent.map(r => ({ text: r.our_text, username: r.target_username, rootId: r.root_post_id, public: r.type === "PUBLIC_POST_REPLY", at: r.sent_at })));
+    if (hold) {
+      await updateInteraction(id, { status: hold.permanent ? "SKIPPED" : "APPROVED", reason: hold.reason });
+      return "skipped";
+    }
+    const our = await ourPostFor(row.root_post_id);
+    const review = await reviewReply(id, `${our.text}\n${our.factsText}\nКомментарий: ${row.target_text}`, row.our_text);
+    if (!passesReview(review)) {
+      await updateInteraction(id, { status: "SKIPPED", reason: review.reason });
+      return "skipped";
+    }
+    // Settings or text may have changed while the model was checking the answer.
+    const fresh = await loadSettings(true);
+    const latest = await getInteraction(id);
+    if (fresh.killSwitch || fresh.mode !== "AUTO" || fresh.dryRun !== settings.dryRun || !(isPublic ? fresh.flags.autoPublicReplies : fresh.flags.autoOwnReplies) || latest?.status !== "APPROVED" || latest.our_text !== row.our_text) return "skipped";
+  }
+  const latestSettings = await loadSettings(true);
+  if (latestSettings.killSwitch || latestSettings.mode === "OFF" || latestSettings.dryRun !== settings.dryRun) return "skipped";
+  const locked = await one(`UPDATE interactions SET status = 'SENDING', updated_at = now() WHERE id = $1 AND status = ANY($2::text[]) AND our_text = $3 RETURNING id`, [id, opts.manual ? ["APPROVED", "DRAFT", "NEEDS_REVIEW", "FAILED"] : ["APPROVED"], row.our_text]);
   if (!locked) return "skipped";
   const replyTo = row.target_reply_id ?? row.target_post_id;
   if (!replyTo) {
@@ -216,8 +255,9 @@ export async function sendInteraction(id: string, opts: { manual: boolean }): Pr
     let replyId: string;
     let permalink: string | null = null;
     if (settings.dryRun) {
-      replyId = `dryrun:${id}`;
       await audit("DRY_RUN", `DRY_RUN: ответ @${row.target_username} не отправлен:\n${row.our_text}`, { interactionId: id, publicationId: row.publication_id });
+      await updateInteraction(id, { status: "DRAFT", reason: "Пробный запуск: ответ подготовлен, но не отправлен" });
+      return "skipped";
     } else {
       const publisher = new ThreadsPublisher(threadsClient(), attemptStore);
       const res = await publisher.publish({ key: `interaction:${id}`, kind: "reply", text: row.our_text, replyToId: replyTo });
@@ -241,3 +281,11 @@ export async function sendInteraction(id: string, opts: { manual: boolean }): Pr
 }
 
 export type { InteractionRow };
+
+/** Revisit only approved replies held by cooldowns; never resend ambiguous failures. */
+export async function sendWaitingReplies(): Promise<void> {
+  const s = await loadSettings(true);
+  if (s.mode !== "AUTO" || s.killSwitch || s.dryRun) return;
+  const waiting = await query<{ id: string }>(`SELECT id FROM interactions WHERE status = 'APPROVED' ORDER BY created_at ASC LIMIT 20`);
+  for (const row of waiting) await sendInteraction(row.id, { manual: false });
+}

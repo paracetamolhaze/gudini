@@ -4,7 +4,7 @@ export type Tone = "neutral" | "success" | "warn" | "error" | "accent";
 
 export function Button({ tone = "default", size = "md", busy, children, className = "", ...rest }: { tone?: "default" | "primary" | "danger" | "ghost"; size?: "sm" | "md"; busy?: boolean } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button className={`btn btn-${tone} btn-${size} ${className}`} disabled={busy || rest.disabled} {...rest}>
+    <button className={`btn btn-${tone} btn-${size} ${className}`} {...rest} disabled={busy || rest.disabled}>
       {busy ? "…" : children}
     </button>
   );

@@ -60,7 +60,8 @@ export async function listInteractions(opts: { type?: string; status?: string | 
     params.push(v);
     return `$${params.length}`;
   };
-  if (opts.type) conds.push(`type = ${push(opts.type)}`);
+  if (opts.type === "own") conds.push(`type IN ('OWN_POST_REPLY','NESTED_REPLY','MENTION')`);
+  else if (opts.type) conds.push(`type = ${push(opts.type)}`);
   if (opts.status) conds.push(`status = ANY(${push(Array.isArray(opts.status) ? opts.status : opts.status.split(","))}::text[])`);
   if (opts.before) conds.push(`created_at < ${push(opts.before)}`);
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";

@@ -18,6 +18,46 @@
   --error-soft: rgba(255, 143, 143, 0.14);
   --radius: 10px;
 }
+
+/* Threads uses the same topic → result workflow as Carousels. */
+.threads-shell { max-width: 1100px; margin: 0 auto; padding: 0 32px; }
+.threads-header { display: flex; justify-content: space-between; align-items: center; padding: 28px 0 24px; }
+.threads-header a { color: var(--muted); }
+.threads-header .brand-name { color: var(--fg); }
+.threads-nav { display: flex; gap: 30px; border-bottom: 1px solid var(--border); }
+.threads-nav a { padding: 14px 0; color: var(--muted); border-bottom: 2px solid transparent; }
+.threads-nav a.active { color: var(--fg); border-bottom-color: var(--accent); }
+.threads-main { max-width: 780px; margin: 0 auto; padding: 32px 0 80px; }
+.workspace-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.workspace-heading h1 { font-size: 28px; letter-spacing: -.7px; }
+.automation-status { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; color: var(--muted); background: var(--bg-card); border-radius: 10px; padding: 12px 16px; margin-bottom: 24px; font-size: 13px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
+.running .status-dot { background: var(--success); }
+.threads-main .card { padding: 24px; border-radius: 16px; margin-bottom: 20px; }
+.compose-label { display: block; font-size: 18px; font-weight: 600; margin-bottom: 14px; }
+.threads-main textarea { line-height: 1.65; resize: vertical; padding: 16px; }
+.compose-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+.section-head { margin: 34px 0 18px; }
+.section-head h2 { font-size: 18px; }
+.post-list { display: grid; gap: 12px; }
+.post-row { text-align: left; width: 100%; padding: 22px; background: var(--bg-card); color: var(--fg); border: 1px solid var(--border); border-radius: 14px; cursor: pointer; }
+.post-row:hover { border-color: var(--accent); }
+.post-row p { margin: 16px 0 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.post-editor { margin-top: 20px; min-height: 260px; font-size: 17px; }
+.page-intro { color: var(--muted); line-height: 1.7; margin-bottom: 24px; }
+.conversation-quote { border-left: 2px solid var(--border); padding-left: 16px; margin: 20px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-answer { background: var(--accent-soft); border-radius: 12px; padding: 16px; margin-bottom: 18px; }
+.conversation-answer p { line-height: 1.65; margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-parent { color: var(--muted); margin-top: 16px; }
+.conversation-parent p { white-space: pre-wrap; }
+.settings-fields { border: 0; padding: 0; display: grid; gap: 12px; }
+.settings-fields p { margin: 0 0 20px; }
+.settings-links { display: grid; gap: 8px; padding-top: 8px; }
+.settings-links button { background: transparent; border: 0; color: var(--muted); text-align: left; padding: 12px 0; cursor: pointer; }
+.generation-note { padding: 32px 0; color: var(--muted); }
+.error-text { color: var(--error); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+@media (max-width: 600px) { .threads-shell { padding: 0 16px; } .threads-header { padding: 20px 0; } .threads-nav { gap: 24px; } .threads-main { padding-top: 24px; } .threads-main .card { padding: 18px; } .compose-actions .btn { flex: 1; } .threads-main .tabs { flex-wrap: wrap; } }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
 a { color: var(--accent); text-decoration: none; }

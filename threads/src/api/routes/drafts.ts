@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getDraft, listDrafts, updateDraft, transitionDraft } from "../../db/repos/drafts.js";
+import { getDraft, listDrafts, updateDraft, transitionDraft, insertDraft } from "../../db/repos/drafts.js";
 import { getCandidate } from "../../db/repos/candidates.js";
 import { getSourcePost } from "../../db/repos/sourcePosts.js";
 import { enqueue, PRIORITY } from "../../queue/queues.js";
@@ -11,6 +11,14 @@ import { validateDraft } from "../../services/writer/validate.js";
 import { query, one } from "../../db/pool.js";
 
 export function registerDraftRoutes(app: FastifyInstance, api: string): void {
+  app.post(`${api}/drafts`, async (req) => {
+    const body = z.object({ topic: z.string().trim().min(5).max(1500) }).safeParse(req.body);
+    if (!body.success) throw new HttpError(400, "Напишите тему поста: от 5 до 1500 символов.");
+    const draft = await insertDraft({ candidateId: null, type: "EXPLAINER", text: "", hook: null, body: null, sourceSummary: body.data.topic, sourceUrls: [], confidence: null, riskScore: null, status: "GENERATING", reviewReason: null, priority: "P2", promptVersion: "topic_v1", model: null, validation: null, variants: [], expiresAt: null });
+    try { await enqueue("content", "content:topic", { draftId: draft.id }, { jobId: `topic-${draft.id}`, priority: 1 }); }
+    catch { await updateDraft(draft.id, { status: "FAILED", error: "Не удалось запустить написание. Повторите из карточки поста." }); }
+    return { id: draft.id };
+  });
   app.get(`${api}/drafts`, async (req) => {
     const q = req.query as Record<string, string | undefined>;
     const drafts = await listDrafts({ status: q.status, limit: clampInt(q.limit, 1, 200, 50), before: q.before });
@@ -43,7 +51,7 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     if (!parsed.success) throw new HttpError(400, "text is required");
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
-    if (["PUBLISHING", "PUBLISHED"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
+    if (["GENERATING", "PUBLISHING", "PUBLISHED"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
     const candidate = draft.candidate_id ? await getCandidate(draft.candidate_id) : null;
     const validation = validateDraft(parsed.data.text, candidate?.facts_json?.facts ?? [], { maxChars: 2500 });
     // A human edit is trusted for wording; the validator still reports and blocks clearly forbidden content.
@@ -57,6 +65,7 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const { id } = req.params as { id: string };
     const row = await transitionDraft(id, ["DRAFT", "NEEDS_REVIEW", "SCHEDULED"], "APPROVED", { review_reason: null });
     if (!row) throw new HttpError(409, "draft cannot be approved from its current status");
+    await updateDraft(id, { approved_by_user: true });
     await audit("POST_APPROVED", `Черновик одобрен вручную: ${row.text.slice(0, 100)}`, { draftId: id, candidateId: row.candidate_id });
     return { draft: row };
   });
@@ -74,7 +83,14 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const { id } = req.params as { id: string };
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
-    if (!draft.candidate_id) throw new HttpError(409, "draft has no candidate to regenerate from");
+    if (!draft.candidate_id && draft.source_summary) {
+      const changed = await transitionDraft(id, ["DRAFT", "NEEDS_REVIEW", "FAILED"], "GENERATING");
+      if (!changed) throw new HttpError(409, "Пост уже обрабатывается или запланирован.");
+      try { await enqueue("content", "content:topic", { draftId: id }, { jobId: `topic-${id}-${Date.now()}`, priority: 1 }); }
+      catch { await updateDraft(id, { status: "FAILED", error: "Очередь недоступна. Повторите позже." }); throw new HttpError(503, "Очередь недоступна"); }
+      return { queued: true, draftId: id };
+    }
+    if (!draft.candidate_id) throw new HttpError(409, "Не сохранена тема поста.");
     if (["PUBLISHING", "PUBLISHED"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
     await transitionDraft(id, ["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED", "FAILED"], "REJECTED", { review_reason: "заменён новой генерацией" });
     const jobId = await enqueue("content", "content:generate", { candidateId: draft.candidate_id, force: true }, { priority: PRIORITY[draft.priority], jobId: `generate-${draft.candidate_id}-${Date.now()}` });
@@ -88,10 +104,11 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const parsed = scheduleBody.safeParse(req.body);
     if (!parsed.success) throw new HttpError(400, "scheduledAt must be an ISO datetime");
     const when = new Date(parsed.data.scheduledAt);
+    if (when <= new Date()) throw new HttpError(400, "Выберите время в будущем.");
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
     if (!["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
-    const row = await updateDraft(id, { status: "SCHEDULED", scheduled_at: when, review_reason: null });
+    const row = await updateDraft(id, { status: "SCHEDULED", scheduled_at: when, review_reason: null, approved_by_user: true });
     await audit("POST_SCHEDULED", `Публикация назначена на ${when.toISOString()}`, { draftId: id, candidateId: draft.candidate_id });
     return { draft: row };
   });
@@ -101,7 +118,7 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
     if (!["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED", "FAILED"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
-    await updateDraft(id, { status: "APPROVED", scheduled_at: new Date(), review_reason: null, error: null });
+    await updateDraft(id, { status: "APPROVED", scheduled_at: new Date(), review_reason: null, error: null, approved_by_user: true });
     const jobId = await enqueue("publisher", "publisher:publish", { draftId: id, manual: true }, { priority: 1, jobId: `publish-${id}-${Date.now()}` });
     await audit("POST_APPROVED", "Черновик отправлен на немедленную публикацию", { draftId: id, candidateId: draft.candidate_id });
     return { queued: true, jobId };

@@ -91,7 +91,7 @@ export async function publisherTick(): Promise<{ published: number; scheduled: n
       }
       continue;
     }
-    const result = await publishDraft(d.id, { manual: false });
+    const result = await publishDraft(d.id, { manual: d.approved_by_user });
     if (result.kind === "published") {
       published++;
       lastAt = new Date();

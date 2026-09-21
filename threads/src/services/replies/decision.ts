@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { llm, type LlmRefs, type LlmRouter } from "../../llm/index.js";
 import { REPLY_DECISION_SYSTEM_PROMPT } from "./prompts.js";
+import { CRYPTO_REPLY_POLICY } from "./policy.js";
 
 /**
  * Should we answer this comment? Cheap deterministic rules first (emoji-only, "+", scam links,
@@ -69,7 +70,7 @@ ${ctx.comment.slice(0, 1500)}
     operation: "reply:decision",
     schema: replyDecisionSchema,
     schemaName: "ReplyDecision",
-    system: ctx.promptOverride ?? REPLY_DECISION_SYSTEM_PROMPT,
+    system: `${ctx.promptOverride ?? REPLY_DECISION_SYSTEM_PROMPT}\n${CRYPTO_REPLY_POLICY}`,
     messages: [{ role: "user", content: user }],
     maxTokens: 500,
     temperature: 0.1,

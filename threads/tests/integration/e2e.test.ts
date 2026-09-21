@@ -111,6 +111,12 @@ class ScriptedLlm implements LlmProvider {
       case "ReplyText":
         answer = { text: "Farside считает только американские спотовые ETF, $650 млн — сумма по всем эмитентам за день.", askedQuestion: false, confidence: 88 };
         break;
+      case "ReplyReview":
+        answer = { cryptoRelevant: true, addsValue: true, grounded: true, safe: true, reason: "Полезное пояснение механизма" };
+        break;
+      case "TopicPost":
+        answer = { text: "Рост активности сети не гарантирует рост токена. Важно, кто платит комиссии и получает ли токен часть этой ценности. Число транзакций без такой связи мало говорит об инвестиционном спросе.", cryptoRelevant: true };
+        break;
       default:
         throw new Error(`unexpected LLM call: ${schema}`);
     }
@@ -274,4 +280,56 @@ test("E2E: foreign blogger post → candidate → facts → Russian draft → ap
   assert.ok(calls!.n >= 4);
   const settings = await loadSettings(true);
   assert.equal(settings.mode, "REVIEW");
+});
+
+test("simple composer writes a topic draft and own reply filtering works", async () => {
+  const { insertDraft } = await import("../../src/db/repos/drafts.js");
+  const { writeTopic } = await import("../../src/services/writer/topic.js");
+  const { listInteractions } = await import("../../src/db/repos/interactions.js");
+  const draft = await insertDraft({ candidateId: null, type: "EXPLAINER", text: "", hook: null, body: null, sourceSummary: "Активность сети и цена токена", sourceUrls: [], confidence: null, riskScore: null, status: "GENERATING", reviewReason: null, priority: "P2", promptVersion: "topic_v1", model: null, validation: null, variants: [], expiresAt: null });
+  await writeTopic(draft.id);
+  assert.equal((await getDraft(draft.id))?.status, "DRAFT");
+  assert.match((await getDraft(draft.id))!.text, /комиссии/);
+  const own = await listInteractions({ type: "own" });
+  assert.ok(own.length > 0, "own is a group, not a nonexistent database type");
+  assert.ok(own.every(r => r.type !== "PUBLIC_POST_REPLY"));
+});
+
+test("automatic sends recheck flags, serialize queues and respect cooldowns", async () => {
+  const { insertInteraction, updateInteraction, getInteraction } = await import("../../src/db/repos/interactions.js");
+  const { sendInteraction } = await import("../../src/services/replies/pipeline.js");
+  const make = async (name: string, text: string) => {
+    const row = await insertInteraction({ type: "PUBLIC_POST_REPLY", targetPostId: name, targetReplyId: null, rootPostId: name, publicationId: null, targetUsername: name, targetText: "Как спрос на блокспейс связан с ценой криптовалюты?", targetPermalink: null, targetPublishedAt: new Date() });
+    await updateInteraction(row!.id, { our_text: text, status: "APPROVED" });
+    return row!.id;
+  };
+  const a = await make("public-a", "Рост комиссий отражает спрос на блокспейс, но не гарантирует роста цены токена.");
+  const b = await make("public-b", "Ликвидность пула определяет проскальзывание при обмене. Объём торгов сам по себе глубину не показывает.");
+  await saveSettings({ mode: "AUTO", dryRun: false, flags: { autoPublicReplies: false } });
+  assert.equal(await sendInteraction(a, { manual: false }), "skipped");
+  assert.equal((await getInteraction(a))?.status, "APPROVED");
+  await saveSettings({ flags: { autoPublicReplies: true } });
+  const outcomes = await Promise.all([sendInteraction(a, { manual: false }), sendInteraction(b, { manual: false })]);
+  assert.equal(outcomes.filter(x => x === "sent").length, 1, "account lock prevents simultaneous cross-queue sends");
+  const waiting = (await getInteraction(a))?.status === "SENT" ? b : a;
+  assert.equal(await sendInteraction(waiting, { manual: false }), "skipped", "second reply waits for cooldown");
+  assert.match((await getInteraction(waiting))!.reason!, /Пауза/);
+  await saveSettings({ killSwitch: true });
+  assert.equal(await sendInteraction(waiting, { manual: true }), "skipped", "pause blocks manual sends too");
+  await saveSettings({ killSwitch: false, dryRun: true });
+  assert.equal(await sendInteraction(waiting, { manual: true }), "skipped");
+  assert.equal((await getInteraction(waiting))?.status, "DRAFT", "dry run is never marked SENT");
+});
+
+test("a user-scheduled topic publishes with automatic news publishing disabled", async () => {
+  const { updateDraft } = await import("../../src/db/repos/drafts.js");
+  const { publisherTick } = await import("../../src/services/publishing/pipeline.js");
+  await saveSettings({ mode: "REVIEW", killSwitch: false, dryRun: false, flags: { autoPost: false }, schedule: { preferredHours: Array.from({length:24}, (_,i)=>i), minimumMinutesBetweenPosts: 1 } });
+  await query("UPDATE publications SET published_at = now() - interval '2 hours'");
+  const topic = await one<{id:string}>("SELECT id FROM drafts WHERE candidate_id IS NULL AND status = 'DRAFT' LIMIT 1");
+  assert.ok(topic);
+  await updateDraft(topic.id, { status: "SCHEDULED", scheduled_at: new Date(Date.now()-1000), approved_by_user: true });
+  const outcome = await publisherTick();
+  assert.equal(outcome.published, 1, JSON.stringify(outcome));
+  assert.equal((await getDraft(topic.id))?.status, "PUBLISHED");
 });

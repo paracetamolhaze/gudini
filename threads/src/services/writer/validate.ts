@@ -12,6 +12,7 @@ export interface Violation {
     | "UNVERIFIED_WITHOUT_ATTRIBUTION"
     | "UNCERTAINTY_LOST"
     | "FORBIDDEN_PHRASE"
+    | "LINK_NOT_ALLOWED"
     | "TOO_LONG"
     | "TOO_SHORT"
     | "HASHTAGS"
@@ -35,6 +36,44 @@ export interface ExtractedNumber {
   value: number;
   unit: "usd" | "percent" | "count" | "btc" | "eth" | "other";
   index: number;
+}
+
+// Same URL shape X bills a post for (x/client.ts), with the global flag so every link can be found.
+const URL_RE = /\bhttps?:\/\/\S+|\b(?:[a-z0-9-]+\.)+(?:com|org|net|io|xyz|co|ru|me|app|fi|gg|ai)\b(?:\/\S*)?/gi;
+
+const trimUrl = (u: string): string => u.replace(/[.,;:!?)\]»"'…]+$/u, "");
+
+export function findUrls(text: string): string[] {
+  return (text.match(URL_RE) ?? []).map(trimUrl).filter(Boolean);
+}
+
+/**
+ * A link is an address, not a sentence: its digits, latin letters and "#" must not be read as
+ * invented numbers, as English or as hashtags. Masking keeps the length, so limits stay honest.
+ */
+export function maskUrls(text: string): string {
+  return text.replace(URL_RE, (u) => "·".repeat(u.length));
+}
+
+/** The same text without its links — what goes to X when no separate X variant survived. */
+export function withoutLinks(text: string): string {
+  return text
+    .replace(URL_RE, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Threads may carry exactly one link — mine; on X a post with a link costs ~13x, so none is allowed. */
+export function linkProblems(text: string, links: "none" | string): string[] {
+  const urls = findUrls(text);
+  if (!urls.length) return [];
+  if (links === "none") return [`ссылка «${urls[0]}» — пост со ссылкой на X стоит в 13 раз дороже`];
+  const allowed = trimUrl(links).toLowerCase();
+  const stray = urls.filter((u) => u.toLowerCase() !== allowed);
+  if (stray.length) return [`посторонняя ссылка «${stray[0]}»`];
+  return urls.length > 1 ? ["моя ссылка стоит в тексте несколько раз"] : [];
 }
 
 const MULT: Record<string, number> = {
@@ -125,6 +164,9 @@ const FORBIDDEN: Array<[RegExp, string]> = [
   [W("гарантирован(?:о|а|ы|ный|ная)?|без\\s?риска|безрисков(?:ый|ая|о)|точно (?:полетит|вырастет|упадёт|упадет)|железно|100%"), "ложная уверенность"],
   [/to the moon|туземун|ту зе мун/iu, "хайп"],
   [W("не является финансовой рекомендацией|nfa|dyor"), "шаблонный дисклеймер"],
+  // The post may end by pointing at where I trade; it may not turn into an ad for the account.
+  [W("подписывайтесь|подписывайся|подпишись|подпишитесь|переходи(?:те)? по ссылке|жми(?:те)? (?:на )?ссылку|регистрируйся|регистрируйтесь|не упусти(?:те)?|успей(?:те)? зайти"), "рекламный призыв"],
+  [W("заработай(?:те)?|заработаешь|заработаете|л[ёе]гкие деньги|л[ёе]гкий профит|пассивный доход|удвои(?:шь|те) депозит"), "обещание заработка"],
 ];
 
 export interface ValidateOptions {
@@ -135,37 +177,44 @@ export interface ValidateOptions {
   language?: "ru" | "en";
   /** Leverage of the owner's own trade: "x10"/"10x" with this number is a fact, not a promise of multiples. */
   allowedMultiples?: number[];
+  /** Links: unchecked by default. "none" — any link is a violation (X); a URL — only that link is allowed (Threads). */
+  links?: "none" | string;
 }
 
 export function validateDraft(text: string, facts: VerifiedFact[], opts: ValidateOptions = {}): ValidationResult {
   const violations: Violation[] = [];
   const t = text.trim();
+  // Length is counted with the link (the platform counts it too); every other check reads it masked.
+  const body = maskUrls(t);
   const maxChars = opts.maxChars ?? 500;
   if (t.length > maxChars) violations.push({ code: "TOO_LONG", message: `Длина ${t.length} символов, максимум ${maxChars}`, severity: t.length > maxChars * 2 ? "block" : "warn" });
   if (t.length < (opts.minChars ?? 40)) violations.push({ code: "TOO_SHORT", message: `Слишком коротко: ${t.length} символов`, severity: "block" });
   if (/^\s*(срочно|breaking|молния)/iu.test(t)) violations.push({ code: "URGENT_OPENER", message: "Пост начинается со «СРОЧНО»", severity: "warn" });
-  const hashtags = (t.match(/#[\p{L}\p{N}_]+/gu) ?? []).length;
+  if (opts.links !== undefined) {
+    for (const p of linkProblems(t, opts.links)) violations.push({ code: "LINK_NOT_ALLOWED", message: p.charAt(0).toUpperCase() + p.slice(1), severity: "block" });
+  }
+  const hashtags = (body.match(/#[\p{L}\p{N}_]+/gu) ?? []).length;
   if (hashtags >= 2) violations.push({ code: "HASHTAGS", message: `Набор хэштегов (${hashtags})`, severity: "warn" });
   const emoji = (t.match(/\p{Extended_Pictographic}/gu) ?? []).length;
   if (emoji > 2) violations.push({ code: "EMOJI_SPAM", message: `Слишком много emoji (${emoji})`, severity: "warn" });
-  const cyr = (t.match(/[а-яё]/giu) ?? []).length;
-  const lat = (t.match(/[a-z]/giu) ?? []).length;
+  const cyr = (body.match(/[а-яё]/giu) ?? []).length;
+  const lat = (body.match(/[a-z]/giu) ?? []).length;
   if ((opts.language ?? "ru") === "en") {
     if (lat < 20 || lat < cyr) violations.push({ code: "NOT_RUSSIAN", message: "Текст для X должен быть на английском", severity: "block" });
   } else if (cyr < 20 || cyr < lat) violations.push({ code: "NOT_RUSSIAN", message: "Текст не похож на русский пост", severity: "block" });
   for (const [re, label] of FORBIDDEN) {
-    const m = t.match(re);
+    const m = body.match(re);
     const multiple = m ? /^([0-9]{2,4}) ?x$/i.exec(m[0]) : null;
     if (multiple && opts.allowedMultiples?.includes(Number(multiple[1]))) continue;
     if (m) violations.push({ code: "FORBIDDEN_PHRASE", message: `${label}: «${m[0]}»`, severity: "block" });
   }
 
-  const numbers = extractNumbers(t);
+  const numbers = extractNumbers(body);
   const factValues = facts.map((f, i) => ({ i, f, v: factValue(f) }));
   const matched = new Set<number>();
-  const hasAttribution = /(по данным|как пишет|как сообщает|сообщает|сообщают|сообщается|@[a-z0-9_.]+|по информации|источник|пишет|отмечает|заявил|заявила|заявили|аналитик)/iu.test(t);
+  const hasAttribution = /(по данным|как пишет|как сообщает|сообщает|сообщают|сообщается|@[a-z0-9_.]+|по информации|источник|пишет|отмечает|заявил|заявила|заявили|аналитик)/iu.test(body);
   for (const n of numbers) {
-    if (isExempt(n, t)) continue;
+    if (isExempt(n, body)) continue;
     const hits = factValues.filter((x) => x.v && unitsCompatible(n.unit, x.v.unit) && sameNumber(n.value, x.v.value));
     if (hits.length === 0) {
       violations.push({ code: "INVENTED_NUMBER", message: `Число «${n.raw}» отсутствует в фактах`, severity: "block" });
@@ -179,7 +228,7 @@ export function validateDraft(text: string, facts: VerifiedFact[], opts: Validat
     }
   }
   const rumorLike = opts.hasRumorOrPrediction ?? facts.some((f) => f.certainty === "RUMOR" || f.certainty === "PREDICTION");
-  if (rumorLike && !HEDGES.test(t)) {
+  if (rumorLike && !HEDGES.test(body)) {
     violations.push({ code: "UNCERTAINTY_LOST", message: "В источнике есть слухи/прогнозы, а в тексте нет ни одной оговорки", severity: "warn" });
   }
   const blocking = violations.some((v) => v.severity === "block");

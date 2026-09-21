@@ -60,7 +60,19 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
         changed();
       },
     );
-  const flag = (patchBody: object) => void act.run("Сохранено", () => put("/settings", { mode: "AUTO", ...patchBody }), async () => { setDirty(false); await data.reload(); changed(); });
+  // A switch saves on its own. Turning one ON also lifts the mode out of OFF; turning one OFF must never start the autopilot.
+  // It also keeps whatever the owner has typed but not saved yet: apply locally, and re-read the server only when nothing is pending.
+  function flag<K extends keyof S>(on: boolean, key: K, value: Partial<S[K]>) {
+    void act.run(
+      "Сохранено",
+      () => put("/settings", on ? { mode: "AUTO", [key]: value } : { [key]: value }),
+      async () => {
+        setForm((f) => (f ? ({ ...f, [key]: { ...(f[key] as object), ...(value as object) } } as S) : f));
+        if (!dirty) await data.reload();
+        changed();
+      },
+    );
+  }
   const num = (v: string, fallback: number) => (Number.isFinite(Number(v)) && v !== "" ? Number(v) : fallback);
 
   return (
@@ -92,13 +104,13 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
 
           <Card title="Автоматика">
             <fieldset disabled={act.busy !== null} className="settings-fields">
-              <Toggle checked={s.trades.autoPublish} onChange={(v) => flag({ trades: { autoPublish: v } })} label="Публиковать посты о плюсовых сделках без моего «ок»" />
+              <Toggle checked={s.trades.autoPublish} onChange={(v) => flag(v, "trades", { autoPublish: v })} label="Публиковать посты о плюсовых сделках без моего «ок»" />
               <p className="muted small">Если выключено — карточка и текст готовятся сами и ждут вас в «Постах».</p>
-              <Toggle checked={s.flags.autoPost} onChange={(v) => flag({ flags: { autoPost: v } })} label="Публиковать новости и движения рынка автоматически" />
+              <Toggle checked={s.flags.autoPost} onChange={(v) => flag(v, "flags", { autoPost: v })} label="Публиковать новости и движения рынка автоматически" />
               <p className="muted small">Проходят только тексты без замечаний проверки; остальное остаётся черновиком.</p>
-              <Toggle checked={s.flags.autoOwnReplies} onChange={(v) => flag({ flags: { autoOwnReplies: v } })} label="Отвечать на комментарии под моими постами" />
+              <Toggle checked={s.flags.autoOwnReplies} onChange={(v) => flag(v, "flags", { autoOwnReplies: v })} label="Отвечать на комментарии под моими постами" />
               <p className="muted small">До 30 ответов в сутки, пауза от 5 минут, не более двух ответов одному человеку в ветке.</p>
-              <Toggle checked={s.flags.autoPublicReplies} onChange={(v) => flag({ flags: { autoPublicReplies: v } })} label="Комментировать чужие посты" />
+              <Toggle checked={s.flags.autoPublicReplies} onChange={(v) => flag(v, "flags", { autoPublicReplies: v })} label="Комментировать чужие посты" />
               <p className="muted small">Threads — до 6 в сутки через API. X — по правилам площадки ответ готовится, а отправляете вы (или включите режим цитат ниже).</p>
             </fieldset>
             {s.dryRun && <p className="warn-text">Включён пробный запуск: в соцсети ничего не отправляется. Выключается в расширенных настройках.</p>}

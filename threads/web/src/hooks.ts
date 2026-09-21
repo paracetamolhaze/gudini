@@ -62,13 +62,14 @@ export function useAction() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const run = useCallback(async (label: string, fn: () => Promise<unknown>, after?: () => void | Promise<void>) => {
+  // `done` is for actions that only put work in a queue: saying "готово" there would be a lie.
+  const run = useCallback(async (label: string, fn: () => Promise<unknown>, after?: () => void | Promise<void>, opts: { done?: string } = {}) => {
     setBusy(label);
     setError("");
     setNotice("");
     try {
       await fn();
-      setNotice(`${label}: готово`);
+      setNotice(opts.done ?? `${label}: готово`);
       await after?.();
       setTimeout(() => setNotice(""), 2500);
     } catch (e) {
@@ -78,6 +79,29 @@ export function useAction() {
     }
   }, []);
   return { busy, error, notice, run, setError };
+}
+
+/** Queue state of the post asked for one row; `at` changes only when a new job starts. */
+export type RowJob = { state: "QUEUED" | "RUNNING" | "DONE" | "FAILED"; error: string | null; at: string } | null;
+
+/**
+ * Honest per-row state for "написать пост". A click is remembered until the queue reports a job newer
+ * than the one that was there at the time, so the row says "пишется…" straight away, never shows the
+ * previous failure as the new one, and shows the real reason when the job dies.
+ */
+export function useJobRows() {
+  const [seen, setSeen] = useState<Record<string, string>>({});
+  const mark = useCallback((id: string, job: RowJob) => setSeen((prev) => ({ ...prev, [id]: job?.at ?? "" })), []);
+  const state = useCallback(
+    (id: string, job: RowJob, done: boolean): { writing: boolean; error: string } => {
+      const clicked = seen[id];
+      const fresh = clicked !== undefined && (job?.at ?? "") === clicked ? null : job;
+      const writing = !done && (fresh ? fresh.state === "QUEUED" || fresh.state === "RUNNING" : clicked !== undefined);
+      return { writing, error: !done && fresh?.state === "FAILED" ? fresh.error || "задача упала без объяснения" : "" };
+    },
+    [seen],
+  );
+  return { mark, state };
 }
 
 export const fmtDate = (v: string | Date | null | undefined): string => {

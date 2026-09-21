@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { detectMoves, moveFacts, type MarketCoin, type MoveRow } from "../../src/services/market/movers.js";
+import { closingPrompt, recentEndings, tradeLinkFrom } from "../../src/services/writer/prompts.js";
+import { validateDraft, withoutLinks } from "../../src/services/writer/validate.js";
 import { needsXVariant, xVariantProblems } from "../../src/services/writer/xVariant.js";
 import { replyLanguageFor, validateReply } from "../../src/services/replies/writer.js";
 import { personaBlock } from "../../src/services/persona.js";
@@ -86,4 +88,62 @@ test("two platforms: per-platform text, per-platform idempotency keys, PARTIAL d
   assert.deepEqual([interactionAttemptKey(id, "threads"), interactionAttemptKey(id, "x")], [`interaction:${id}`, `interaction:${id}:x`]);
   const gate = decidePublish({ mode: "AUTO", killSwitch: false, autoPostEnabled: true, manual: false, draft: { status: "PARTIAL", riskScore: 10, confidence: 95, totalScore: 100, expiresAt: null, reviewReason: null }, thresholds: { maxRisk: 30, minConfidence: 85, minScore: 75 } });
   assert.equal(gate.route, "PUBLISH");
+});
+
+test("closing: Threads gets the link, X gets a nod to the profile, and the wording may not repeat", () => {
+  const link = { enabled: true, url: "https://app.hyperliquid.xyz/join/ALMAZ", note: "мой реф", profileHint: "@almaz" };
+  const used = "Фандинг перегрет, я пока сижу в стороне и просто смотрю за стаканом на Hyperliquid.";
+  const block = closingPrompt({ link, forX: true, recentEndings: [used] });
+  assert.ok(block.includes(link.url) && block.includes("мой реф") && block.includes(used));
+  assert.ok(block.includes("xText") && block.includes("13 раз") && block.includes("@almaz"));
+  assert.ok(block.includes("Нельзя:") && block.includes("каждый раз заново"));
+  assert.ok(!closingPrompt({ link }).includes("xText"));
+  assert.equal(closingPrompt({ link: { ...link, enabled: false } }), "");
+});
+
+test("trade link: the settings section wins over env, a missing section breaks nothing", () => {
+  assert.deepEqual(tradeLinkFrom({ tradeLink: { enabled: true, url: "https://ex.io/r/a", note: "реф", profileHint: "@me" } }), { enabled: true, url: "https://ex.io/r/a", note: "реф", profileHint: "@me" });
+  assert.equal(tradeLinkFrom({ tradeLink: { enabled: false, url: "https://ex.io/r/a" } }).enabled, false);
+  assert.equal(tradeLinkFrom({ tradeLink: { url: "https://ex.io/r/a" } }).enabled, true);
+  process.env.TRADE_LINK_URL = "https://env.io/r/b";
+  try {
+    assert.equal(tradeLinkFrom(defaultSettings()).url, "https://env.io/r/b");
+  } finally {
+    delete process.env.TRADE_LINK_URL;
+  }
+  assert.equal(tradeLinkFrom(defaultSettings()).enabled, false);
+  assert.equal(tradeLinkFrom(undefined).enabled, false);
+});
+
+test("endings: the closing line is remembered without its link, and the same one is kept once", () => {
+  const tail = "Фандинг перегрет, я пока сижу в стороне и просто смотрю за стаканом на Hyperliquid.";
+  const endings = recentEndings([
+    `BTC снова у максимума. ${tail}\nhttps://app.hyperliquid.xyz/join/A`,
+    `ETH тихо подрос. ${tail}`,
+    "Разобрал механику перпов. Сам торгую их там же, адрес в профиле.",
+  ]);
+  assert.deepEqual(endings, [tail, "Разобрал механику перпов. Сам торгую их там же, адрес в профиле."]);
+});
+
+test("validation: my link is fine in Threads, blocked for X, and never read as an invented number", () => {
+  const facts = moveFacts({ symbol: "SOL", name: "Solana", period: "24h", change_pct: 18.4, price: 212.4, volume_24h: 9.1e9, market_cap: 1e11, rank: 5, data_json: null } as unknown as MoveRow);
+  const url = "https://app.hyperliquid.xyz/join/ALMAZ2024";
+  const text = `SOL за сутки прибавил 18.4% и стоит $212.4. Причины я пока не вижу, но такие рывки я как раз и ловлю в перпах.\n${url}`;
+  assert.deepEqual(validateDraft(text, facts, { maxChars: 500, links: url }).violations, []);
+  const forX = validateDraft(text, facts, { maxChars: 500, links: "none" }).violations;
+  assert.deepEqual(forX.map((v) => [v.code, v.severity]), [["LINK_NOT_ALLOWED", "block"]]);
+  assert.ok(forX[0]!.message.includes("13 раз"));
+  assert.ok(validateDraft(text, facts, { maxChars: 500, links: "https://ex.io/r/a" }).violations.some((v) => v.code === "LINK_NOT_ALLOWED"));
+  assert.ok(!withoutLinks(text).includes("hyperliquid.xyz"));
+});
+
+test("validation: an ad for the account is blocked, an honest closing line is not", () => {
+  assert.deepEqual(validateDraft("Держу лонг по SOL и смотрю за фандингом. Торгую это на Hyperliquid — адрес есть у меня в профиле.", [], { maxChars: 500 }).violations, []);
+  for (const bad of [
+    "Подписывайтесь, чтобы не пропустить следующий разбор рынка криптовалют.",
+    "Переходи по ссылке и заработай на этом движении рынка уже сегодня.",
+    "Не упустите: на этом рынке можно сделать лёгкие деньги за одну неделю.",
+  ]) {
+    assert.ok(validateDraft(bad, [], { maxChars: 500 }).violations.some((v) => v.code === "FORBIDDEN_PHRASE"), bad);
+  }
 });

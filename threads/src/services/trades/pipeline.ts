@@ -12,7 +12,7 @@ import { newId } from "../../shared/ids.js";
 import { audit } from "../audit.js";
 import { buildTradesForCoin, roePct, worthPosting } from "./aggregate.js";
 import { CARD_HEIGHT, CARD_WIDTH, renderTradeCard, shortWallet } from "./card.js";
-import { tradeFacts, writeTradePost } from "./writer.js";
+import { tradeFacts, tradeMarketContext, writeTradePost } from "./writer.js";
 
 /**
  * Hyperliquid → trades → card + post.
@@ -38,12 +38,13 @@ async function candlesFor(trade: TradeRow): Promise<Array<{ t: number; c: number
   return candles.map((c) => ({ t: c.t, c: Number(c.c) })).filter((c) => Number.isFinite(c.c));
 }
 
-export async function renderCardForTrade(trade: TradeRow, settings: Settings): Promise<{ assetId: string; file: string }> {
+export async function renderCardForTrade(trade: TradeRow, settings: Settings): Promise<{ assetId: string; file: string; candles: Array<{ t: number; c: number }> }> {
   if (trade.status !== "CLOSED" || trade.exit_px === null || !trade.closed_at) throw new Error("карточка рисуется только для закрытой сделки");
   const candles = await candlesFor(trade).catch(() => []);
   const image = await renderTradeCard(
     { coin: trade.coin, direction: trade.direction, leverage: trade.leverage, entryPx: trade.entry_px, exitPx: trade.exit_px, netPnl: trade.net_pnl, roePct: trade.roe_pct, movePct: trade.move_pct, openedAt: trade.opened_at, closedAt: trade.closed_at, size: trade.max_size, candles },
-    { showUsd: settings.trades.showUsd, showSize: settings.trades.showSize, wallet: settings.trades.showWallet ? shortWallet(trade.wallet) : null, handle: settings.trades.handle, language: settings.platforms.x.enabled && settings.platforms.x.language === "en" && !settings.platforms.threads.enabled ? "en" : "ru", timezone: settings.schedule.timezone },
+    // The card carries the full address on purpose: the point is that the trade can be checked in the explorer.
+    { showUsd: settings.trades.showUsd, showSize: settings.trades.showSize, wallet: settings.trades.showWallet ? trade.wallet : null, handle: settings.trades.handle, language: settings.platforms.x.enabled && settings.platforms.x.language === "en" && !settings.platforms.threads.enabled ? "en" : "ru", timezone: settings.schedule.timezone },
   );
   const assetId = newId();
   const dir = path.join(env().DATA_DIR, "media", assetId);
@@ -55,7 +56,7 @@ export async function renderCardForTrade(trade: TradeRow, settings: Settings): P
     [assetId, `generated:trade-card:${trade.id}`, file, CARD_WIDTH, CARD_HEIGHT],
   );
   await updateTrade(trade.id, { card_asset_id: assetId });
-  return { assetId, file };
+  return { assetId, file, candles };
 }
 
 export type TradeDraftOutcome = { kind: "draft"; draftId: string; status: string } | { kind: "skipped"; reason: string };
@@ -71,12 +72,14 @@ export async function createTradeDraft(tradeId: string, opts: { manual: boolean 
     if (live) return { kind: "draft", draftId: live.id, status: live.status };
   }
   const targets = defaultTargets(settings);
-  const { assetId } = await renderCardForTrade(trade, settings);
-  const facts = tradeFacts(trade, { showUsd: settings.trades.showUsd, showSize: settings.trades.showSize });
+  const { assetId, candles } = await renderCardForTrade(trade, settings);
+  // The candles behind the card also explain the trade, so the writer gets the same picture the card shows.
+  const context = tradeMarketContext(trade, candles);
+  const facts = tradeFacts(trade, { showUsd: settings.trades.showUsd, showSize: settings.trades.showSize }, context);
   const examples = await query<{ text: string }>(`SELECT text FROM style_examples WHERE enabled ORDER BY rating DESC, created_at DESC LIMIT 5`);
   let post;
   try {
-    post = await writeTradePost({ trade, facts, settings, forX: targets.includes("x"), styleExamples: examples.map((e) => e.text), recentPosts: await recentPublishedTexts(8), refs: {} });
+    post = await writeTradePost({ trade, facts, context, settings, forX: targets.includes("x"), styleExamples: examples.map((e) => e.text), recentPosts: await recentPublishedTexts(8), refs: {} });
   } catch (err) {
     await audit("POST_VALIDATION_FAILED", `Пост о сделке ${trade.coin} не написан: ${errorMessage(err)}`, {}, { tradeId }, "error");
     throw err;
@@ -104,7 +107,7 @@ export async function createTradeDraft(tradeId: string, opts: { manual: boolean 
     status: needsReview ? "NEEDS_REVIEW" : "DRAFT",
     reviewReason: needsReview ? post.reviewReasons.join("; ") : null,
     priority: "P1",
-    promptVersion: "trade_post_v1",
+    promptVersion: "trade_post_v2",
     model: post.model,
     validation: { violations: post.violations },
     variants: [],

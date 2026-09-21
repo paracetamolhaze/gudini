@@ -140,6 +140,7 @@ export const settingsSchema = z.object({
     requireBoth: z.boolean(),
     showUsd: z.boolean(),
     showSize: z.boolean(),
+    /** Put the full wallet address and the explorer link on the card, so anyone can check the trade. */
     showWallet: z.boolean(),
     maxPostsPerDay: z.number().int().min(0).max(20),
     /** Publish trade posts without a human look (still subject to mode AUTO, kill switch and validation). */
@@ -238,8 +239,8 @@ export function defaultSettings(): Settings {
       minRoePct: 5,
       requireBoth: false,
       showUsd: true,
-      showSize: false,
-      showWallet: false,
+      showSize: true,
+      showWallet: true,
       maxPostsPerDay: 3,
       autoPublish: false,
       handle: "",

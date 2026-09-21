@@ -2,6 +2,7 @@ import { z } from "zod";
 import { llm, type LlmRefs, type LlmRouter } from "../../llm/index.js";
 import { REPLY_DECISION_SYSTEM_PROMPT } from "./prompts.js";
 import { CRYPTO_REPLY_POLICY } from "./policy.js";
+import { sanitizeUntrusted } from "../../shared/untrusted.js";
 
 /**
  * Should we answer this comment? Cheap deterministic rules first (emoji-only, "+", scam links,
@@ -50,7 +51,7 @@ export async function decideReply(ctx: DecisionContext): Promise<{ decision: Rep
   if (byRule) return { decision: byRule, source: "rules" };
   const router = ctx.router ?? llm();
   const chain = ctx.chain.length
-    ? ctx.chain.map((m) => `${m.isOurs ? "МЫ" : `@${m.username}`}: ${m.text.replace(/\s+/g, " ").slice(0, 400)}`).join("\n")
+    ? ctx.chain.map((m) => `${m.isOurs ? "МЫ" : `@${sanitizeUntrusted(m.username)}`}: ${sanitizeUntrusted(m.text).replace(/\s+/g, " ").slice(0, 400)}`).join("\n")
     : "(нет предыдущих реплик)";
   const user = `Тип: ${ctx.kind === "mention" ? "нас упомянули в чужом посте" : ctx.kind === "public" ? "чужой публичный пост, мы решаем, стоит ли отвечать" : "комментарий под нашим постом"}
 НАШ ПОСТ:
@@ -60,8 +61,8 @@ ${ctx.ourPost.slice(0, 1200)}
 ЦЕПОЧКА:
 ${chain}
 
-НОВЫЙ КОММЕНТАРИЙ от @${ctx.commenter}:
-${ctx.comment.slice(0, 1500)}
+НОВЫЙ КОММЕНТАРИЙ от @${sanitizeUntrusted(ctx.commenter)}:
+${sanitizeUntrusted(ctx.comment).slice(0, 1500)}
 </untrusted_source_content>
 
 Верни JSON-решение.`;

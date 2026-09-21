@@ -38,7 +38,8 @@ export type OverviewData = {
   killSwitch: boolean;
   dryRun: boolean;
   flags: { autoPost: boolean; autoOwnReplies: boolean; autoPublicReplies: boolean; imageTranslation: boolean };
-  today: { posts: number; own_replies: number; public_replies: number; candidates_found: number; candidates_rejected: number; drafts_waiting: number; scheduled: number; needs_review: number; cost_today: number | null };
+  // needs_review counts only replies under our own posts; comments on other people's posts are public_needs_review.
+  today: { posts: number; own_replies: number; public_replies: number; candidates_found: number; candidates_rejected: number; drafts_waiting: number; scheduled: number; needs_review: number; public_needs_review: number; cost_today: number | null };
   sources: { total: number; enabled: number; errors: number } | null;
   lastPostAt: string | null;
   platforms: PlatformOverview[];
@@ -114,7 +115,7 @@ export default function App() {
   };
   const paused = Boolean(o?.killSwitch || o?.mode === "OFF");
   const connected = (o?.platforms ?? []).filter((p) => p.enabled && p.health.ok);
-  const waiting: Record<string, number> = { posts: o?.today.drafts_waiting ?? 0, replies: o?.today.needs_review ?? 0, trades: o?.hyperliquid.draftsWaiting ?? 0 };
+  const waiting: Record<string, number> = { posts: o?.today.drafts_waiting ?? 0, replies: o?.today.needs_review ?? 0, discovery: o?.today.public_needs_review ?? 0, trades: o?.hyperliquid.draftsWaiting ?? 0 };
   const statusText = !o ? "" : paused ? "Автоматика на паузе" : o.dryRun ? "Пробный запуск — отправки выключены" : connected.length === 0 ? "Площадки не подключены" : `Работает: ${connected.map((p) => p.label).join(" + ")}`;
   const running = Boolean(o && !paused && !o.dryRun && connected.length > 0);
 

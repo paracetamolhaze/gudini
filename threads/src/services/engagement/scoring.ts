@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { llm, type LlmRouter } from "../../llm/index.js";
 import { CRYPTO_REPLY_POLICY } from "../replies/policy.js";
+import { sanitizeUntrusted } from "../../shared/untrusted.js";
 
 /**
  * Which public posts deserve a reply from us. Deterministic spam/age filters, then one batched
@@ -73,7 +74,7 @@ export async function scorePosts(posts: DiscoveredPost[], opts: { minimumScore: 
   const router = opts.router ?? llm();
   for (let i = 0; i < toModel.length; i += 10) {
     const batch = toModel.slice(i, i + 10);
-    const list = batch.map((p) => `[${p.id}] @${p.username} (${p.publishedAt?.toISOString() ?? "?"}, keyword: ${p.keyword})\n${p.text.replace(/\s+/g, " ").slice(0, 700)}`).join("\n\n");
+    const list = batch.map((p) => `[${p.id}] @${sanitizeUntrusted(p.username)} (${p.publishedAt?.toISOString() ?? "?"}, keyword: ${p.keyword})\n${sanitizeUntrusted(p.text).replace(/\s+/g, " ").slice(0, 700)}`).join("\n\n");
     const { data } = await router.structured({
       task: "reply",
       operation: "engagement:score",

@@ -107,7 +107,7 @@ export async function getDraft(id: string): Promise<DraftRow | null> {
   return one<DraftRow>(`SELECT * FROM drafts WHERE id = $1`, [id]);
 }
 
-export async function listDrafts(opts: { status?: string | string[]; kind?: string | string[]; platform?: string; limit?: number; before?: string }): Promise<DraftRow[]> {
+export async function listDrafts(opts: { status?: string | string[]; exclude?: string[]; kind?: string | string[]; platform?: string; limit?: number; before?: string }): Promise<DraftRow[]> {
   const params: unknown[] = [];
   const conds: string[] = [];
   const push = (v: unknown) => {
@@ -118,6 +118,7 @@ export async function listDrafts(opts: { status?: string | string[]; kind?: stri
     const list = Array.isArray(opts.status) ? opts.status : opts.status.split(",");
     conds.push(`status = ANY(${push(list)}::text[])`);
   }
+  if (opts.exclude?.length) conds.push(`status <> ALL(${push(opts.exclude)}::text[])`);
   if (opts.kind) {
     const list = Array.isArray(opts.kind) ? opts.kind : opts.kind.split(",");
     conds.push(`kind = ANY(${push(list)}::text[])`);
@@ -205,4 +206,35 @@ export async function expireDrafts(): Promise<string[]> {
     `UPDATE drafts SET status = 'EXPIRED', updated_at = now() WHERE expires_at < now() AND status IN ('DRAFT','NEEDS_REVIEW','APPROVED','SCHEDULED') RETURNING id`,
   );
   return rows.map((r) => r.id);
+}
+
+/** Dead end for a draft: it will never be published, so it lives in the archive tab and can be thrown away. */
+export const ARCHIVED_STATUSES: DraftStatus[] = ["EXPIRED", "REJECTED"];
+
+async function deleteDrafts(statuses: DraftStatus[], olderThanDays: number | null): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    `DELETE FROM drafts d
+      WHERE d.status = ANY($1::text[])
+        AND ($2::int IS NULL OR d.updated_at < now() - make_interval(days => $2::int))
+        AND NOT EXISTS (SELECT 1 FROM publications p WHERE p.draft_id = d.id)
+      RETURNING d.id`,
+    [statuses, olderThanDays],
+  );
+  const ids = rows.map((r) => r.id);
+  if (ids.length) {
+    // Trades and market moves remember their draft without a foreign key, so the dead link is cleared by hand.
+    await query(`UPDATE market_moves SET draft_id = NULL, status = 'SKIPPED', reason = COALESCE(reason, 'черновик удалён') WHERE draft_id = ANY($1::uuid[])`, [ids]);
+    await query(`UPDATE hl_trades SET draft_id = NULL, post_status = 'SKIPPED', skip_reason = COALESCE(skip_reason, 'черновик удалён'), updated_at = now() WHERE draft_id = ANY($1::uuid[])`, [ids]);
+  }
+  return ids;
+}
+
+/** "Очистить" in the archive: expired and rejected drafts that never reached a platform. Published posts stay. */
+export async function deleteArchivedDrafts(): Promise<string[]> {
+  return deleteDrafts(ARCHIVED_STATUSES, null);
+}
+
+/** Housekeeping: an expired draft nobody came back to within a month is dropped for good. */
+export async function purgeOldExpiredDrafts(olderThanDays = 30): Promise<string[]> {
+  return deleteDrafts(["EXPIRED"], olderThanDays);
 }

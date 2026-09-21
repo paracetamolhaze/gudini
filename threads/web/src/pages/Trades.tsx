@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { API, post, put } from "../api";
-import { useAction, useFetch, fmtDate } from "../hooks";
+import { useAction, useFetch, useJobRows, fmtDate, type RowJob } from "../hooks";
 import { Button, Card, Empty, ErrorBox, Notice } from "../ui";
 import { Icon, Modal, Pct, Usd, fmtHeld, fmtPrice } from "../kit";
 import type { OverviewData } from "../App";
@@ -23,6 +23,7 @@ type Trade = {
   note: string | null;
   draft_id: string | null;
   worth: { ok: boolean; reason: string };
+  job: RowJob;
 };
 type Data = {
   wallet: { short: string; valid: boolean } | null;
@@ -37,6 +38,7 @@ export default function Trades({ navigate, overview, reloadOverview }: { navigat
   const [only, setOnly] = useState<"" | "CLOSED" | "OPEN">("");
   const data = useFetch<Data>(`/trades?limit=150${only ? `&status=${only}` : ""}`, { intervalMs: 8000 });
   const act = useAction();
+  const jobs = useJobRows();
   const [card, setCard] = useState<Trade | null>(null);
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -76,7 +78,7 @@ export default function Trades({ navigate, overview, reloadOverview }: { navigat
         </div>
         <div className="row">
           <span className="small muted">{d?.wallet?.short}</span>
-          <Button busy={act.busy !== null} onClick={() => void act.run("Проверяю Hyperliquid", () => post("/trades/sync"), reload)}><Icon name="refresh" size={14} /> Обновить</Button>
+          <Button busy={act.busy !== null} onClick={() => void act.run("Проверка Hyperliquid", () => post("/trades/sync"), reload, { done: "Проверка Hyperliquid запущена — список обновится сам" })}><Icon name="refresh" size={14} /> Обновить</Button>
         </div>
       </div>
       {s && (
@@ -89,50 +91,65 @@ export default function Trades({ navigate, overview, reloadOverview }: { navigat
       {data.loading && !d && <p className="muted">Загружаю сделки…</p>}
       {d?.trades.length === 0 && <Empty title="Сделок пока нет" text={overview?.hyperliquid.fills ? "В выбранном фильтре пусто." : "Нажмите «Обновить» — исполнения подтянутся с Hyperliquid за последние дни."} />}
       <div className="trade-list">
-        {d?.trades.map((t) => (
-          <div key={t.id} className={`trade ${t.status === "OPEN" ? "trade-open" : t.net_pnl >= 0 ? "trade-win" : "trade-loss"}`}>
-            <div className="trade-main">
-              <div className="trade-coin">
-                <b>{t.coin}</b>
-                <span className={`side-chip ${t.direction === "LONG" ? "side-long" : "side-short"}`}>{t.direction}</span>
-                {t.leverage && <span className="lev-chip">x{t.leverage}</span>}
+        {d?.trades.map((t) => {
+          const job = jobs.state(t.id, t.job, Boolean(t.draft_id));
+          return (
+            <div key={t.id} className={`trade ${t.status === "OPEN" ? "trade-open" : t.net_pnl >= 0 ? "trade-win" : "trade-loss"}`}>
+              <div className="trade-main">
+                <div className="trade-coin">
+                  <b>{t.coin}</b>
+                  <span className={`side-chip ${t.direction === "LONG" ? "side-long" : "side-short"}`}>{t.direction}</span>
+                  {t.leverage && <span className="lev-chip">x{t.leverage}</span>}
+                </div>
+                <div className="trade-prices">
+                  <span>{fmtPrice(t.entry_px)}</span>
+                  <span className="dim">→</span>
+                  <span>{t.exit_px === null ? "…" : fmtPrice(t.exit_px)}</span>
+                </div>
+                <div className="trade-meta small muted">
+                  {fmtHeld(t.opened_at, t.closed_at)} · {fmtDate(t.closed_at ?? t.opened_at)}
+                </div>
               </div>
-              <div className="trade-prices">
-                <span>{fmtPrice(t.entry_px)}</span>
-                <span className="dim">→</span>
-                <span>{t.exit_px === null ? "…" : fmtPrice(t.exit_px)}</span>
+              <div className="trade-result">
+                <div className="trade-roe">{t.status === "OPEN" ? <span className="dim">открыта</span> : <Pct value={t.roe_pct ?? t.move_pct} />}</div>
+                <div className="small">{t.status === "CLOSED" && <Usd value={t.net_pnl} signed />}</div>
               </div>
-              <div className="trade-meta small muted">
-                {fmtHeld(t.opened_at, t.closed_at)} · {fmtDate(t.closed_at ?? t.opened_at)}
+              <div className="trade-actions">
+                <span className={`post-state post-${t.post_status}`} role={job.writing ? "status" : undefined} title={t.skip_reason ?? (t.worth.ok ? "" : t.worth.reason)}>{job.writing ? "пишется…" : POST_LABEL[t.post_status]}</span>
+                {t.status === "CLOSED" && t.net_pnl > 0 && <button className="btn btn-sm btn-ghost" onClick={() => setCard(t)}><Icon name="image" size={14} /> Карточка</button>}
+                {t.draft_id ? (
+                  <button className="btn btn-sm" onClick={() => navigate(`posts/${t.draft_id}`)}>Открыть пост</button>
+                ) : (
+                  t.status === "CLOSED" && t.net_pnl > 0 && !job.writing && (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      disabled={act.busy !== null}
+                      onClick={() => {
+                        jobs.mark(t.id, t.job);
+                        void act.run("Пост в очередь", () => post(`/trades/${t.id}/draft`), reload, { done: "Карточка и текст поставлены в очередь — строка покажет, что из этого вышло" });
+                      }}
+                    >
+                      {job.error ? "Сделать ещё раз" : "Сделать пост"}
+                    </button>
+                  )
+                )}
+                {t.status === "CLOSED" && t.net_pnl > 0 && !t.draft_id && (
+                  <button className="btn btn-sm btn-ghost" onClick={() => { setNoteFor(noteFor === t.id ? null : t.id); setNote(t.note ?? ""); }}>{t.note ? "Заметка ✓" : "Заметка"}</button>
+                )}
               </div>
-            </div>
-            <div className="trade-result">
-              <div className="trade-roe">{t.status === "OPEN" ? <span className="dim">открыта</span> : <Pct value={t.roe_pct ?? t.move_pct} />}</div>
-              <div className="small">{t.status === "CLOSED" && <Usd value={t.net_pnl} signed />}</div>
-            </div>
-            <div className="trade-actions">
-              <span className={`post-state post-${t.post_status}`} title={t.skip_reason ?? (t.worth.ok ? "" : t.worth.reason)}>{POST_LABEL[t.post_status]}</span>
-              {t.status === "CLOSED" && t.net_pnl > 0 && <button className="btn btn-sm btn-ghost" onClick={() => setCard(t)}><Icon name="image" size={14} /> Карточка</button>}
-              {t.draft_id ? (
-                <button className="btn btn-sm" onClick={() => navigate(`posts/${t.draft_id}`)}>Открыть пост</button>
-              ) : (
-                t.status === "CLOSED" && t.net_pnl > 0 && (
-                  <button className="btn btn-sm btn-primary" disabled={act.busy !== null} onClick={() => void act.run("Готовлю карточку и текст", () => post(`/trades/${t.id}/draft`), reload)}>Сделать пост</button>
-                )
+              {job.error && <div className="trade-reason small error-text">Пост не сделан: {job.error}</div>}
+              {!job.error && !job.writing && (t.skip_reason || (!t.worth.ok && t.status === "CLOSED" && t.net_pnl > 0)) && t.post_status !== "POSTED" && !t.draft_id && (
+                <div className="trade-reason small dim">{t.skip_reason ?? t.worth.reason}</div>
               )}
-              {t.status === "CLOSED" && t.net_pnl > 0 && !t.draft_id && (
-                <button className="btn btn-sm btn-ghost" onClick={() => { setNoteFor(noteFor === t.id ? null : t.id); setNote(t.note ?? ""); }}>{t.note ? "Заметка ✓" : "Заметка"}</button>
+              {noteFor === t.id && (
+                <form className="trade-note" onSubmit={(e) => { e.preventDefault(); void act.run("Заметка сохранена", () => put(`/trades/${t.id}`, { note }), async () => { setNoteFor(null); await data.reload(); }); }}>
+                  <textarea rows={2} maxLength={1500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Почему зашли и как вели сделку — пост возьмёт идею только отсюда, сам он её не придумывает" />
+                  <Button type="submit" busy={act.busy !== null}>Сохранить заметку</Button>
+                </form>
               )}
             </div>
-            {(t.skip_reason || (!t.worth.ok && t.status === "CLOSED" && t.net_pnl > 0)) && t.post_status !== "POSTED" && !t.draft_id && <div className="trade-reason small dim">{t.skip_reason ?? t.worth.reason}</div>}
-            {noteFor === t.id && (
-              <form className="trade-note" onSubmit={(e) => { e.preventDefault(); void act.run("Заметка сохранена", () => put(`/trades/${t.id}`, { note }), async () => { setNoteFor(null); await data.reload(); }); }}>
-                <textarea rows={2} maxLength={1500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Почему зашли и как вели сделку — пост возьмёт идею только отсюда, сам он её не придумывает" />
-                <Button type="submit" busy={act.busy !== null}>Сохранить заметку</Button>
-              </form>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
       {card && (
         <Modal title={`${card.coin} ${card.direction}`} onClose={() => setCard(null)}>

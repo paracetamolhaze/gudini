@@ -27,7 +27,7 @@ export interface TradeCardInput {
 export interface TradeCardOptions {
   showUsd: boolean;
   showSize: boolean;
-  /** Short wallet form (0x12…ab34) or null to leave it off the card. */
+  /** Full wallet address (0x + 40 chars) or null to leave it off the card: the card is meant to be checkable. */
   wallet: string | null;
   handle: string;
   language: "ru" | "en";
@@ -59,6 +59,9 @@ const LABELS = {
 } as const;
 
 const NBSP = String.fromCharCode(160);
+
+/** Public position explorer: the wallet address is appended to it. */
+const EXPLORER = "app.hyperliquid.xyz/explorer/address/";
 
 /** 63540 → "63 540", 0.004213 → "0.004213", 212.4 → "212.40". */
 export function formatPrice(v: number): string {
@@ -231,22 +234,51 @@ export async function renderTradeCard(input: TradeCardInput, opts: TradeCardOpti
   if (opts.showSize) stats.push([l.size, `${formatSize(input.size)} ${input.coin}`]);
   if (input.roePct !== null && input.movePct !== null) stats.push([l.move, formatPct(input.movePct)]);
   const statsY = H - M - 96;
-  const shown = stats.slice(0, hasChart ? 3 : 5);
+  // Next to the chart there is room for three columns — four when the size is shown: it is part of the proof.
+  const shown = stats.slice(0, hasChart ? (opts.showSize ? 4 : 3) : 5);
   const colW = leftW / shown.length;
   shown.forEach(([label, value], i) => {
     const x = M + i * colW;
     cv.text(label, x, statsY, 20, C.dim, { tracking: 2.5 });
     let px = 38;
-    while (cv.width(value, px, true) > colW - 18 && px > 22) px -= 2;
+    while (cv.width(value, px, true) > colW - 26 && px > 22) px -= 2;
     cv.text(value, x, statsY + 50, px, C.text, { bold: true });
   });
 
   if (hasChart) chart(cv, input, { x: M + leftW + 40, y: M + 74, w: W - M * 2 - leftW - 40, h: H - M * 2 - 74 - 66 }, accent);
 
-  // footer
-  cv.raw(`<path d="M${M} ${H - M - 22} L${W - M} ${H - M - 22}" stroke="${C.line}" stroke-width="1.5"/>`);
-  if (opts.handle.trim()) cv.text(opts.handle.trim().startsWith("@") ? opts.handle.trim() : `@${opts.handle.trim()}`, M, H - M + 12, 24, C.text, { bold: true });
-  cv.text(opts.wallet ? `${l.source}  ·  ${opts.wallet}` : l.source, W - M, H - M + 12, 22, C.dim, { align: "right" });
+  // footer: my handle on the left, on the right the address and the link anyone can open to check the trade
+  const footY = H - M - 22;
+  cv.raw(`<path d="M${M} ${footY} L${W - M} ${footY}" stroke="${C.line}" stroke-width="1.5"/>`);
+  const raw = opts.handle.trim();
+  const handle = raw ? (raw.startsWith("@") ? raw : `@${raw}`) : "";
+  // The handle never takes more than a third of the footer, so a long name cannot push the address off the card.
+  let handlePx = 24;
+  while (handle && cv.width(handle, handlePx, true) > (W - M * 2) * 0.34 && handlePx > 14) handlePx -= 1;
+  const handleW = handle ? cv.width(handle, handlePx, true) : 0;
+  const avail = W - M * 2 - (handleW ? handleW + 40 : 0);
+  const drawHandle = (baseline: number): void => {
+    if (handle) cv.text(handle, M, baseline, handlePx, C.text, { bold: true });
+  };
+  if (opts.wallet) {
+    let px = 22;
+    while (cv.width(`${EXPLORER}${opts.wallet}`, px) > avail && px > 16) px -= 1;
+    if (cv.width(`${EXPLORER}${opts.wallet}`, px) <= avail) {
+      drawHandle(footY + 34);
+      const addrW = cv.text(opts.wallet, W - M, footY + 34, px, C.muted, { align: "right" });
+      cv.text(EXPLORER, W - M - addrW, footY + 34, px, C.dim, { align: "right" });
+    } else {
+      // Does not fit in one line next to the handle: the link wraps and the address keeps a line of its own.
+      let wrapPx = 20;
+      while (cv.width(opts.wallet, wrapPx) > avail && wrapPx > 13) wrapPx -= 1;
+      drawHandle(footY + 42);
+      cv.text(EXPLORER, W - M, footY + 26, wrapPx, C.dim, { align: "right" });
+      cv.text(opts.wallet, W - M, footY + 26 + wrapPx * 1.5, wrapPx, C.muted, { align: "right" });
+    }
+  } else {
+    drawHandle(footY + 34);
+    cv.text(l.source, W - M, footY + 34, 22, C.dim, { align: "right" });
+  }
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 <defs>

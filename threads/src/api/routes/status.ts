@@ -51,6 +51,7 @@ export function registerStatusRoutes(app: FastifyInstance, api: string): void {
       drafts_waiting: number;
       scheduled: number;
       needs_review: number;
+      public_needs_review: number;
       cost_today: number | null;
     }>(`SELECT
         (SELECT count(DISTINCT COALESCE(draft_id::text, id::text)) FROM publications WHERE published_at >= now() - interval '24 hours')::int AS posts,
@@ -60,7 +61,9 @@ export function registerStatusRoutes(app: FastifyInstance, api: string): void {
         (SELECT count(*) FROM content_candidates WHERE status = 'REJECTED' AND updated_at >= now() - interval '24 hours')::int AS candidates_rejected,
         (SELECT count(*) FROM drafts WHERE status IN ('DRAFT','NEEDS_REVIEW'))::int AS drafts_waiting,
         (SELECT count(*) FROM drafts WHERE status IN ('APPROVED','SCHEDULED'))::int AS scheduled,
-        (SELECT count(*) FROM interactions WHERE status IN ('NEEDS_REVIEW','DRAFT'))::int AS needs_review,
+        -- Split by type: the "Ответы мне" page shows only own threads, public-post comments live on "Чужие посты".
+        (SELECT count(*) FROM interactions WHERE status IN ('NEEDS_REVIEW','DRAFT') AND type <> 'PUBLIC_POST_REPLY')::int AS needs_review,
+        (SELECT count(*) FROM interactions WHERE status IN ('NEEDS_REVIEW','DRAFT') AND type = 'PUBLIC_POST_REPLY')::int AS public_needs_review,
         (SELECT sum(estimated_cost) FROM llm_calls WHERE at >= date_trunc('day', now()))::float AS cost_today`);
     const sources = await one<{ total: number; enabled: number; errors: number }>(
       `SELECT count(*)::int AS total, count(*) FILTER (WHERE enabled)::int AS enabled, count(*) FILTER (WHERE last_error IS NOT NULL)::int AS errors FROM sources`,

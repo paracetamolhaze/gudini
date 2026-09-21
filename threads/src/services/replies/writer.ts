@@ -3,6 +3,7 @@ import { llm, type LlmRefs, type LlmRouter } from "../../llm/index.js";
 import { REPLY_SYSTEM_PROMPT } from "./prompts.js";
 import { extractNumbers } from "../writer/validate.js";
 import { CRYPTO_REPLY_POLICY } from "./policy.js";
+import { sanitizeUntrusted } from "../../shared/untrusted.js";
 
 /** Short, specific, in-voice replies; validated against templates, length, hype and stray numbers. */
 export const replyTextSchema = z.object({
@@ -81,7 +82,7 @@ export async function writeReply(ctx: ReplyWriterContext): Promise<{ text: strin
   const router = ctx.router ?? llm();
   const maxChars = ctx.maxChars ?? 300;
   const language = ctx.language ?? "ru";
-  const chain = ctx.chain.length ? ctx.chain.map((m) => `${m.isOurs ? "Я" : `@${m.username}`}: ${m.text.replace(/\s+/g, " ").slice(0, 400)}`).join("\n") : "(нет)";
+  const chain = ctx.chain.length ? ctx.chain.map((m) => `${m.isOurs ? "Я" : `@${sanitizeUntrusted(m.username)}`}: ${sanitizeUntrusted(m.text).replace(/\s+/g, " ").slice(0, 400)}`).join("\n") : "(нет)";
   const kindLine =
     ctx.kind === "public"
       ? "Это чужой публичный пост: я захожу в разговор как сторонний участник и должен что-то добавить по существу (факт, уточнение механики, полезный вопрос). Никаких «согласен», «🔥», «100%»."
@@ -102,8 +103,8 @@ ${ctx.styleExamples?.length ? `\nПРИМЕРЫ МОЕГО ГОЛОСА:\n${ctx.
 ЦЕПОЧКА:
 ${chain}
 
-КОММЕНТАРИЙ от @${ctx.commenter}:
-${ctx.comment.slice(0, 1500)}
+КОММЕНТАРИЙ от @${sanitizeUntrusted(ctx.commenter)}:
+${sanitizeUntrusted(ctx.comment).slice(0, 1500)}
 </untrusted_source_content>
 
 Напиши ответ (1–3 предложения, до ${maxChars} символов) и верни JSON.`;

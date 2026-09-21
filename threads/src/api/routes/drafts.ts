@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { getDraft, listDrafts, updateDraft, transitionDraft, insertDraft } from "../../db/repos/drafts.js";
+import { ARCHIVED_STATUSES, deleteArchivedDrafts, getDraft, listDrafts, updateDraft, transitionDraft, insertDraft } from "../../db/repos/drafts.js";
 import { getCandidate } from "../../db/repos/candidates.js";
 import { getSourcePost } from "../../db/repos/sourcePosts.js";
 import { enqueue, PRIORITY } from "../../queue/queues.js";
@@ -25,7 +25,8 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
   });
   app.get(`${api}/drafts`, async (req) => {
     const q = req.query as Record<string, string | undefined>;
-    const drafts = await listDrafts({ status: q.status, kind: q.kind, platform: isPlatformId(q.platform) ? q.platform : undefined, limit: clampInt(q.limit, 1, 200, 50), before: q.before });
+    // Expired and rejected drafts are dead weight in the main list: they only show up when the archive is asked for.
+    const drafts = await listDrafts({ status: q.status, exclude: q.status ? undefined : ARCHIVED_STATUSES, kind: q.kind, platform: isPlatformId(q.platform) ? q.platform : undefined, limit: clampInt(q.limit, 1, 200, 50), before: q.before });
     const pubs = drafts.length ? await query<{ draft_id: string; platform: PlatformId; permalink: string | null; dry_run: boolean }>(`SELECT draft_id, platform, permalink, dry_run FROM publications WHERE draft_id = ANY($1::uuid[])`, [drafts.map((d) => d.id)]) : [];
     const candIds = drafts.map((d) => d.candidate_id).filter((x): x is string => Boolean(x));
     const cands = candIds.length ? await query<{ id: string; topic: string | null; category: string | null; total_score: number | null; risk_score: number | null; source_post_id: string }>(`SELECT id, topic, category, total_score, risk_score, source_post_id FROM content_candidates WHERE id = ANY($1::uuid[])`, [candIds]) : [];
@@ -34,6 +35,12 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const assets = assetIds.length ? await query<{ id: string; status: string; final_path: string | null }>(`SELECT id, status, final_path FROM media_assets WHERE id = ANY($1::uuid[])`, [assetIds]) : [];
     const assetById = new Map(assets.map((a) => [a.id, a]));
     return { drafts: drafts.map((d) => ({ ...d, publications: pubs.filter((p) => p.draft_id === d.id), candidate: d.candidate_id ? byId.get(d.candidate_id) ?? null : null, asset: d.image_asset_id ? assetById.get(d.image_asset_id) ?? null : null })) };
+  });
+
+  app.delete(`${api}/drafts/archive`, async () => {
+    const ids = await deleteArchivedDrafts();
+    if (ids.length) await audit("POST_EXPIRED", `Архив очищен вручную: удалено черновиков — ${ids.length}`);
+    return { deleted: ids.length };
   });
 
   app.get(`${api}/drafts/:id`, async (req) => {

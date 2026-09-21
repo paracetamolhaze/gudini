@@ -1,4 +1,5 @@
 import { llm, type LlmRefs } from "../../llm/index.js";
+import { sanitizeUntrusted } from "../../shared/untrusted.js";
 import { sourceAnalysisSchema, type SourceAnalysis } from "./schemas.js";
 
 /**

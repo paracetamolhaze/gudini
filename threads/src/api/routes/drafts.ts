@@ -96,7 +96,8 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
   app.post(`${api}/drafts/:id/reject`, async (req) => {
     const { id } = req.params as { id: string };
     const reason = (req.body as { reason?: string } | null)?.reason?.trim() || "отклонено вручную";
-    const row = await transitionDraft(id, ["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED", "FAILED"], "REJECTED", { review_reason: reason });
+    // GENERATING тоже: если написание оборвалось, владельцу нужен выход, а не вечное «пишу пост».
+    const row = await transitionDraft(id, ["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED", "FAILED", "GENERATING"], "REJECTED", { review_reason: reason });
     if (!row) throw new HttpError(409, "draft cannot be rejected from its current status");
     await audit("POST_REJECTED", `Черновик отклонён: ${reason}`, { draftId: id, candidateId: row.candidate_id });
     return { draft: row };
@@ -107,7 +108,7 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
     if (!draft.candidate_id && draft.source_summary) {
-      const changed = await transitionDraft(id, ["DRAFT", "NEEDS_REVIEW", "FAILED"], "GENERATING");
+      const changed = await transitionDraft(id, ["DRAFT", "NEEDS_REVIEW", "FAILED", "GENERATING"], "GENERATING");
       if (!changed) throw new HttpError(409, "Пост уже обрабатывается или запланирован.");
       try { await enqueue("content", "content:topic", { draftId: id }, { jobId: `topic-${id}-${Date.now()}`, priority: 1 }); }
       catch { await updateDraft(id, { status: "FAILED", error: "Очередь недоступна. Повторите позже." }); throw new HttpError(503, "Очередь недоступна"); }

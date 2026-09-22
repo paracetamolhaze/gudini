@@ -87,19 +87,42 @@ async function showsLoginForm(page: Page): Promise<boolean> {
   return page.locator('input[type="password"], input[name="username_or_email"], input[name="text"]').first().isVisible({ timeout: 500 }).catch(() => false);
 }
 
-export async function isLoggedIn(page: Page): Promise<boolean> {
-  if (await showsLoginForm(page)) return false;
+/**
+ * Three answers, not two. A page that simply has not finished painting must never be reported as a
+ * lost session: that would switch X off in the settings and tell the owner to sign in again while
+ * his login is perfectly fine.
+ */
+export type LoginState = "yes" | "no" | "unknown";
+
+export async function loginState(page: Page): Promise<LoginState> {
+  if (await showsLoginForm(page)) return "no";
   try {
     await firstVisible(page, LOGGED_IN, 8_000);
-    return true;
+    return "yes";
   } catch {
-    return false;
+    return "unknown";
   }
+}
+
+export async function isLoggedIn(page: Page): Promise<boolean> {
+  return (await loginState(page)) === "yes";
+}
+
+/** The check every action starts with; `what` ends up in the message the owner reads. */
+export async function assertLoggedIn(page: Page, what: string): Promise<void> {
+  let state = await loginState(page);
+  if (state === "unknown") {
+    // Give the app time to actually paint before deciding we do not recognise the page.
+    await page.waitForLoadState("load", { timeout: 20_000 }).catch(() => {});
+    state = await loginState(page);
+  }
+  if (state === "no") throw new XLoginRequired(`X просит войти — ${what}.`);
+  if (state === "unknown") throw new XLayoutChanged(`X показал незнакомую страницу — ${what}. Откройте окно браузера и посмотрите сами.`);
 }
 
 export async function goHome(page: Page): Promise<void> {
   await page.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(page))) throw new XLoginRequired("X просит войти. Откройте подключение X в настройках.");
+  await assertLoggedIn(page, "лента не открылась");
 }
 
 /**
@@ -170,7 +193,7 @@ export async function publishedIdFromToast(page: Page): Promise<string | null> {
 /** Open someone's post and put the cursor in the reply box under it. */
 export async function openReplyBox(page: Page, postId: string): Promise<void> {
   await page.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(page))) throw new XLoginRequired("X просит войти — ответ не отправлен.");
+  await assertLoggedIn(page, "ответ не отправлен");
   try {
     await firstVisible(page, COMPOSER, 5_000);
     return;
@@ -241,7 +264,7 @@ export async function scrapeTimeline(page: Page, limit: number): Promise<Scraped
  */
 export async function findOwnPostByText(page: Page, username: string, text: string, since: Date): Promise<ScrapedPost | null> {
   await page.goto(`https://x.com/${username}/with_replies`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(page))) throw new XLoginRequired("X просит войти — проверить публикацию не удалось.");
+  await assertLoggedIn(page, "проверить публикацию не удалось");
   const wanted = text.replace(/\s+/g, " ").trim().slice(0, 80).toLowerCase();
   const posts = await scrapeTimeline(page, 30);
   if (!posts.length) throw new XLayoutChanged("Не удалось прочитать ленту профиля для проверки публикации.");

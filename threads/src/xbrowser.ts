@@ -9,6 +9,7 @@ import {
   X_NOTIFICATIONS,
   XLayoutChanged,
   XLoginRequired,
+  assertLoggedIn,
   attachImage,
   fillComposer,
   findOwnPostByText,
@@ -117,19 +118,41 @@ async function sendAndIdentify(p: Page, text: string): Promise<{ id: string | nu
   return { id: null, permalink: null, submitted: true, probe };
 }
 
-async function ensureSession(): Promise<Page> {
+/** How long a confirmed handle is trusted for read-only work. Sending always re-checks. */
+const IDENTITY_TTL_MS = 10 * 60_000;
+let identityCheckedAt = 0;
+
+/**
+ * The handle is read from the live page, not remembered from the sign-in form. The owner can open
+ * the window at any time and switch to another account; without this check the next post would go
+ * out from that account, and the "did it publish?" probe would read the old profile, find nothing
+ * and send it again.
+ */
+async function ensureSession(opts: { sending?: boolean } = {}): Promise<Page> {
   if (!state.connected || !state.username) throw new XLoginRequired("X не подключён. Откройте подключение в настройках.");
   const p = await browserPage();
   await goHome(p);
+  if (!opts.sending && Date.now() - identityCheckedAt < IDENTITY_TTL_MS) return p;
+  const identity = await readIdentity(p);
+  if (!identity) throw new XLoginRequired("X не показал имя аккаунта — вероятно, вход слетел.");
+  if (identity.username.toLowerCase() !== state.username.toLowerCase()) {
+    state.connected = false;
+    state.issue = `В браузере открыт другой аккаунт (@${identity.username}). Подключите нужный заново.`;
+    persist();
+    throw new XLoginRequired(state.issue);
+  }
+  identityCheckedAt = Date.now();
+  state.checkedAt = new Date().toISOString();
+  persist();
   return p;
 }
 
 async function publish(body: Record<string, unknown>): Promise<unknown> {
   const text = requireText(body.text, 25_000);
   const image = safeMedia(body.imagePath ?? null);
-  const p = await ensureSession();
+  const p = await ensureSession({ sending: true });
   await p.goto(X_COMPOSE, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(p))) throw new XLoginRequired("X просит войти — публикация остановлена до отправки.");
+  await assertLoggedIn(p, "публикация остановлена до отправки");
   await fillComposer(p, text);
   if (image) await attachImage(p, image);
   return await sendAndIdentify(p, text);
@@ -138,7 +161,7 @@ async function publish(body: Record<string, unknown>): Promise<unknown> {
 async function reply(body: Record<string, unknown>): Promise<unknown> {
   const text = requireText(body.text, 25_000);
   const replyToId = requireId(body.replyToId);
-  const p = await ensureSession();
+  const p = await ensureSession({ sending: true });
   await openReplyBox(p, replyToId);
   await fillComposer(p, text);
   return await sendAndIdentify(p, text);
@@ -147,10 +170,10 @@ async function reply(body: Record<string, unknown>): Promise<unknown> {
 async function quote(body: Record<string, unknown>): Promise<unknown> {
   const text = requireText(body.text, 25_000);
   const quotedId = requireId(body.quotedId);
-  const p = await ensureSession();
+  const p = await ensureSession({ sending: true });
   // A quote post is a normal post whose text ends with the quoted link; X renders the card itself.
   await p.goto(X_COMPOSE, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(p))) throw new XLoginRequired("X просит войти — цитата не отправлена.");
+  await assertLoggedIn(p, "цитата не отправлена");
   await fillComposer(p, `${text}\n\nhttps://x.com/i/status/${quotedId}`);
   return await sendAndIdentify(p, text);
 }
@@ -168,7 +191,7 @@ async function inbox(body: Record<string, unknown>): Promise<unknown> {
   const max = Math.max(1, Math.min(Number(body.max) || 30, 100));
   const p = await ensureSession();
   await p.goto(X_NOTIFICATIONS, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(p))) throw new XLoginRequired("X просит войти — уведомления не прочитаны.");
+  await assertLoggedIn(p, "уведомления не прочитаны");
   const posts = await scrapeTimeline(p, max);
   return { posts: posts.filter((post) => post.username.toLowerCase() !== (state.username ?? "").toLowerCase()) };
 }
@@ -179,7 +202,7 @@ async function thread(body: Record<string, unknown>): Promise<unknown> {
   const max = Math.max(1, Math.min(Number(body.max) || 20, 60));
   const p = await ensureSession();
   await p.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(p))) throw new XLoginRequired("X просит войти — ветка не прочитана.");
+  await assertLoggedIn(p, "ветка не прочитана");
   const posts = await scrapeTimeline(p, max + 1);
   return { posts: posts.filter((post) => post.id !== postId) };
 }
@@ -189,7 +212,7 @@ async function search(body: Record<string, unknown>): Promise<unknown> {
   const max = Math.max(1, Math.min(Number(body.max) || 20, 60));
   const p = await ensureSession();
   await p.goto(`https://x.com/search?q=${encodeURIComponent(queryText)}&f=live`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(p))) throw new XLoginRequired("X просит войти — поиск не выполнен.");
+  await assertLoggedIn(p, "поиск не выполнен");
   return { posts: await scrapeTimeline(p, max) };
 }
 
@@ -199,7 +222,7 @@ async function metrics(body: Record<string, unknown>): Promise<unknown> {
   const postId = requireId(body.postId);
   const p = await ensureSession();
   await p.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  if (!(await isLoggedIn(p))) throw new XLoginRequired("X просит войти — статистика не прочитана.");
+  await assertLoggedIn(p, "статистика не прочитана");
   const group = p.locator('[role="group"][aria-label]').first();
   const label = (await group.getAttribute("aria-label").catch(() => null)) ?? "";
   const numbers: Record<string, number> = {};
@@ -285,6 +308,7 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
     if (!identity) throw new Error("Вход выполнен, но X не показал имя аккаунта. Откройте окно ещё раз.");
     state.connected = true;
     state.username = identity.username;
+    identityCheckedAt = Date.now();
     state.checkedAt = new Date().toISOString();
     state.issue = undefined;
     persist();
@@ -339,18 +363,9 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
       case "metrics":
         return await metrics(body);
       case "me": {
-        const p = await ensureSession();
-        const identity = await readIdentity(p);
-        if (!identity) throw new XLoginRequired("X не показал имя аккаунта — вероятно, вход слетел.");
-        if (state.username && identity.username.toLowerCase() !== state.username.toLowerCase()) {
-          state.connected = false;
-          state.issue = `В браузере открыт другой аккаунт (@${identity.username}). Подключите нужный заново.`;
-          persist();
-          throw new XLoginRequired(state.issue);
-        }
-        state.checkedAt = new Date().toISOString();
-        persist();
-        return { username: identity.username };
+        // ensureSession itself compares the live handle with the remembered one.
+        await ensureSession({ sending: true });
+        return { username: state.username };
       }
       default:
         throw new Error("Неизвестная команда");

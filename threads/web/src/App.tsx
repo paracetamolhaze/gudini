@@ -28,7 +28,7 @@ export type PlatformOverview = {
   username: string | null;
   tokenExpiresAt: string | null;
   maxChars: number;
-  publicReplies: "api" | "manual" | "quote" | "off";
+  publicReplies: "api" | "auto" | "manual" | "quote" | "off";
   today: { posts: number; replies: number; waiting: number };
   usage: { today: number; last30d: number; byOperation: Array<{ operation: string; units: number; cost: number }> } | null;
 };
@@ -154,20 +154,16 @@ export default function App() {
     }
   })();
 
+  // Пауза трогает только стоп-кран. Режим — отдельное решение владельца: «Возобновить» не должно
+  // втихую включать самый агрессивный режим, когда автоматика была выключена насовсем.
+  const modeOff = o?.mode === "OFF";
   const pauseButton = o && (
     <Button
       tone={paused ? "primary" : "default"}
       busy={act.busy !== null}
-      onClick={() =>
-        void act.run(
-          "Режим изменён",
-          async () => {
-            if (o.mode === "OFF") await post("/mode", { mode: "AUTO" });
-            await post("/kill-switch", { stop: !paused });
-          },
-          overview.reload,
-        )
-      }
+      disabled={modeOff && Boolean(paused)}
+      title={modeOff && paused ? "Автоматика выключена в расширенных настройках — включите режим там" : undefined}
+      onClick={() => void act.run("Режим изменён", () => post("/kill-switch", { stop: !paused }), overview.reload)}
     >
       <Icon name={paused ? "play" : "pause"} size={15} /> {paused ? "Возобновить" : "Пауза"}
     </Button>

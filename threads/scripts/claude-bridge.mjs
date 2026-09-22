@@ -305,7 +305,9 @@ async function main() {
   };
   const timeoutMs = number("CLAUDE_BRIDGE_TIMEOUT_MS", 300_000, 5_000, 3_600_000);
   const queueMax = number("CLAUDE_BRIDGE_QUEUE_MAX", 4, 1, 50);
-  const port = number("CLAUDE_BRIDGE_PORT", 43129, 1, 65_535);
+  // 43129 занят мостом картинок Codex (scripts/codex-image-bridge.ts), поэтому по умолчанию 43131 —
+// именно его ждут docker-compose.yml и .env.example.
+const port = number("CLAUDE_BRIDGE_PORT", 43131, 1, 65_535);
   // Loopback by default: the bridge speaks for the owner's subscription. A wider bind is an explicit choice.
   const host = process.env.CLAUDE_BRIDGE_HOST || "127.0.0.1";
   await assertPortFree(host, port);

@@ -40,9 +40,7 @@ function PlatformCard({ p, navigate }: { p: PlatformOverview; navigate: (p: stri
       <div className="pcard-foot small muted">
         {p.id === "x" ? (
           <>
-            Расход X API: <Usd value={p.usage?.today ?? 0} /> сегодня · <Usd value={p.usage?.last30d ?? 0} /> за 30 дней
-            <br />
-            Чужие посты: {p.publicReplies === "manual" ? "ответ готовится, отправляете вы" : p.publicReplies === "quote" ? "цитатой через API" : "выключено"}
+            Чужие посты: {p.publicReplies === "auto" || p.publicReplies === "api" ? "отвечаем сами под постом" : p.publicReplies === "manual" ? "ответ готовится, отправляете вы" : p.publicReplies === "quote" ? "выходит цитатой" : "не трогаем"}
           </>
         ) : (
           <>Ответы под своими и чужими постами идут через API{p.tokenExpiresAt ? ` · токен до ${fmtDate(p.tokenExpiresAt)}` : ""}</>

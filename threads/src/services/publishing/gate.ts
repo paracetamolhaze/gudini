@@ -30,9 +30,12 @@ export function decidePublish(input: GateInput): { route: GateRoute; reason: str
   const now = input.now ?? new Date();
   if (input.killSwitch) return { route: "BLOCK", reason: "kill switch включён" };
   if (input.mode === "OFF") return { route: "BLOCK", reason: "режим OFF" };
-  if (input.draft.expiresAt && input.draft.expiresAt.getTime() < now.getTime()) return { route: "BLOCK", reason: "черновик просрочен" };
   if (["PUBLISHED", "PUBLISHING", "REJECTED", "EXPIRED"].includes(input.draft.status)) return { route: "BLOCK", reason: `статус ${input.draft.status}` };
-  if (input.manual) return { route: "PUBLISH", reason: "ручная публикация" };
+  // Досылка вручную второй половины уже опубликованного поста — не «свежесть новости»: первая
+  // половина висит в ленте, и оставлять её сиротой из-за срока годности неправильно.
+  const stale = Boolean(input.draft.expiresAt && input.draft.expiresAt.getTime() < now.getTime());
+  if (input.manual && (!stale || input.draft.status === "PARTIAL")) return { route: "PUBLISH", reason: stale ? "ручная досылка недостающей площадки" : "ручная публикация" };
+  if (stale) return { route: "BLOCK", reason: "черновик просрочен" };
   if (input.mode !== "AUTO") return { route: "HOLD", reason: `режим ${input.mode}: автоматическая публикация выключена` };
   if (!input.autoPostEnabled) return { route: "HOLD", reason: "AUTO_POST_ENABLED=false" };
   if (input.draft.status === "NEEDS_REVIEW") return { route: "REVIEW", reason: `требует проверки: ${input.draft.reviewReason ?? "валидация"}` };

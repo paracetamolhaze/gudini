@@ -63,12 +63,15 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
         changed();
       },
     );
-  // A switch saves on its own. Turning one ON also lifts the mode out of OFF; turning one OFF must never start the autopilot.
+  // A switch saves on its own. Turning one ON lifts the mode out of OFF — and ONLY out of OFF: the
+  // owner may have parked everything in DRAFT or REVIEW on purpose, and a harmless-looking switch
+  // must not hand the autopilot back the keys. Turning one OFF never starts anything.
   // It also keeps whatever the owner has typed but not saved yet: apply locally, and re-read the server only when nothing is pending.
   function flag<K extends keyof S>(on: boolean, key: K, value: Partial<S[K]>) {
+    const lift = on && s?.mode === "OFF";
     void act.run(
       "Сохранено",
-      () => put("/settings", on ? { mode: "AUTO", [key]: value } : { [key]: value }),
+      () => put("/settings", lift ? { mode: "AUTO", [key]: value } : { [key]: value }),
       async () => {
         setForm((f) => (f ? ({ ...f, [key]: { ...(f[key] as object), ...(value as object) } } as S) : f));
         if (!dirty) await data.reload();

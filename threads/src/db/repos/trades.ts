@@ -87,7 +87,12 @@ export async function upsertTrade(wallet: string, t: BuiltTrade, leverage: numbe
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
        ON CONFLICT (wallet, coin, first_tid) DO UPDATE SET status = EXCLUDED.status, closed_at = EXCLUDED.closed_at, entry_px = EXCLUDED.entry_px, exit_px = EXCLUDED.exit_px,
          max_size = EXCLUDED.max_size, entry_notional = EXCLUDED.entry_notional, closed_pnl = EXCLUDED.closed_pnl, fees = EXCLUDED.fees, net_pnl = EXCLUDED.net_pnl,
-         leverage = COALESCE(EXCLUDED.leverage, hl_trades.leverage), roe_pct = COALESCE(EXCLUDED.roe_pct, hl_trades.roe_pct), move_pct = EXCLUDED.move_pct,
+         -- Плечо и доходность закрытой сделки замораживаются: hl_leverage хранит текущую настройку
+         -- счёта, и без этого вчерашняя сделка задним числом пересчиталась бы под сегодняшнее плечо,
+         -- а числа на карточке перестали бы сходиться с эксплорером.
+         leverage = CASE WHEN hl_trades.status = 'CLOSED' THEN hl_trades.leverage ELSE COALESCE(EXCLUDED.leverage, hl_trades.leverage) END,
+         roe_pct = CASE WHEN hl_trades.status = 'CLOSED' THEN hl_trades.roe_pct ELSE COALESCE(EXCLUDED.roe_pct, hl_trades.roe_pct) END,
+         move_pct = EXCLUDED.move_pct,
          fills_count = EXCLUDED.fills_count, last_tid = EXCLUDED.last_tid, last_hash = EXCLUDED.last_hash, updated_at = now()
        RETURNING *`,
       [wallet, t.coin, t.direction, t.status, t.openedAt, t.closedAt, t.entryPx, t.exitPx, t.maxSize, t.entryNotional, t.closedPnl, t.fees, t.netPnl, leverage, roe, t.movePct, t.fillsCount, t.firstTid, t.lastTid, t.lastHash],

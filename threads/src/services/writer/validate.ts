@@ -8,6 +8,7 @@ import type { VerifiedFact } from "../analysis/schemas.js";
 export interface Violation {
   code:
     | "INVENTED_NUMBER"
+    | "WRONG_DIRECTION"
     | "CONTRADICTED_NUMBER"
     | "UNVERIFIED_WITHOUT_ATTRIBUTION"
     | "UNCERTAINTY_LOST"
@@ -99,7 +100,7 @@ const MULT: Record<string, number> = {
   триллион: 1e12,
 };
 
-const NUMBER_RE = /(?<cur>\$|€|£|₽)?\s?(?<num>\d{1,3}(?:[  ,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s?(?<suffix>k|m|mm|mn|b|bn|t|тыс\.?|тысяч[аи]?|млн\.?|миллион(?:а|ов)?|млрд\.?|миллиард(?:а|ов)?|трлн\.?|триллион(?:а|ов)?)?\s?(?<unit>%|процент(?:а|ов)?|btc|eth|sol|usd|usdt|usdc|долл(?:ара|аров)?|\$)?/giu;
+const NUMBER_RE = /(?<sign>(?<=[\s(\[]|^)[-−–])?\s?(?<cur>\$|€|£|₽)?\s?(?<num>\d{1,3}(?:[  ,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s?(?<suffix>k|m|mm|mn|b|bn|t|тыс\.?|тысяч[аи]?|млн\.?|миллион(?:а|ов)?|млрд\.?|миллиард(?:а|ов)?|трлн\.?|триллион(?:а|ов)?)?\s?(?<unit>%|процент(?:а|ов)?|btc|eth|sol|usd|usdt|usdc|долл(?:ара|аров)?|\$)?/giu;
 
 export function extractNumbers(text: string): ExtractedNumber[] {
   const out: ExtractedNumber[] = [];
@@ -113,6 +114,8 @@ export function extractNumbers(text: string): ExtractedNumber[] {
     const normalized = /^\d{1,3}(,\d{3})+(\.\d+)?$/.test(numStr) ? numStr.replace(/,/g, "") : numStr.replace(",", ".");
     let value = Number(normalized);
     if (!Number.isFinite(value)) continue;
+    // "-5,2%" is minus five, not five: the facts about a falling market are negative too.
+    if (g.sign) value = -value;
     const suffix = (g.suffix ?? "").toLowerCase().replace(/\.$/, "");
     if (suffix && MULT[suffix]) value *= MULT[suffix]!;
     const unitRaw = (g.unit ?? "").toLowerCase();
@@ -128,7 +131,15 @@ export function extractNumbers(text: string): ExtractedNumber[] {
   return out;
 }
 
+/** "x10" and "10x": the digits belong to a leverage claim and must be checked against the facts. */
+function nearLeverage(text: string, n: ExtractedNumber): boolean {
+  const before = text.slice(Math.max(0, n.index - 2), n.index);
+  const after = text.slice(n.index + n.raw.length, n.index + n.raw.length + 2);
+  return /[xх]\s?$/i.test(before) || /^\s?[xх](?![\p{L}])/iu.test(after);
+}
+
 function isExempt(n: ExtractedNumber, text: string): boolean {
+  if (nearLeverage(text, n)) return false;
   // Years, dates, small counts ("3 причины", "24 часа"), and list numbering are not claims.
   if (n.unit === "count" && Number.isInteger(n.value) && n.value >= 1990 && n.value <= 2100) return true;
   if (n.unit === "count" && Number.isInteger(n.value) && n.value >= 0 && n.value <= 31) return true;
@@ -160,7 +171,7 @@ const HEDGES = /(по данным|по информации|как пишет|�
 const W = (s: string) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${s})(?![\\p{L}\\p{N}])`, "iu");
 const FORBIDDEN: Array<[RegExp, string]> = [
   [W("покупаем|покупайте|закупаемся|закупайтесь|шортим|лонгуем|заходим в|тарим"), "призыв к сделке"],
-  [W("\\d{2,4}\\s?x|иксы|иксов"), "обещание иксов"],
+  [W("\\d{2,4}\\s?[xх]|[xх]\\s?\\d{2,4}|иксы|иксов"), "обещание иксов"],
   [W("гарантирован(?:о|а|ы|ный|ная)?|без\\s?риска|безрисков(?:ый|ая|о)|точно (?:полетит|вырастет|упадёт|упадет)|железно|100%"), "ложная уверенность"],
   [/to the moon|туземун|ту зе мун/iu, "хайп"],
   [W("не является финансовой рекомендацией|nfa|dyor"), "шаблонный дисклеймер"],
@@ -204,8 +215,10 @@ export function validateDraft(text: string, facts: VerifiedFact[], opts: Validat
   } else if (cyr < 20 || cyr < lat) violations.push({ code: "NOT_RUSSIAN", message: "Текст не похож на русский пост", severity: "block" });
   for (const [re, label] of FORBIDDEN) {
     const m = body.match(re);
-    const multiple = m ? /^([0-9]{2,4}) ?x$/i.exec(m[0]) : null;
-    if (multiple && opts.allowedMultiples?.includes(Number(multiple[1]))) continue;
+    // The owner's own leverage is a fact; it may be written either way round.
+    const multiple = m ? /^(?:([0-9]{1,4})\s?[xх]|[xх]\s?([0-9]{1,4}))$/i.exec(m[0]) : null;
+    const multipleValue = multiple ? Number(multiple[1] ?? multiple[2]) : null;
+    if (multipleValue !== null && opts.allowedMultiples?.includes(multipleValue)) continue;
     if (m) violations.push({ code: "FORBIDDEN_PHRASE", message: `${label}: «${m[0]}»`, severity: "block" });
   }
 
@@ -213,9 +226,19 @@ export function validateDraft(text: string, facts: VerifiedFact[], opts: Validat
   const factValues = facts.map((f, i) => ({ i, f, v: factValue(f) }));
   const matched = new Set<number>();
   const hasAttribution = /(по данным|как пишет|как сообщает|сообщает|сообщают|сообщается|@[a-z0-9_.]+|по информации|источник|пишет|отмечает|заявил|заявила|заявили|аналитик)/iu.test(body);
+  // A post about a drop usually writes "упал на 12%", while the fact is -12. Same number, opposite
+  // spelling: match on size for percentages, and complain separately if the direction is wrong.
+  const fallsInText = /(упал|упад|сниж|снизил|потерял|минус|обвал|просел|down|dropped|fell|losing)/iu.test(body);
   for (const n of numbers) {
     if (isExempt(n, body)) continue;
-    const hits = factValues.filter((x) => x.v && unitsCompatible(n.unit, x.v.unit) && sameNumber(n.value, x.v.value));
+    const sizeMatch = (a: number, b: number): boolean => sameNumber(a, b) || (n.unit === "percent" && sameNumber(Math.abs(a), Math.abs(b)));
+    const hits = factValues.filter((x) => x.v && unitsCompatible(n.unit, x.v.unit) && sizeMatch(n.value, x.v.value));
+    const wrongWay = hits.length > 0 && n.unit === "percent" && n.value > 0 && hits.every((h) => h.v!.value < 0) && !fallsInText;
+    if (wrongWay) {
+      violations.push({ code: "WRONG_DIRECTION", message: `Число «${n.raw}» в фактах со знаком минус, а в тексте подано как рост`, severity: "block" });
+      for (const h of hits) matched.add(h.i);
+      continue;
+    }
     if (hits.length === 0) {
       violations.push({ code: "INVENTED_NUMBER", message: `Число «${n.raw}» отсутствует в фактах`, severity: "block" });
       continue;

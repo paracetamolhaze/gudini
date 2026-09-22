@@ -20,6 +20,7 @@ import { newId } from "../../shared/ids.js";
 
 /** A publish lock older than this was left behind by a dead process: an honest send never takes that long (Threads waits up to 90 s, plus X). */
 export const STUCK_PUBLISHING_MINUTES = 15;
+const STUCK_GENERATING_MINUTES = 15;
 /** How long a PARTIAL draft waits before the missing platform is tried again, and how many are tried per tick. */
 const PARTIAL_RETRY_MINUTES = 5;
 const PARTIAL_RETRY_BATCH = 5;
@@ -49,7 +50,7 @@ export async function publisherTick(): Promise<TickResult> {
   const settings = await loadSettings(true);
   const expiredDrafts = await expireDrafts();
   for (const id of expiredDrafts) await audit("POST_EXPIRED", "Черновик просрочен и не будет опубликован", { draftId: id });
-  const recovered = (await recoverStuckPublishing()).length;
+  const recovered = (await recoverStuckPublishing()).length + (await recoverStuckGenerating()).length;
   await expireCandidates();
   if (settings.killSwitch) return { published: 0, scheduled: 0, reviewed: 0, resent: 0, recovered, failed: 0, blocked: "kill switch" };
   if (settings.mode === "OFF") return { published: 0, scheduled: 0, reviewed: 0, resent: 0, recovered, failed: 0, blocked: "mode OFF" };
@@ -188,6 +189,26 @@ export async function recoverStuckPublishing(deps: RecoverDeps = {}): Promise<st
   );
   for (const row of rows) {
     await log("POST_PUBLISH_FAILED", `Публикация оборвалась на перезапуске: черновик висел в статусе PUBLISHING больше ${STUCK_PUBLISHING_MINUTES} минут и возвращён в очередь`, { draftId: row.id }, null, "warn");
+  }
+  return rows.map((r) => r.id);
+}
+
+/**
+ * A draft is created in GENERATING and only the writer takes it out again. If that job disappears —
+ * a deploy, a Redis restart, a stall — the row would sit there forever: no endpoint accepts it and
+ * the card shows no buttons. After a quarter of an hour of silence we call it failed, so the owner
+ * can write the post again.
+ */
+export async function recoverStuckGenerating(deps: RecoverDeps = {}): Promise<string[]> {
+  const run = deps.run ?? query;
+  const log = deps.log ?? audit;
+  const rows = await run<{ id: string }>(
+    `UPDATE drafts SET status = 'FAILED', error = 'написание оборвалось, попробуйте ещё раз', updated_at = now()
+      WHERE status = 'GENERATING' AND updated_at < now() - interval '${STUCK_GENERATING_MINUTES} minutes'
+      RETURNING id`,
+  );
+  for (const row of rows) {
+    await log("POST_VALIDATION_FAILED", `Написание поста оборвалось: черновик висел в статусе GENERATING больше ${STUCK_GENERATING_MINUTES} минут`, { draftId: row.id }, null, "warn");
   }
   return rows.map((r) => r.id);
 }

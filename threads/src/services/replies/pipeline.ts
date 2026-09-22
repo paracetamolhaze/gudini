@@ -226,9 +226,30 @@ async function sendLocked(id: string, opts: { manual: boolean }): Promise<"sent"
     await audit("KILL_SWITCH", `Отправка ответа @${row.target_username} остановлена (${settings.killSwitch ? "kill switch" : "режим OFF"})`, { interactionId: id }, null, "warn");
     return "skipped";
   }
-  // The owner posts these by hand (X refuses cold API replies); the dashboard marks them as sent.
+  // The owner posts these by hand; the dashboard marks them as sent.
   if (row.delivery === "manual") return "skipped";
   const isPublic = row.type === "PUBLIC_POST_REPLY";
+  if (!settings.platforms[row.platform].enabled) {
+    await updateInteraction(id, { reason: `Площадка ${row.platform === "x" ? "X" : "Threads"} выключена в настройках; ответ не отправлен` });
+    return "skipped";
+  }
+  // The owner may have changed his mind about other people's posts after this answer was approved.
+  // A queue written under the old setting must not keep going out under the new one.
+  if (isPublic && row.platform === "x") {
+    const mode = settings.platforms.x.engagementMode;
+    if (mode === "off") {
+      await updateInteraction(id, { status: "SKIPPED", reason: "Чужие посты в X выключены — ответ не отправлен" });
+      return "skipped";
+    }
+    if (mode === "manual") {
+      await updateInteraction(id, { status: "DRAFT", delivery: "manual", reason: "Чужие посты в X переведены в ручной режим — отправьте ответ сами" });
+      return "skipped";
+    }
+    if (mode === "quote" && row.delivery !== "quote") {
+      await updateInteraction(id, { status: "APPROVED", delivery: "quote", reason: "Чужие посты в X переведены в режим цитат" });
+      return "skipped";
+    }
+  }
   const limit = isPublic ? await publicRepliesLimit(settings) : await ownRepliesLimit(settings);
   if (!limit.allowed) {
     await updateInteraction(id, { reason: `${limit.reason}; ответ подождёт` });

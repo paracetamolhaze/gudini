@@ -15,19 +15,21 @@ import type { ConversationMsg, FoundPost, InboxItem, PlatformAdapter, PlatformIn
  * cap still applies, now as a politeness limit rather than a budget.
  */
 const SESSION_TTL_MS = 5_000;
-let sessionCache: { at: number; connected: boolean; username: string } = { at: 0, connected: false, username: "" };
+/** After this long without a live confirmation, "who am I" is asked of the browser, not of a file. */
+const IDENTITY_MAX_AGE_MS = 30 * 60_000;
+let sessionCache: { at: number; connected: boolean; username: string; checkedAt: number } = { at: 0, connected: false, username: "", checkedAt: 0 };
 
-function session(): { connected: boolean; username: string } {
+function session(): { connected: boolean; username: string; checkedAt: number } {
   if (Date.now() - sessionCache.at > SESSION_TTL_MS) {
     const s = readXSession();
-    sessionCache = { at: Date.now(), connected: Boolean(s.connected && s.username), username: s.username ?? "" };
+    sessionCache = { at: Date.now(), connected: Boolean(s.connected && s.username), username: s.username ?? "", checkedAt: s.checkedAt ? Date.parse(s.checkedAt) || 0 : 0 };
   }
   return sessionCache;
 }
 
 /** Tests and the settings screen need the cached answer to drop immediately after a reconnect. */
 export function forgetXSessionCache(): void {
-  sessionCache = { at: 0, connected: false, username: "" };
+  sessionCache = { at: 0, connected: false, username: "", checkedAt: 0 };
 }
 
 function outgoingText(text: string): string {
@@ -55,7 +57,8 @@ export const xBrowserAdapter: PlatformAdapter = {
 
   async me() {
     const local = session();
-    if (local.connected) return { id: local.username, username: local.username };
+    // A stale answer would let the health page keep printing a handle we no longer post from.
+    if (local.connected && Date.now() - local.checkedAt < IDENTITY_MAX_AGE_MS) return { id: local.username, username: local.username };
     const me = await xBrowser().me();
     forgetXSessionCache();
     return { id: me.username, username: me.username };

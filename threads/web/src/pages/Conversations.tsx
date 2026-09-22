@@ -8,7 +8,16 @@ type Reply = { id: string; platform: PlatformId; delivery: "api" | "manual" | "q
 
 const INTRO = {
   own: "Ответы на комментарии под вашими постами — от вашего лица, на языке собеседника. Спам и пустые реплики пропускаются.",
-  public: "Чужие обсуждения крипты, куда есть что добавить по существу. В Threads ответ уходит сам. X запрещает ботам отвечать незнакомым авторам, поэтому там текст готовится, а отправляете его вы — одной кнопкой.",
+  public: "Чужие обсуждения крипты, куда есть что добавить по существу. В Threads ответ уходит сам.",
+};
+
+/** Что сейчас происходит с чужими постами в X — прямо на странице, где владелец это и читает. */
+const X_MODE_INTRO: Record<string, string> = {
+  auto: "В X ответы уходят сами, прямо под чужим постом.",
+  api: "В X ответы уходят сами, прямо под чужим постом.",
+  quote: "В X комментарий выходит цитатой поста.",
+  manual: "В X текст готовится, а отправляете его вы — одной кнопкой.",
+  off: "Чужие посты в X сейчас не трогаем: так стоит в настройках.",
 };
 
 export default function Conversations({ kind, navigate, platform, xMode }: { kind: "own" | "public"; navigate: (p: string) => void; platform: PlatformFilter; xMode?: string }) {
@@ -17,7 +26,7 @@ export default function Conversations({ kind, navigate, platform, xMode }: { kin
   const act = useAction();
   return (
     <>
-      <p className="page-intro">{INTRO[kind]}{kind === "public" && xMode === "quote" ? " Сейчас для X включён режим цитат: комментарий выходит цитатой поста." : ""}</p>
+      <p className="page-intro">{INTRO[kind]}{kind === "public" ? ` ${X_MODE_INTRO[xMode ?? ""] ?? X_MODE_INTRO.manual}` : ""}</p>
       <div className="list-head">
         <div className="tabs">
           {[["", "Все"], ["DRAFT,NEEDS_REVIEW", "Ждут вас"], ["SENT", "Отправлены"], ["PENDING,APPROVED,SENDING", "Готовятся"], ["SKIPPED,FAILED", "Пропущены и ошибки"]].map(([v, label]) => (

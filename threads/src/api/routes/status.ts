@@ -31,7 +31,8 @@ export async function platformOverview(settings: Settings, id: PlatformId) {
     username: account?.username ?? ("username" in health ? health.username ?? null : null),
     tokenExpiresAt: id === "threads" ? account?.token_expires_at ?? (threadsClient().tokenExpiresAt ? new Date(threadsClient().tokenExpiresAt!) : null) : null,
     maxChars: settings.platforms[id].maxChars,
-    publicReplies: adapter.publicReplyChannel() === "api" ? "api" : settings.platforms.x.engagementMode,
+    // Отдаём сам режим: «канал» для X уже не однозначен — через браузер и ответ, и цитата идут одинаково.
+    publicReplies: id === "x" ? settings.platforms.x.engagementMode : "api",
     today: counts ?? { posts: 0, replies: 0, waiting: 0 },
     usage: id === "x" ? await usageSummary("x") : null,
   };
@@ -70,7 +71,9 @@ export function registerStatusRoutes(app: FastifyInstance, api: string): void {
     );
     const lastPost = await one<{ published_at: Date }>(`SELECT published_at FROM publications ORDER BY published_at DESC LIMIT 1`);
     const e = env();
-    const llmKey = Boolean(e.LLM_API_KEY || e.OPENROUTER_API_KEY || e.OPENAI_API_KEY || e.ANTHROPIC_API_KEY || e.GEMINI_API_KEY);
+    // Готовность считаем по тому провайдеру, который включён: у моста ключей нет вовсе, а лишний
+    // платный ключ в файле не значит, что тексты кто-то пишет.
+    const llmKey = e.LLM_PROVIDER === "claude-bridge" ? Boolean(e.CLAUDE_BRIDGE_URL && e.CLAUDE_BRIDGE_TOKEN) : Boolean(e.LLM_API_KEY || e.OPENROUTER_API_KEY || e.OPENAI_API_KEY || e.ANTHROPIC_API_KEY || e.GEMINI_API_KEY);
     const last = await one<{ source_check: Date | null; source_post: Date | null; draft: Date | null }>(
       `SELECT (SELECT max(last_checked_at) FROM sources) AS source_check, (SELECT max(created_at) FROM source_posts) AS source_post, (SELECT max(created_at) FROM drafts) AS draft`,
     );

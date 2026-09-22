@@ -154,6 +154,26 @@ test("style retrieval prefers examples about the same topic and never returns di
   assert.equal(buildWriterUserMessage({ analysis, facts, sourcePosts: [], styleExamples: ex, recentOwnPosts: ["старый пост"], variants: 2, maxStyleExamples: 2 }, ["NEWS", "SHORT"]).includes("НЕДАВНИЕ ПОСТЫ"), true);
 });
 
+test("a fall is the same number whether or not the text writes the minus", () => {
+  const facts = [{ claim: "изменение за сутки", value: -12, unit: "percent", status: "VERIFIED", certainty: "FACT" }] as never[];
+  const plain = validateDraft("Рынок сегодня невесёлый. Монета упала на 12% за сутки, и покупатели пока не видны в стакане совсем.", facts, { minChars: 10 });
+  assert.deepEqual(plain.violations.filter((v) => v.code === "INVENTED_NUMBER"), [], JSON.stringify(plain.violations));
+  const signed = validateDraft("Рынок сегодня невесёлый. Монета сходила на -12% за сутки, и покупателей в стакане пока нет.", facts, { minChars: 10 });
+  assert.deepEqual(signed.violations.filter((v) => v.code === "INVENTED_NUMBER"), [], JSON.stringify(signed.violations));
+  // The same size claimed as growth is a different statement, and it must not pass quietly.
+  const inverted = validateDraft("Монета выросла на 12% за сутки, покупатели вернулись в стакан и держат цену уверенно.", facts, { minChars: 10 });
+  assert.equal(inverted.violations.some((v) => v.code === "WRONG_DIRECTION"), true, JSON.stringify(inverted.violations));
+});
+
+test("leverage written as x10 is checked against the facts, both ways round", () => {
+  const noFacts = validateDraft("Закрыл сделку по биткоину в плюс, заходил плечом x10 и вышел на импульсе вверх.", [], { minChars: 10 });
+  assert.equal(noFacts.blocking, true, JSON.stringify(noFacts.violations));
+  const real = validateDraft("Закрыл сделку по биткоину в плюс, заходил плечом x10 и вышел на импульсе вверх.", [], { minChars: 10, allowedMultiples: [10] });
+  assert.equal(real.violations.some((v) => v.code === "FORBIDDEN_PHRASE"), false, JSON.stringify(real.violations));
+  const wrong = validateDraft("Закрыл сделку по биткоину в плюс, заходил плечом x25 и вышел на импульсе вверх.", [], { minChars: 10, allowedMultiples: [10] });
+  assert.equal(wrong.blocking, true, JSON.stringify(wrong.violations));
+});
+
 test("a set of examples is varied, not three copies of the same post", () => {
   // Four near-identical ETF posts and two different ones. Relevance alone would take the four.
   const ex = [

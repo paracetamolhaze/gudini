@@ -4,6 +4,7 @@ import { extractNumbers, validateDraft } from "../../src/services/writer/validat
 import type { VerifiedFact } from "../../src/services/analysis/schemas.js";
 import { composeDraft, buildWriterUserMessage } from "../../src/services/writer/russianWriter.js";
 import { rankStyleExamples } from "../../src/services/writer/styleRetrieval.js";
+import { voiceExamplesBlock } from "../../src/services/writer/prompts.js";
 import { LlmRouter } from "../../src/llm/index.js";
 import type { LlmProvider, LlmRequest, LlmResponse } from "../../src/llm/provider.js";
 import { loadEnv } from "../../src/config/env.js";
@@ -151,4 +152,27 @@ test("style retrieval prefers examples about the same topic and never returns di
   const picked = rankStyleExamples(ex, { topic: "приток в биткоин-ETF", category: "bitcoin", summary: "спотовые ETF привлекли рекордные средства" }, 1);
   assert.equal(picked[0]!.id, "1");
   assert.equal(buildWriterUserMessage({ analysis, facts, sourcePosts: [], styleExamples: ex, recentOwnPosts: ["старый пост"], variants: 2, maxStyleExamples: 2 }, ["NEWS", "SHORT"]).includes("НЕДАВНИЕ ПОСТЫ"), true);
+});
+
+test("a set of examples is varied, not three copies of the same post", () => {
+  // Four near-identical ETF posts and two different ones. Relevance alone would take the four.
+  const ex = [
+    { id: "etf1", text: "ETF-притоки снова бьют рекорды, биткоин держится уверенно.", rating: 5, tags: ["bitcoin"], enabled: true },
+    { id: "etf2", text: "ETF-притоки опять рекордные, биткоин держится уверенно.", rating: 5, tags: ["bitcoin"], enabled: true },
+    { id: "etf3", text: "Рекордные ETF-притоки, биткоин держится уверенно и дальше.", rating: 5, tags: ["bitcoin"], enabled: true },
+    { id: "short", text: "Фандинг отрицательный. Шортов набилось многовато.", rating: 4, tags: ["bitcoin"], enabled: true },
+    { id: "long", text: "Длинный разбор: ликвидность тонкая, книга заявок пустая, любое крупное рыночное исполнение утаскивает цену на процент и возвращает обратно. В такие дни я не лезу с размером, потому что проскальзывание съедает всё, что даёт движение, и сделка из нормальной превращается в лотерею с отрицательным ожиданием для меня.", rating: 4, tags: [], enabled: true },
+  ];
+  const picked = rankStyleExamples(ex, { topic: "приток в биткоин-ETF", category: "bitcoin", summary: "спотовые ETF привлекли рекордные средства" }, 3);
+  assert.equal(picked.length, 3);
+  assert.equal(picked[0]!.id.startsWith("etf"), true, "the most relevant one still comes first");
+  const etfCount = picked.filter((p) => p.id.startsWith("etf")).length;
+  assert.ok(etfCount <= 2, `near-duplicates must not fill the set: ${picked.map((p) => p.id).join(", ")}`);
+});
+
+test("examples reach the model inside tags, as examples rather than as a list", () => {
+  const block = voiceExamplesBlock(["Первый пост.", "Второй пост."]);
+  assert.match(block, /<examples>[\s\S]*<example>\nПервый пост\.\n<\/example>[\s\S]*<\/examples>/);
+  assert.equal(voiceExamplesBlock([]), "", "no examples means no empty heading in the prompt");
+  assert.equal(voiceExamplesBlock(["   "]), "");
 });

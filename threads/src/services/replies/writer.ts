@@ -4,6 +4,7 @@ import { REPLY_SYSTEM_PROMPT } from "./prompts.js";
 import { extractNumbers } from "../writer/validate.js";
 import { CRYPTO_REPLY_POLICY } from "./policy.js";
 import { sanitizeUntrusted } from "../../shared/untrusted.js";
+import { voiceExamplesBlock } from "../writer/prompts.js";
 
 /** Short, specific, in-voice replies; validated against templates, length, hype and stray numbers. */
 export const replyTextSchema = z.object({
@@ -97,7 +98,7 @@ ${language === "en" ? "Человек пишет по-английски — о�
 МОЙ ПОСТ / КОНТЕКСТ:
 ${ctx.ourPost.slice(0, 1200)}
 ${ctx.ourFactsText ? `\nФАКТЫ, на которые можно опираться (числа только отсюда):\n${ctx.ourFactsText.slice(0, 1200)}` : ""}
-${ctx.styleExamples?.length ? `\nПРИМЕРЫ МОЕГО ГОЛОСА:\n${ctx.styleExamples.slice(0, 3).map((s) => `- ${s.slice(0, 200)}`).join("\n")}` : ""}
+${ctx.styleExamples?.length ? `\n${voiceExamplesBlock(ctx.styleExamples, 3, 200)}` : ""}
 
 <untrusted_source_content>
 ЦЕПОЧКА:

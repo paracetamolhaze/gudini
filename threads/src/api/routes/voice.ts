@@ -47,15 +47,31 @@ export function registerVoiceRoutes(app: FastifyInstance, api: string): void {
     try {
       const page = await client.myPosts({ limit: count });
       let imported = 0;
+      let ownOutput = 0;
       for (const p of page.data ?? []) {
         const text = typeof p.text === "string" ? p.text.trim() : "";
         if (text.length < 20) continue;
         const exists = await one(`SELECT id FROM style_examples WHERE text = $1`, [text]);
         if (exists) continue;
-        await query(`INSERT INTO style_examples (text, rating, source, enabled, tags) VALUES ($1, 3, 'threads_import', true, '{}')`, [text]);
-        imported++;
+        // The feed also holds what this service published: that is the model's own output, not the
+        // owner's voice. It is stored with its own source and switched off — visible in the list,
+        // never in a prompt. A real post is rating 5, the top of the library: it outranks every
+        // generated example (liked drafts come in at 3), so the voice stays the man's own.
+        // A long post goes out as a numbered thread, so each part comes back with a "2/3 " label
+        // (shared/threadSplit.ts) that publications never stored: compare the body without it.
+        const body = text.replace(/^\d{1,2}\/\d{1,2}\s+/, "").trim() || text;
+        // Our replies to commenters are written by the same model but live in interactions, not
+        // in publications — without them the feed hands the machine's own chatter back as the man's.
+        const generated = await one(
+          `SELECT 1 WHERE EXISTS (SELECT 1 FROM publications WHERE strpos(published_text, $1) > 0)
+              OR EXISTS (SELECT 1 FROM interactions WHERE our_text IS NOT NULL AND strpos(our_text, $1) > 0)`,
+          [body],
+        );
+        await query(`INSERT INTO style_examples (text, rating, source, enabled, tags) VALUES ($1, $2, $3, $4, '{}')`, [text, generated ? 3 : 5, generated ? "own_publication" : "threads_import", !generated]);
+        if (generated) ownOutput++;
+        else imported++;
       }
-      return { imported, fetched: page.data?.length ?? 0 };
+      return { imported, ownOutput, fetched: page.data?.length ?? 0 };
     } catch (err) {
       throw new HttpError(502, `Threads: ${errorMessage(err)}`);
     }

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import type { BrowserContext, Page } from "playwright";
 import { readXSession, writeXSession, removeXProfile, type XSessionState } from "./x/browser/state.js";
 import {
+  NAV_MS,
   X_COMPOSE,
   X_HOME,
   X_NOTIFICATIONS,
@@ -91,6 +92,28 @@ const requireId = (value: unknown): string => {
 };
 
 /**
+ * Whether the caller is still on the line. A dropped HTTP connection means the answer has nowhere to
+ * go, and a post nobody will hear about is worse than no post: the caller has already written the
+ * attempt off. So we stop — but only at the checkpoints before the click, which are the only places
+ * where stopping costs nothing. Once submitComposer has clicked, the send has to be identified to the
+ * end, because that read is the one thing standing between "we do not know" and a second post later.
+ */
+interface Caller {
+  readonly gone: boolean;
+}
+const STAYS: Caller = { gone: false };
+
+class CallerGone extends Error {
+  constructor() {
+    super("Запрос отменён: вызывающая сторона отключилась до отправки.");
+  }
+}
+
+function stopIfGone(caller: Caller): void {
+  if (caller.gone) throw new CallerGone();
+}
+
+/**
  * The single non-idempotent step. After the click we owe the caller a precise answer, because
  * "X did not show it to us" and "the post is not there" license completely different next moves:
  *   toast      — X confirmed and gave us the link;
@@ -148,34 +171,40 @@ async function ensureSession(opts: { sending?: boolean } = {}): Promise<Page> {
   return p;
 }
 
-async function publish(body: Record<string, unknown>): Promise<unknown> {
+async function publish(body: Record<string, unknown>, caller: Caller): Promise<unknown> {
   const text = requireText(body.text, 25_000);
   const image = safeMedia(body.imagePath ?? null);
   const p = await ensureSession({ sending: true });
-  await p.goto(X_COMPOSE, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  stopIfGone(caller);
+  await p.goto(X_COMPOSE, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(p, "публикация остановлена до отправки");
   await fillComposer(p, text);
   if (image) await attachImage(p, image);
+  stopIfGone(caller);
   return await sendAndIdentify(p, text);
 }
 
-async function reply(body: Record<string, unknown>): Promise<unknown> {
+async function reply(body: Record<string, unknown>, caller: Caller): Promise<unknown> {
   const text = requireText(body.text, 25_000);
   const replyToId = requireId(body.replyToId);
   const p = await ensureSession({ sending: true });
+  stopIfGone(caller);
   await openReplyBox(p, replyToId);
   await fillComposer(p, text);
+  stopIfGone(caller);
   return await sendAndIdentify(p, text);
 }
 
-async function quote(body: Record<string, unknown>): Promise<unknown> {
+async function quote(body: Record<string, unknown>, caller: Caller): Promise<unknown> {
   const text = requireText(body.text, 25_000);
   const quotedId = requireId(body.quotedId);
   const p = await ensureSession({ sending: true });
+  stopIfGone(caller);
   // A quote post is a normal post whose text ends with the quoted link; X renders the card itself.
-  await p.goto(X_COMPOSE, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await p.goto(X_COMPOSE, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(p, "цитата не отправлена");
   await fillComposer(p, `${text}\n\nhttps://x.com/i/status/${quotedId}`);
+  stopIfGone(caller);
   return await sendAndIdentify(p, text);
 }
 
@@ -191,7 +220,7 @@ async function recover(body: Record<string, unknown>): Promise<unknown> {
 async function inbox(body: Record<string, unknown>): Promise<unknown> {
   const max = Math.max(1, Math.min(Number(body.max) || 30, 100));
   const p = await ensureSession();
-  await p.goto(X_NOTIFICATIONS, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await p.goto(X_NOTIFICATIONS, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(p, "уведомления не прочитаны");
   const posts = await scrapeTimeline(p, max);
   return { posts: posts.filter((post) => post.username.toLowerCase() !== (state.username ?? "").toLowerCase()) };
@@ -202,7 +231,7 @@ async function thread(body: Record<string, unknown>): Promise<unknown> {
   const postId = requireId(body.postId);
   const max = Math.max(1, Math.min(Number(body.max) || 20, 60));
   const p = await ensureSession();
-  await p.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await p.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(p, "ветка не прочитана");
   const posts = await scrapeConversation(p, max + 1);
   return { posts: posts.filter((post) => post.id !== postId) };
@@ -212,7 +241,7 @@ async function search(body: Record<string, unknown>): Promise<unknown> {
   const queryText = requireText(body.query, 400);
   const max = Math.max(1, Math.min(Number(body.max) || 20, 60));
   const p = await ensureSession();
-  await p.goto(`https://x.com/search?q=${encodeURIComponent(queryText)}&f=live`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await p.goto(`https://x.com/search?q=${encodeURIComponent(queryText)}&f=live`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(p, "поиск не выполнен");
   return { posts: await scrapeTimeline(p, max) };
 }
@@ -222,7 +251,7 @@ const COUNT = /([\d\s.,]+)\s*(?:тыс|млн|K|M)?\s*(views|просмотр|li
 async function metrics(body: Record<string, unknown>): Promise<unknown> {
   const postId = requireId(body.postId);
   const p = await ensureSession();
-  await p.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await p.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(p, "статистика не прочитана");
   const group = p.locator('[role="group"][aria-label]').first();
   const label = (await group.getAttribute("aria-label").catch(() => null)) ?? "";
@@ -258,8 +287,10 @@ function status() {
   };
 }
 
-async function command(action: string, body: Record<string, unknown>): Promise<unknown> {
+async function command(action: string, body: Record<string, unknown>, caller: Caller = STAYS): Promise<unknown> {
   if (action === "status") return status();
+  // A request that waited its turn in the queue while the caller hung up is not worth starting.
+  stopIfGone(caller);
 
   if (action === "login") {
     if (busy) throw new Error("Сейчас идёт публикация в X. Дождитесь её завершения.");
@@ -267,7 +298,7 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
     loginUntil = Date.now() + LOGIN_WINDOW_MS;
     try {
       const p = await browserPage();
-      await p.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: 45_000 });
+      await p.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: NAV_MS });
     } catch (err) {
       login = false;
       await closeBrowser();
@@ -307,7 +338,7 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
   if (action === "finish") {
     if (!login) throw new Error("Окно входа X закрыто.");
     const p = await browserPage();
-    await p.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    await p.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: NAV_MS });
     if (!(await isLoggedIn(p))) throw new Error("Вход ещё не завершён. Войдите в X и повторите проверку.");
     const identity = await readIdentity(p);
     if (!identity) throw new Error("Вход выполнен, но X не показал имя аккаунта. Откройте окно ещё раз.");
@@ -375,7 +406,7 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
 
   if (action === "probe") {
     const p = login ? await browserPage() : await ensureSession();
-    if (typeof body.url === "string" && /^https:\/\/x\.com\//.test(body.url)) await p.goto(body.url, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    if (typeof body.url === "string" && /^https:\/\/x\.com\//.test(body.url)) await p.goto(body.url, { waitUntil: "domcontentloaded", timeout: NAV_MS });
     return { layout: await probeLayout(p) };
   }
 
@@ -385,11 +416,11 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
   try {
     switch (action) {
       case "publish":
-        return await publish(body);
+        return await publish(body, caller);
       case "reply":
-        return await reply(body);
+        return await reply(body, caller);
       case "quote":
-        return await quote(body);
+        return await quote(body, caller);
       case "recover":
         return await recover(body);
       case "inbox":
@@ -443,9 +474,16 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
   const respond = (code: number, data: unknown) => {
+    if (res.writableEnded || res.destroyed) return;
     res.statusCode = code;
     res.end(JSON.stringify(data));
   };
+  // The caller gives up on its own budget and closes the socket; from that moment the work is
+  // pointless, so the action is told to stop at its next safe checkpoint.
+  const caller = { gone: false };
+  res.on("close", () => {
+    if (!res.writableEnded) caller.gone = true;
+  });
   if (token && req.headers.authorization !== `Bearer ${token}`) return respond(401, { error: "Unauthorized" });
   const action = (req.url || "").slice(1);
   if (!/^[a-z]+$/.test(action)) return respond(404, { error: "Not found" });
@@ -457,10 +495,12 @@ const server = http.createServer(async (req, res) => {
       if (data.length > 32_768) throw new Error("Запрос слишком большой");
     }
     const body = data ? (JSON.parse(data) as Record<string, unknown>) : {};
-    const result = await serialize(() => command(action, body));
+    const result = await serialize(() => command(action, body, caller));
     lastError = "";
     respond(200, result);
   } catch (err) {
+    // Nobody is waiting any more: this is not a fault of X, so it must not surface in the status.
+    if (caller.gone) return;
     // Typed text may appear in Playwright diagnostics; never echo the request body back.
     lastError = action === "input" ? "Не удалось выполнить ввод. Обновите окно входа." : err instanceof Error ? err.message : "Ошибка X";
     respond(err instanceof XLoginRequired ? 409 : err instanceof XLayoutChanged ? 502 : 400, { error: lastError, kind: err instanceof XLoginRequired ? "login" : err instanceof XLayoutChanged ? "layout" : "error" });

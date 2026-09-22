@@ -20,7 +20,7 @@ import {
 export interface ClaudeBridgeOptions {
   baseUrl: string;
   token: string;
-  /** CLI runs are slow; the client must outlive the bridge's own run timeout. */
+  /** CLI runs are slow; the client must outlive the bridge's whole budget, queue wait included. */
   defaultTimeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -57,7 +57,14 @@ export class ClaudeBridgeProvider implements LlmProvider {
   constructor(opts: ClaudeBridgeOptions) {
     this.baseUrl = (opts.baseUrl ?? "").trim().replace(/\/+$/, "");
     this.token = (opts.token ?? "").trim();
-    this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 330_000;
+    // The bridge answers within its own budget: one queue wait (300 s) plus one run (300 s), and it
+    // refuses at once when the line is longer than that. Giving up earlier would only abandon a run
+    // that is still allowed to finish, so the client waits out the worst case and adds HTTP slack.
+    // The real ceiling is the transport, not this number: Node's fetch drops the request with
+    // UND_ERR_HEADERS_TIMEOUT 300 s after it was sent, whatever we pass here (measured). So the
+    // bridge's whole budget has to fit under 300 s — keep CLAUDE_BRIDGE_TIMEOUT_MS near 140 s, or a
+    // job that really waits its turn is cut off the wire mid-run.
+    this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 630_000;
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
@@ -73,7 +80,8 @@ export class ClaudeBridgeProvider implements LlmProvider {
   /** The bridge already phrases login and limit failures for the owner; keep its text and only set retryability. */
   private fail(status: number, body: string): never {
     const message = typeof asObj(safeJson(body)).error === "string" ? String(asObj(safeJson(body)).error) : `HTTP ${status} — ${snippetOf(body)}`;
-    const retryable = status === 504 || (status >= 500 && status !== 503) || (status === 503 && /занят/i.test(message));
+    // A 503 about the queue is the bridge saving a run for later, not a broken setup: worth retrying.
+    const retryable = status === 504 || (status >= 500 && status !== 503) || (status === 503 && /занят|очеред/i.test(message));
     throw new LlmError(this.name, message, status, retryable);
   }
 
@@ -113,6 +121,8 @@ export class ClaudeBridgeProvider implements LlmProvider {
         this.fetchImpl,
       );
     } catch (err) {
+      // Dropping the connection is what the bridge kills its child on, so a timeout here leaves no
+      // orphan CLI run burning the subscription in the background.
       throw new LlmError(this.name, describeFetchError(err), 0, true);
     }
     if (!res.ok) this.fail(res.status, res.body);

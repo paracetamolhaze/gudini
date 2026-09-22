@@ -12,6 +12,7 @@ import type { VerifiedFact } from "../analysis/schemas.js";
 import { audit } from "../audit.js";
 import { personaBlock } from "../persona.js";
 import { closingPrompt, recentEndings } from "../writer/prompts.js";
+import { rankStyleExamples } from "../writer/styleRetrieval.js";
 import { validateDraft, withoutLinks } from "../writer/validate.js";
 
 /**
@@ -210,7 +211,11 @@ export async function createMoverDraft(moveId: string, router: LlmRouter = llm()
      ORDER BY created_at DESC LIMIT 3`,
     [`%${move.symbol}%`, `%${move.name}%`, move.symbol, move.name],
   ).catch(() => []);
-  const examples = await query<{ text: string }>(`SELECT text FROM style_examples WHERE enabled ORDER BY rating DESC, created_at DESC LIMIT 5`);
+  // Not the top five by rating: that list fills up with liked drafts and the owner's own posts stop
+  // reaching the prompt. The ranker gets a wide pool (his real posts first) and picks the examples
+  // that fit this coin without repeating one rhythm five times.
+  const styleRows = await query<{ id: string; text: string; rating: number; tags: string[]; enabled: boolean }>(`SELECT id, text, rating, tags, enabled FROM style_examples WHERE enabled ORDER BY rating DESC, created_at DESC LIMIT 200`);
+  const examples = rankStyleExamples(styleRows, { topic: `${move.symbol} ${move.name}`, category: move.symbol === "BTC" ? "bitcoin" : move.symbol === "ETH" ? "ethereum" : "altcoins", summary: `${move.name} ${move.direction === "UP" ? "вырос" : "упал"} за ${move.period}` }, 5);
   const recentPosts = await recentPublishedTexts(10);
   const closing = closingPrompt({ recentEndings: recentEndings(recentPosts), forX: wantX });
   const system = `${personaBlock(settings)}

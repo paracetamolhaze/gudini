@@ -10,6 +10,7 @@ import { defaultTargets } from "../../platforms/index.js";
 import { errorMessage } from "../../shared/logger.js";
 import { newId } from "../../shared/ids.js";
 import { audit } from "../audit.js";
+import { rankStyleExamples } from "../writer/styleRetrieval.js";
 import { buildTradesForCoin, roePct, worthPosting } from "./aggregate.js";
 import { CARD_HEIGHT, CARD_WIDTH, renderTradeCard, shortWallet } from "./card.js";
 import { tradeFacts, tradeMarketContext, writeTradePost } from "./writer.js";
@@ -84,7 +85,11 @@ export async function createTradeDraft(tradeId: string, opts: { manual: boolean 
   // The candles behind the card also explain the trade, so the writer gets the same picture the card shows.
   const context = tradeMarketContext(trade, candles);
   const facts = tradeFacts(trade, { showUsd: settings.trades.showUsd, showSize: settings.trades.showSize }, context);
-  const examples = await query<{ text: string }>(`SELECT text FROM style_examples WHERE enabled ORDER BY rating DESC, created_at DESC LIMIT 5`);
+  // Not the top five by rating: that fills up with liked drafts and the owner's own posts stop
+  // reaching the prompt. A wide pool (his real posts first) goes to the ranker, which picks what
+  // fits this coin and keeps the lengths and rhythms apart.
+  const styleRows = await query<{ id: string; text: string; rating: number; tags: string[]; enabled: boolean }>(`SELECT id, text, rating, tags, enabled FROM style_examples WHERE enabled ORDER BY rating DESC, created_at DESC LIMIT 200`);
+  const examples = rankStyleExamples(styleRows, { topic: `${trade.coin} ${trade.direction}`, category: trade.coin === "BTC" ? "bitcoin" : trade.coin === "ETH" ? "ethereum" : "altcoins", summary: `сделка по ${trade.coin} закрыта в плюс` }, 5);
   let post;
   try {
     post = await writeTradePost({ trade, facts, context, settings, forX: targets.includes("x"), styleExamples: examples.map((e) => e.text), recentPosts: await recentPublishedTexts(8), refs: {} });

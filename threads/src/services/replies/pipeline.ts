@@ -25,6 +25,7 @@ import { personaBlock } from "../persona.js";
 import { decideReply } from "./decision.js";
 import { REPLY_DECISION_PROMPT_NAME, REPLY_DECISION_SYSTEM_PROMPT, REPLY_PROMPT_NAME, REPLY_SYSTEM_PROMPT } from "./prompts.js";
 import { replyLanguageFor, writeReply } from "./writer.js";
+import { rankStyleExamples } from "../writer/styleRetrieval.js";
 
 /**
  * OWN POST → new comments → decision → writer → (auto) send / draft for review, on every connected
@@ -176,7 +177,11 @@ export async function processInteraction(id: string): Promise<"sent" | "draft" |
     return "review";
   }
   const writerPrompt = await getActivePrompt(REPLY_PROMPT_NAME, REPLY_SYSTEM_PROMPT);
-  const styleRows = await query<{ text: string }>(`SELECT text FROM style_examples WHERE enabled ORDER BY rating DESC, created_at DESC LIMIT 3`);
+  // Not the top three by rating: that list fills up with liked drafts and the owner's own posts stop
+  // reaching the prompt. The ranker gets a wide pool (his real posts first) and picks the examples
+  // closest to what is being answered.
+  const styleRows = await query<{ id: string; text: string; rating: number; tags: string[]; enabled: boolean }>(`SELECT id, text, rating, tags, enabled FROM style_examples WHERE enabled ORDER BY rating DESC, created_at DESC LIMIT 200`);
+  const styleExamples = rankStyleExamples(styleRows, { topic: row.target_text, category: "other", summary: our.text }, 3);
   let written;
   try {
     written = await writeReply({
@@ -187,7 +192,7 @@ export async function processInteraction(id: string): Promise<"sent" | "draft" |
       chain,
       kind,
       wantQuestion: d.action === "REPLY_AND_QUESTION",
-      styleExamples: styleRows.map((s) => s.text),
+      styleExamples: styleExamples.map((s) => s.text),
       refs: { interactionId: id },
       promptOverride: { prompt: writerPrompt.prompt, label: writerPrompt.label },
       persona: personaBlock(settings),
@@ -240,7 +245,8 @@ async function sendLocked(id: string, opts: { manual: boolean }): Promise<"sent"
   const settings = await loadSettings(true);
   const row = await getInteraction(id);
   if (!row || !row.our_text) return "skipped";
-  if (settings.killSwitch || settings.mode === "OFF") {
+  // Пауза и режим OFF глушат автоматику; ответ, отправленный кнопкой, — решение владельца.
+  if (!opts.manual && (settings.killSwitch || settings.mode === "OFF")) {
     await audit("KILL_SWITCH", `Отправка ответа @${row.target_username} остановлена (${settings.killSwitch ? "kill switch" : "режим OFF"})`, { interactionId: id }, null, "warn");
     return "skipped";
   }
@@ -293,7 +299,7 @@ async function sendLocked(id: string, opts: { manual: boolean }): Promise<"sent"
     if (fresh.killSwitch || fresh.mode !== "AUTO" || fresh.dryRun !== settings.dryRun || !(isPublic ? fresh.flags.autoPublicReplies : fresh.flags.autoOwnReplies) || latest?.status !== "APPROVED" || latest.our_text !== row.our_text) return "skipped";
   }
   const latestSettings = await loadSettings(true);
-  if (latestSettings.killSwitch || latestSettings.mode === "OFF" || latestSettings.dryRun !== settings.dryRun) return "skipped";
+  if ((!opts.manual && (latestSettings.killSwitch || latestSettings.mode === "OFF")) || latestSettings.dryRun !== settings.dryRun) return "skipped";
   const locked = await one(`UPDATE interactions SET status = 'SENDING', updated_at = now() WHERE id = $1 AND status = ANY($2::text[]) AND our_text = $3 RETURNING id`, [id, opts.manual ? ["APPROVED", "DRAFT", "NEEDS_REVIEW", "FAILED"] : ["APPROVED"], row.our_text]);
   if (!locked) return "skipped";
   const replyTo = row.target_reply_id ?? row.target_post_id;

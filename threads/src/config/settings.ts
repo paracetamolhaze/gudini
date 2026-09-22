@@ -118,6 +118,17 @@ export const settingsSchema = z.object({
     auditDays: z.number().int().min(1).max(3650),
     llmCallDays: z.number().int().min(1).max(3650),
   }),
+  /**
+   * Nightly pg_dump into DATA_DIR/backups. The Postgres volume is the only copy of everything the
+   * service knows, and the manual script runs only when somebody remembers it.
+   */
+  backup: z.object({
+    enabled: z.boolean(),
+    /** How many dumps stay on the volume; the oldest go after a successful run. */
+    keep: z.number().int().min(1).max(365),
+    /** Below this much free space the dump is skipped loudly instead of filling the disk. */
+    minFreeMb: z.number().int().min(0).max(1_000_000),
+  }),
   pricing: z.record(z.string(), z.object({ input: z.number().min(0), output: z.number().min(0) })),
   /** Where posts go. Threads is driven by its Graph API; X is pay-per-use and forbids cold API replies. */
   platforms: z.object({
@@ -235,6 +246,7 @@ export function defaultSettings(): Settings {
     writer: { variantsPerDraft: 2, maxStyleExamples: 6, language: "ru" },
     analytics: { insightsPollMinutes: 180, snapshotDays: 14 },
     retention: { jobDays: 14, auditDays: 90, llmCallDays: 180 },
+    backup: { enabled: true, keep: 14, minFreeMb: 512 },
     pricing: DEFAULT_PRICING,
     platforms: {
       threads: { enabled: true, maxChars: 500 },

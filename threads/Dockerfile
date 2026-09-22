@@ -6,6 +6,17 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends fontconfig fonts-dejavu-core fonts-liberation ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# pg_dump для ночного бэкапа: воркер не может зайти в соседний контейнер, дамп делает сам.
+# Сервер — postgres:17, а штатный postgresql-client в bookworm пятнадцатый и дампить базу новее себя
+# отказывается, поэтому клиент 17 ставим из репозитория PGDG.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl gnupg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-17 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Playwright нужен только контейнеру браузера X; здесь его движки качать не надо.

@@ -4,7 +4,7 @@ import type { TradeRow } from "../../db/repos/trades.js";
 import { llm, type LlmRefs, type LlmRouter } from "../../llm/index.js";
 import type { VerifiedFact } from "../analysis/schemas.js";
 import { personaBlock } from "../persona.js";
-import { closingPrompt, recentEndings, voiceExamplesBlock } from "../writer/prompts.js";
+import { closingPrompt, recentEndings, voiceExamplesBlock, openingPrompt, recentOpenings } from "../writer/prompts.js";
 import { validateDraft, type Violation } from "../writer/validate.js";
 import { formatDuration } from "./card.js";
 
@@ -127,6 +127,7 @@ export async function writeTradePost(input: { trade: TradeRow; facts: VerifiedFa
   const maxThreads = settings.platforms.threads.maxChars;
   const held = trade.closed_at ? formatDuration(trade.closed_at.getTime() - trade.opened_at.getTime(), { d: "д", h: "ч", m: "м" }) : "";
   const closing = closingPrompt({ recentEndings: recentEndings(input.recentPosts), forX: wantX });
+  const opening = openingPrompt(recentOpenings(input.recentPosts));
   const system = `${personaBlock(settings)}
 
 Ты пишешь мой пост о сделке, которую я закрыл в плюс на Hyperliquid. К посту приложена карточка с цифрами.
@@ -141,6 +142,8 @@ export async function writeTradePost(input: { trade: TradeRow; facts: VerifiedFa
 - Максимум один emoji. В конце один тег по монете или теме сделки, русскими словами: #биткоин, #эфириум, #перпы, #альткоины, #стейблкоины, #ликвидации. Латиницей и тикерами (#BTC, #crypto) — нельзя, это тег для русской аудитории — ровно один, в Threads остальные не кликаются.
 - Не повторяй формулировки недавних постов.
 ${wantX ? `- xText — тот же пост для X: до ${x.maxChars} символов, ${x.language === "en" ? "на естественном английском (crypto-Twitter), там плечо можно писать «10x»" : "на русском"}.` : "- xText верни null."}
+
+${opening}
 
 ${closing}
 

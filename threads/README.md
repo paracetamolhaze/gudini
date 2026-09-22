@@ -174,8 +174,14 @@ npm run build
 
 - Health: `/threads/health`, `/threads/health/db`, `/threads/health/redis`, `/threads/health/threads`, `/threads/health/llm`.
 - Логи — JSON (pino) с `requestId`/`jobId`; аудит — таблица `audit_logs` и экран Logs.
-- Бэкап: `node scripts/backup.mjs` (pg_dump в контейнере → `data/backups`, хранится 14 копий),
-  восстановление `node scripts/backup.mjs --restore <file>`.
+- Бэкап делается сам, раз в сутки: задача `publisher:backup` снимает `pg_dump` (клиент 17 стоит в
+  образе) и кладёт `threads-ГГГГММДД-ЧЧММ.sql.gz` в `DATA_DIR/backups` — это том `threads-data`.
+  Сколько копий держать и сколько места оставлять свободным — настройки `backup.keep` (14) и
+  `backup.minFreeMb` (512); `backup.enabled: false` выключает. Два дампа разом не идут (advisory-lock
+  в Postgres), недописанный файл удаляется, а неудача видна красной строкой JOB_FAILED в журнале.
+- Забрать копию с тома: `docker cp gudini-threads-worker:/app/data/backups ./backups`.
+- Руками — то же самое: `node scripts/backup.mjs`, восстановление
+  `node scripts/backup.mjs --restore <file>` (формат и имена файлов одинаковые).
 - Секреты только в env: не в БД, не в логах, не в ответах API, не в промптах.
 
 ## Заимствования

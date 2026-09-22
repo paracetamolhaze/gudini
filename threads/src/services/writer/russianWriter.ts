@@ -5,7 +5,7 @@ import { writerOutputSchema, variantText, type DraftVariant } from "./schemas.js
 import { validateDraft, type ValidationResult } from "./validate.js";
 import type { StyleExample } from "./styleRetrieval.js";
 import { rankStyleExamples } from "./styleRetrieval.js";
-import { voiceExamplesBlock } from "./prompts.js";
+import { openingPrompt, recentOpenings, voiceExamplesBlock } from "./prompts.js";
 import { THREADS_MAX_CHARS } from "../../shared/threadSplit.js";
 
 /**
@@ -74,6 +74,7 @@ export function buildWriterUserMessage(ctx: WriterContext, types: string[]): str
   const voice = voiceExamplesBlock(examples.map((e) => e.text), examples.length);
   if (voice) parts.push(voice);
   if (ctx.recentOwnPosts.length) parts.push(`НЕДАВНИЕ ПОСТЫ АККАУНТА (не повторяй темы, углы и формулировки):\n${ctx.recentOwnPosts.slice(0, 8).map((t) => `- ${t.replace(/\s+/g, " ").slice(0, 160)}`).join("\n")}`);
+  parts.push(openingPrompt(recentOpenings(ctx.recentOwnPosts)));
   parts.push(`Напиши ${types.length} вариант(а) поста, по одному на тип:\n${types.map((t) => `- ${VARIANT_GUIDE[t] ?? t}`).join("\n")}\nДля каждого укажи usedFacts (индексы фактов), hedgedFacts (какие поданы с оговоркой), confidence и selfCheck.`);
   return parts.join("\n\n");
 }

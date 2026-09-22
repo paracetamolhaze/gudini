@@ -19,6 +19,9 @@ const DEFAULT_MODEL = "claude-sonnet-5";
 const DEFAULT_GIT_BASH = String.raw`D:\Git\bin\bash.exe`;
 const MAX_BODY_BYTES = 5_000_000;
 const MAX_PROMPT_CHARS = 500_000;
+// Запускать CLI, когда до дедлайна задания осталось меньше минуты (при коротком лимите — меньше
+// половины запуска), бессмысленно: он не успеет и сожжёт запуск подписки впустую. Лучше сразу отказать.
+const MIN_RUN_MS = 60_000;
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,64}$/;
 
 function number(name, fallback, min, max) {
@@ -210,7 +213,12 @@ function assertPortFree(host, port) {
   });
 }
 
-function runCli(job, prompt, cli, timeoutMs) {
+/**
+ * timeoutMs — сколько времени осталось именно на этот запуск, а не абстрактный лимит: очередь уже
+ * съела часть срока. signal гасит процесс, когда клиент отвалился: иначе CLI дорабатывает до конца,
+ * пишет ответ в мёртвый сокет и зря тратит лимит подписки.
+ */
+function runCli(job, prompt, cli, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
     // An empty working directory keeps the writing run away from the repository.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gudini-claude-"));
@@ -226,11 +234,22 @@ function runCli(job, prompt, cli, timeoutMs) {
     });
     let stdout = "";
     let stderr = "";
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
+    let stopped = "";
+    const stop = (reason) => {
+      if (stopped) return;
+      stopped = reason;
       child.kill("SIGKILL");
-    }, timeoutMs);
+    };
+    const timer = setTimeout(() => stop("timeout"), timeoutMs);
+    const onAbort = () => stop("cancelled");
+    signal.addEventListener("abort", onAbort, { once: true });
+    // Клиент мог уйти в зазор между проверкой очереди и запуском процесса.
+    if (signal.aborted) stop("cancelled");
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      cleanup();
+    };
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
@@ -247,8 +266,7 @@ function runCli(job, prompt, cli, timeoutMs) {
       /* A failed child is reported by the close event. */
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      cleanup();
+      finish();
       reject(
         /ENOENT/i.test(error.message)
           ? Object.assign(new Error(`Claude CLI не найден по пути ${cli}. Укажите CLAUDE_BRIDGE_CLI и перезапустите мост.`), { status: 503 })
@@ -256,9 +274,12 @@ function runCli(job, prompt, cli, timeoutMs) {
       );
     });
     child.on("close", () => {
-      clearTimeout(timer);
-      cleanup();
-      if (timedOut) {
+      finish();
+      if (stopped === "cancelled") {
+        reject(Object.assign(new Error("Задание отменено: сервис не дождался ответа, запуск Claude остановлен."), { status: 499 }));
+        return;
+      }
+      if (stopped === "timeout") {
         reject(Object.assign(new Error("Claude не ответил за отведённое время. Запуск остановлен, повторите задание."), { status: 504 }));
         return;
       }
@@ -303,7 +324,11 @@ async function main() {
     model: process.env.CLAUDE_BRIDGE_MODEL || DEFAULT_MODEL,
     writerModel: process.env.CLAUDE_BRIDGE_MODEL_WRITER || process.env.CLAUDE_BRIDGE_MODEL || DEFAULT_MODEL,
   };
-  const timeoutMs = number("CLAUDE_BRIDGE_TIMEOUT_MS", 300_000, 5_000, 3_600_000);
+  const runMs = number("CLAUDE_BRIDGE_TIMEOUT_MS", 300_000, 5_000, 3_600_000);
+  // В очереди задание ждёт не дольше одного чужого запуска, дальше отказ. Значит худший случай ответа
+  // моста — два запуска подряд; столько же ждёт клиент (см. defaultTimeoutMs в src/llm/claudeBridge.ts).
+  const waitMs = runMs;
+  const minRunMs = Math.min(MIN_RUN_MS, Math.round(runMs / 2));
   const queueMax = number("CLAUDE_BRIDGE_QUEUE_MAX", 4, 1, 50);
   // 43129 занят мостом картинок Codex (scripts/codex-image-bridge.ts), поэтому по умолчанию 43131 —
 // именно его ждут docker-compose.yml и .env.example.
@@ -314,8 +339,12 @@ const port = number("CLAUDE_BRIDGE_PORT", 43131, 1, 65_535);
   sweepRunDirectories();
 
   // The CLI is heavy: exactly one run at a time, the rest wait in line.
+  // freeAt — момент, когда очередь освободится в худшем случае: каждое принятое задание резервирует
+  // себе полный запуск, а по факту возвращает неиспользованный остаток. По нему новичок сразу видит,
+  // сколько ему ждать, и получает отказ до того, как впустую займёт место.
   let tail = Promise.resolve();
   let waiting = 0;
+  let freeAt = 0;
   const enqueue = (fn) => {
     const run = tail.then(fn);
     tail = run.then(
@@ -327,6 +356,8 @@ const port = number("CLAUDE_BRIDGE_PORT", 43131, 1, 65_535);
 
   const server = http.createServer(async (req, res) => {
     const send = (status, body) => {
+      // Клиент мог уйти, пока шёл запуск: писать в закрытый ответ нечего.
+      if (res.writableEnded || res.destroyed) return;
       res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
       res.end(JSON.stringify(body));
     };
@@ -337,7 +368,8 @@ const port = number("CLAUDE_BRIDGE_PORT", 43131, 1, 65_535);
       return;
     }
     if (req.method === "GET" && req.url === "/health") {
-      send(200, { ok: true, service: "gudini-claude-bridge", model: defaults.model, writerModel: defaults.writerModel, cli, busy: waiting, tools: ["none", "web"] });
+      // budgetMs — худший случай ответа: ожидание очереди плюс собственный запуск.
+      send(200, { ok: true, service: "gudini-claude-bridge", model: defaults.model, writerModel: defaults.writerModel, cli, busy: waiting, budgetMs: waitMs + runMs, tools: ["none", "web"] });
       return;
     }
     if (req.method !== "POST" || req.url !== "/complete") {
@@ -367,24 +399,48 @@ const port = number("CLAUDE_BRIDGE_PORT", 43131, 1, 65_535);
         send(400, { error: parsed.error });
         return;
       }
-      if (waiting >= queueMax) {
-        send(503, { error: "Мост Claude занят: слишком много заданий в очереди. Повторите позже." });
+      const arrived = Date.now();
+      freeAt = Math.max(freeAt, arrived);
+      // Срок задания идёт с его прихода, а не с запуска CLI: очередь тратит тот же самый срок.
+      const deadline = arrived + waitMs + runMs;
+      if (waiting >= queueMax || freeAt - arrived > waitMs) {
+        send(503, { error: "Мост Claude занят: очередь длиннее, чем задание успеет подождать. Повторите позже." });
         return;
       }
+      freeAt += runMs;
       waiting++;
+      let startedAt = 0;
+      const abort = new AbortController();
+      // Сервис перестал ждать ответ — держать запуск незачем: он всё равно писал бы в мёртвый сокет.
+      // Отвалиться он мог и раньше подписки, поэтому состояние ответа проверяется отдельно.
+      res.on("close", () => abort.abort());
+      if (res.destroyed) abort.abort();
       try {
-        const started = Date.now();
-        const result = await enqueue(() => runCli(parsed.job, parsed.prompt, cli, timeoutMs));
-        console.log(`Claude: ${parsed.job.task || "задание"} / ${result.model} / ${Math.round((Date.now() - started) / 1000)} с / ${result.usage.outputTokens} токенов`);
+        const result = await enqueue(() => {
+          if (abort.signal.aborted) throw Object.assign(new Error("Задание отменено: сервис не дождался очереди, запуск Claude не начинался."), { status: 499 });
+          const left = deadline - Date.now();
+          // Очередь шла дольше ожидаемого: на полноценный ответ времени уже нет, жечь запуск незачем.
+          if (left < minRunMs) throw Object.assign(new Error("Мост Claude занят: очередь съела срок задания, запуск не начинался. Повторите позже."), { status: 503 });
+          startedAt = Date.now();
+          return runCli(parsed.job, parsed.prompt, cli, Math.min(runMs, left), abort.signal);
+        });
+        console.log(`Claude: ${parsed.job.task || "задание"} / ${result.model} / ${Math.round((Date.now() - arrived) / 1000)} с / ${result.usage.outputTokens} токенов`);
         send(200, result);
       } finally {
         waiting--;
+        // Задание возвращает неиспользованную часть своего запуска — и весь резерв, если так и не
+        // стартовало. Считать остаток по своему запуску, а не по чужим: иначе на каждом досрочном
+        // финише очередь «худеет» на чужую длительность, впускает больше, чем обещала, и следующему
+        // достаётся урезанный бюджет — запуск начнётся и будет убит на полпути.
+        const used = startedAt ? Math.min(Date.now() - startedAt, runMs) : 0;
+        freeAt -= runMs - used;
       }
     } catch (error) {
       const status = typeof error?.status === "number" ? error.status : 502;
       // CLI output can carry credentials or task content; only vetted messages reach the service.
       const message = typeof error?.status === "number" ? error.message : "Локальный мост Claude не смог выполнить задание.";
-      console.error(`Claude: ${message}`);
+      // Ушедший клиент — не поломка моста, а обычная отмена: в лог она идёт спокойной строкой.
+      (status === 499 ? console.log : console.error)(`Claude: ${message}`);
       send(status, { error: message });
     }
   });

@@ -12,14 +12,21 @@ import type { MarketDataProvider } from "../../src/services/facts/marketData/pro
 const thresholds = { maxRisk: 30, minConfidence: 85, minScore: 75 };
 const clean = { status: "DRAFT", riskScore: 12, confidence: 92, totalScore: 84, expiresAt: new Date(Date.now() + 3_600_000), reviewReason: null };
 
-test("Test 4: nothing auto-publishes unless mode is AUTO and the flag is on; kill switch blocks even manual sends", () => {
+test("Test 4: nothing auto-publishes unless mode is AUTO and the flag is on; the pause stops the automation, not the owner", () => {
   assert.equal(decidePublish({ mode: "DRAFT", killSwitch: false, autoPostEnabled: true, manual: false, draft: clean, thresholds }).route, "HOLD");
   assert.equal(decidePublish({ mode: "REVIEW", killSwitch: false, autoPostEnabled: true, manual: false, draft: clean, thresholds }).route, "HOLD");
   assert.equal(decidePublish({ mode: "AUTO", killSwitch: false, autoPostEnabled: false, manual: false, draft: clean, thresholds }).route, "HOLD");
   assert.equal(decidePublish({ mode: "AUTO", killSwitch: false, autoPostEnabled: true, manual: false, draft: clean, thresholds }).route, "PUBLISH");
-  assert.equal(decidePublish({ mode: "OFF", killSwitch: false, autoPostEnabled: true, manual: true, draft: clean, thresholds }).route, "BLOCK");
-  assert.equal(decidePublish({ mode: "AUTO", killSwitch: true, autoPostEnabled: true, manual: true, draft: clean, thresholds }).route, "BLOCK");
   assert.equal(decidePublish({ mode: "REVIEW", killSwitch: false, autoPostEnabled: false, manual: true, draft: clean, thresholds }).route, "PUBLISH");
+  // Пауза и режим OFF глушат автоматику…
+  assert.equal(decidePublish({ mode: "AUTO", killSwitch: true, autoPostEnabled: true, manual: false, draft: clean, thresholds }).route, "BLOCK");
+  assert.equal(decidePublish({ mode: "OFF", killSwitch: false, autoPostEnabled: true, manual: false, draft: clean, thresholds }).route, "BLOCK");
+  // …но кнопка владельца сильнее: он смотрит на текст прямо сейчас и решает сам.
+  assert.equal(decidePublish({ mode: "OFF", killSwitch: false, autoPostEnabled: true, manual: true, draft: clean, thresholds }).route, "PUBLISH");
+  assert.equal(decidePublish({ mode: "AUTO", killSwitch: true, autoPostEnabled: true, manual: true, draft: clean, thresholds }).route, "PUBLISH");
+  // Уже опубликованный или отклонённый пост не воскрешает даже она.
+  assert.equal(decidePublish({ mode: "AUTO", killSwitch: true, autoPostEnabled: true, manual: true, draft: { ...clean, status: "PUBLISHED" }, thresholds }).route, "BLOCK");
+  assert.equal(decidePublish({ mode: "AUTO", killSwitch: false, autoPostEnabled: true, manual: true, draft: { ...clean, status: "REJECTED" }, thresholds }).route, "BLOCK");
 });
 
 test("risk-based publishing: risky or low-confidence drafts go to review even in AUTO", () => {

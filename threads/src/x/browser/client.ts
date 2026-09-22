@@ -40,7 +40,51 @@ export interface XBrowserSendResult {
   probe: "toast" | "found" | "absent" | "unreadable";
 }
 
-const TIMEOUT_MS = Number(process.env.X_BROWSER_TIMEOUT_MS || 180_000);
+/**
+ * How long to wait for the container, per action. One constant cannot fit both ends of the range:
+ * `status` answers instantly, while a single publish is a dozen Playwright waits in a row, and a
+ * budget that runs out mid-publish is the worst outcome of all — the request dies, the container
+ * keeps clicking, and the post may go out after we have already written the attempt off. So the
+ * numbers below are added up from the waits in src/x/browser/pages.ts and src/xbrowser.ts; when one
+ * of those is changed, the matching term here changes with it.
+ */
+const NAV = 30_000; // NAV_MS: one navigation around x.com
+const LOGGED_IN = 26_000; // assertLoggedIn: 8s look + 10s for the page to paint + 8s look again
+const IDENTITY = 90_000; // readIdentity, including the fallback through /settings/account and back
+const TIMELINE = 30_000; // waiting for the articles and reading thirty cards off them
+const IMAGE = 10_000 + 30_000; // attachImage: the file input, then the blob preview
+const BUTTON = 10_000 + 30_000; // submitComposer: finding the button, then waiting for it to go live
+const SESSION = NAV + LOGGED_IN + IDENTITY; // ensureSession({ sending: true })
+const COMPOSE = NAV + LOGGED_IN + 20_000 + IMAGE + BUTTON; // compose page, text box, image, button
+/** After the click: the toast, then the two spaced-out looks at our own timeline. */
+const CONFIRM = 18_000 + 5_000 + (NAV + LOGGED_IN + TIMELINE) + 15_000 + (NAV + LOGGED_IN + TIMELINE);
+const SEND = SESSION + COMPOSE + CONFIRM;
+const READ = SESSION + NAV + LOGGED_IN + TIMELINE;
+
+const BUDGET_MS: Record<string, number> = {
+  status: 15_000,
+  frame: 30_000,
+  input: 30_000,
+  close: 30_000,
+  disconnect: 60_000,
+  login: NAV + 15_000,
+  probe: SESSION + 60_000,
+  finish: NAV + LOGGED_IN + IDENTITY + 15_000,
+  import: NAV + IDENTITY + 30_000,
+  me: SESSION + 10_000,
+  recover: READ,
+  inbox: READ,
+  search: READ,
+  thread: READ,
+  metrics: SESSION + NAV + LOGGED_IN + 20_000,
+  publish: SEND,
+  reply: SEND,
+  quote: SEND,
+};
+
+/** An escape hatch for the owner: one number that overrides the whole table without a rebuild. */
+const OVERRIDE_MS = Number(process.env.X_BROWSER_TIMEOUT_MS) || 0;
+const budget = (action: string): number => OVERRIDE_MS || BUDGET_MS[action] || READ;
 
 export class XBrowserClient {
   constructor(
@@ -53,11 +97,12 @@ export class XBrowserClient {
     return Boolean(this.baseUrl);
   }
 
-  async call<T>(action: string, body: Record<string, unknown> = {}, timeoutMs = TIMEOUT_MS): Promise<T> {
+  async call<T>(action: string, body: Record<string, unknown> = {}, timeoutMs = budget(action)): Promise<T> {
     if (!this.baseUrl) throw new XBrowserUnavailable("Адрес браузера X не задан (X_BROWSER_URL).");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res: Response;
+    let text: string;
     try {
       res = await this.fetchImpl(`${this.baseUrl.replace(/\/$/, "")}/${action}`, {
         method: "POST",
@@ -65,12 +110,14 @@ export class XBrowserClient {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      // Read the body under the same budget: the answer is not ours until it is fully in hand.
+      text = await res.text();
     } catch (err) {
+      if (controller.signal.aborted) throw new XBrowserUnavailable(`Браузер X не ответил за ${Math.round(timeoutMs / 1000)} с (${action}).`);
       throw new XBrowserUnavailable(`Браузер X не отвечает: ${err instanceof Error ? err.message : "нет связи"}`);
     } finally {
       clearTimeout(timer);
     }
-    const text = await res.text();
     const parsed: unknown = text ? JSON.parse(text) : {};
     if (res.ok) return parsed as T;
     const payload = parsed as { error?: string; kind?: string };
@@ -81,11 +128,11 @@ export class XBrowserClient {
   }
 
   status(): Promise<XBrowserStatus> {
-    return this.call<XBrowserStatus>("status", {}, 15_000);
+    return this.call<XBrowserStatus>("status");
   }
 
   me(): Promise<{ username: string }> {
-    return this.call<{ username: string }>("me", {}, 90_000);
+    return this.call<{ username: string }>("me");
   }
 
   publish(text: string, imagePath: string | null): Promise<XBrowserSendResult> {
@@ -117,7 +164,7 @@ export class XBrowserClient {
   }
 
   metrics(postId: string): Promise<{ metrics: Record<string, number> }> {
-    return this.call("metrics", { postId }, 90_000);
+    return this.call("metrics", { postId });
   }
 }
 

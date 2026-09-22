@@ -13,6 +13,12 @@ export class XLayoutChanged extends Error {}
 export const X_HOME = "https://x.com/home";
 export const X_COMPOSE = "https://x.com/compose/post";
 export const X_NOTIFICATIONS = "https://x.com/notifications/mentions";
+/**
+ * Every navigation waits for domcontentloaded, not for a painted page; longer than this is no longer
+ * "slow", it is broken. The caller's per-action budgets in src/x/browser/client.ts add up the waits
+ * spelled out in this file, so a number raised here must be raised there too.
+ */
+export const NAV_MS = 30_000;
 const LOGIN_PATH = /\/(i\/flow\/login|i\/jf\/onboarding|login|account\/access)/;
 
 export async function openXBrowser(): Promise<BrowserContext> {
@@ -111,7 +117,7 @@ export async function assertLoggedIn(page: Page, what: string): Promise<void> {
   let state = await loginState(page);
   if (state === "unknown") {
     // Give the app time to actually paint before deciding we do not recognise the page.
-    await page.waitForLoadState("load", { timeout: 20_000 }).catch(() => {});
+    await page.waitForLoadState("load", { timeout: 10_000 }).catch(() => {});
     state = await loginState(page);
   }
   if (state === "no") throw new XLoginRequired(`X просит войти — ${what}.`);
@@ -119,7 +125,7 @@ export async function assertLoggedIn(page: Page, what: string): Promise<void> {
 }
 
 export async function goHome(page: Page): Promise<void> {
-  await page.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await page.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(page, "лента не открылась");
 }
 
@@ -128,30 +134,31 @@ export async function goHome(page: Page): Promise<void> {
  * switched accounts must not keep posting under the old name.
  */
 export async function readIdentity(page: Page): Promise<{ username: string } | null> {
-  if (!/^https:\/\/x\.com\//.test(page.url())) await page.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  if (!/^https:\/\/x\.com\//.test(page.url())) await page.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   if (await showsLoginForm(page)) return null;
 
   // The avatar in the side navigation carries the handle in its test id — present on every page
-  // of the signed-in app, so no extra navigation is needed.
-  const avatar = await page.locator('[data-testid^="UserAvatar-Container-"]').first().getAttribute("data-testid", { timeout: 10_000 }).catch(() => null);
+  // of the signed-in app, so no extra navigation is needed. The three side-nav reads below run on a
+  // page that is already open and recognised, so they get seconds, not the timeouts of a fresh load.
+  const avatar = await page.locator('[data-testid^="UserAvatar-Container-"]').first().getAttribute("data-testid", { timeout: 5_000 }).catch(() => null);
   const fromAvatar = avatar?.replace("UserAvatar-Container-", "").trim();
   if (fromAvatar && /^[A-Za-z0-9_]{1,15}$/.test(fromAvatar)) return { username: fromAvatar };
 
-  const switcher = await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').first().innerText({ timeout: 5_000 }).catch(() => "");
+  const switcher = await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').first().innerText({ timeout: 3_000 }).catch(() => "");
   const fromSwitcher = switcher.match(/@([A-Za-z0-9_]{1,15})\b/)?.[1];
   if (fromSwitcher) return { username: fromSwitcher };
 
-  const profileHref = await page.locator('[data-testid="AppTabBar_Profile_Link"]').first().getAttribute("href").catch(() => null);
+  const profileHref = await page.locator('[data-testid="AppTabBar_Profile_Link"]').first().getAttribute("href", { timeout: 3_000 }).catch(() => null);
   const fromProfile = profileHref?.match(/^\/([A-Za-z0-9_]{1,15})$/)?.[1];
   if (fromProfile) return { username: fromProfile };
 
-  await page.goto("https://x.com/settings/account", { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await page.goto("https://x.com/settings/account", { waitUntil: "domcontentloaded", timeout: NAV_MS });
   if (await showsLoginForm(page)) return null;
-  const body = await page.locator("body").innerText({ timeout: 15_000 }).catch(() => "");
+  const body = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
   const handle = body.match(/@([A-Za-z0-9_]{1,15})\b/)?.[1];
   if (handle) return { username: handle };
   // Fall back to the profile link in the navigation, whose href IS the handle.
-  await page.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await page.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   const reserved = ["home", "explore", "notifications", "messages", "settings", "i", "compose", "search", "bookmarks", "jobs"];
   const links = page.locator('a[href^="/"]');
   for (let i = 0, n = Math.min(await links.count(), 60); i < n; i++) {
@@ -164,9 +171,10 @@ export async function readIdentity(page: Page): Promise<{ username: string } | n
 
 /** Type and then read back: X must hold the whole text, or nothing is sent. */
 export async function fillComposer(page: Page, text: string): Promise<void> {
-  // Точный селектор ищем дольше остальных: на странице есть и другие поля ввода (чат Grok),
-  // и промах здесь означает пост, набранный не туда.
-  const { locator } = await firstVisible(page, COMPOSER, 45_000);
+  // Точный селектор пробуем первым: на странице есть и другие поля ввода (чат Grok), и промах
+  // здесь означает пост, набранный не туда. Страница уже открыта и опознана, поэтому ждать поле
+  // дольше двадцати секунд бессмысленно — его там просто нет.
+  const { locator } = await firstVisible(page, COMPOSER, 20_000);
   await locator.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Backspace");
@@ -178,12 +186,13 @@ export async function fillComposer(page: Page, text: string): Promise<void> {
 
 export async function attachImage(page: Page, file: string): Promise<void> {
   const input = page.locator('input[type="file"]').first();
-  await input.waitFor({ state: "attached", timeout: 15_000 }).catch(() => {
+  await input.waitFor({ state: "attached", timeout: 10_000 }).catch(() => {
     throw new XLayoutChanged("X не показал поле для картинки — публикация остановлена.");
   });
   await input.setInputFiles(file);
   const preview = page.locator('[data-testid="attachments"] img, img[src^="blob:"]').first();
-  await preview.waitFor({ state: "visible", timeout: 60_000 }).catch(() => {
+  // Превью рисуется из локального blob, ещё до отправки файла на сервер: полминуты тут с запасом.
+  await preview.waitFor({ state: "visible", timeout: 30_000 }).catch(() => {
     throw new XLayoutChanged("X не показал прикреплённую картинку — публикация остановлена.");
   });
 }
@@ -201,8 +210,10 @@ async function submitReady(locator: Locator): Promise<boolean> {
 }
 
 export async function submitComposer(page: Page): Promise<void> {
-  const { locator } = await firstVisible(page, SUBMIT, 30_000);
-  const deadline = Date.now() + 60_000;
+  // Кнопка живёт в том же окне, что и уже заполненное поле: не нашли её за десять секунд — не найдём.
+  // Ожить она может не сразу — X ждёт загрузку картинки, — но полминуты хватает и на это.
+  const { locator } = await firstVisible(page, SUBMIT, 10_000);
+  const deadline = Date.now() + 30_000;
   while (!(await submitReady(locator))) {
     if (Date.now() > deadline) throw new XLayoutChanged("Кнопка публикации в X осталась неактивной — X не принял текст поста.");
     await page.waitForTimeout(500);
@@ -210,17 +221,21 @@ export async function submitComposer(page: Page): Promise<void> {
   await locator.click();
 }
 
-/** X shows a toast linking to the fresh post; that link is the cheapest proof it went out. */
+/**
+ * X shows a toast linking to the fresh post; that link is the cheapest proof it went out. It pops up
+ * within seconds of the click or not at all, so waiting longer only delays the timeline probe that
+ * has to answer anyway.
+ */
 export async function publishedIdFromToast(page: Page): Promise<string | null> {
   const toast = page.locator('[data-testid="toast"], [role="alert"]').first();
-  await toast.waitFor({ state: "visible", timeout: 45_000 }).catch(() => null);
-  const href = await toast.locator('a[href*="/status/"]').first().getAttribute("href", { timeout: 5_000 }).catch(() => null);
+  await toast.waitFor({ state: "visible", timeout: 15_000 }).catch(() => null);
+  const href = await toast.locator('a[href*="/status/"]').first().getAttribute("href", { timeout: 3_000 }).catch(() => null);
   return href?.match(/\/status\/(\d+)/)?.[1] ?? null;
 }
 
 /** Open someone's post and put the cursor in the reply box under it. */
 export async function openReplyBox(page: Page, postId: string): Promise<void> {
-  await page.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await page.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(page, "ответ не отправлен");
   try {
     await firstVisible(page, COMPOSER, 5_000);
@@ -267,7 +282,7 @@ export async function scrapeConversation(page: Page, limit: number): Promise<Scr
 /** Works on any timeline: profile, search results, notifications. */
 export async function scrapeTimeline(page: Page | Locator, limit: number): Promise<ScrapedPost[]> {
   const articles = page.locator("article");
-  await articles.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => null);
+  await articles.first().waitFor({ state: "visible", timeout: 15_000 }).catch(() => null);
   const out: ScrapedPost[] = [];
   const seen = new Set<string>();
   for (let i = 0, n = Math.min(await articles.count(), limit * 3); i < n && out.length < limit; i++) {
@@ -326,7 +341,7 @@ const plainText = (s: string): string =>
     .toLowerCase();
 
 export async function findOwnPostByText(page: Page, username: string, text: string, since: Date): Promise<ScrapedPost | null> {
-  await page.goto(`https://x.com/${username}/with_replies`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await page.goto(`https://x.com/${username}/with_replies`, { waitUntil: "domcontentloaded", timeout: NAV_MS });
   await assertLoggedIn(page, "проверить публикацию не удалось");
   const wanted = plainText(text).slice(0, 80);
   const posts = await scrapeTimeline(page, 30);

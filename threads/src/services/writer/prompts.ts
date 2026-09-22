@@ -62,6 +62,65 @@ export function recentEndings(texts: string[], limit = 8): string[] {
   return out;
 }
 
+/**
+ * Первая фраза поста. Концовки мы уже не повторяем, а начала никто не проверял — и лента получилась
+ * из постов, начинающихся одинаково («Вот честно говоря…»). Просить «пиши разнообразно» бесполезно:
+ * модель не помнит предыдущие посты. Поэтому показываем ей ровно те начала, которые уже были.
+ */
+export function openingOf(text: string, maxChars = 90): string {
+  const t = withoutLinks(text).replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  const first = (t.match(/[^.!?…]+[.!?…]*/u) ?? [t])[0]!.trim();
+  return first.length > maxChars ? `${first.slice(0, maxChars).trim()}…` : first;
+}
+
+export function recentOpenings(texts: string[], limit = 8): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const text of texts) {
+    const opening = openingOf(text);
+    const key = opening.toLowerCase();
+    if (!opening || seen.has(key)) continue;
+    seen.add(key);
+    out.push(opening);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** Первые два-три слова: по ним видно, что пост начинается той же конструкцией. */
+export function sameOpening(a: string, b: string): boolean {
+  const head = (s: string) =>
+    withoutLinks(s)
+      .toLowerCase()
+      .match(/[\p{L}\p{N}]+/gu)
+      ?.slice(0, 3)
+      .join(" ") ?? "";
+  const x = head(a);
+  return Boolean(x) && x === head(b);
+}
+
+/**
+ * Как начать пост. Перечислять запреты бессмысленно — показываем набор разных заходов, чтобы форма
+ * менялась от поста к посту, и напоминаем, чем начинались последние.
+ */
+export function openingPrompt(recent: string[]): string {
+  const lines = [
+    "НАЧАЛО ПОСТА:",
+    "- Заходы должны быть разными. Иногда сразу факт или цифра, иногда наблюдение, иногда несогласие,",
+    "  иногда короткий вопрос по делу, иногда сцена («сижу, смотрю в стакан — а там пусто»).",
+    "- Не начинай два поста подряд одинаковой конструкцией и одинаковыми словами.",
+    "- «Честно говоря», «Вот честно говоря», «На самом деле» — это твои живые обороты, но не дежурный",
+    "  запев: в начале поста они уместны редко, а подряд — никогда.",
+    "- Не начинай с «Сегодня», «Итак», «Давайте разберёмся» и прочего разгона: первая фраза уже по делу.",
+  ];
+  if (recent.length) {
+    lines.push("Мои последние начала (так начинать нельзя — ни этими словами, ни этой конструкцией):");
+    for (const r of recent) lines.push(`- ${r}`);
+  }
+  return lines.join("\n");
+}
+
 /** What the profile actually holds, so the phrase about it is true. The addresses stay out of the prompt. */
 const PROFILE_CONTENT =
   "в профиле собраны все мои ссылки: Hyperliquid, где я торгую, и мой телеграм-канал — там мысли и разборы, золото и валютные пары и сделки в реальном времени";

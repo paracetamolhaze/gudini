@@ -143,6 +143,8 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
     if (!["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
+    const paused = await loadSettings(true);
+    if (paused.killSwitch) throw new HttpError(409, "Автоматика на паузе — запланированный пост не уйдёт. Сначала нажмите «Возобновить».");
     const row = await updateDraft(id, { status: "SCHEDULED", scheduled_at: when, review_reason: null, approved_by_user: true });
     await audit("POST_SCHEDULED", `Публикация назначена на ${when.toISOString()}`, { draftId: id, candidateId: draft.candidate_id });
     return { draft: row };
@@ -153,6 +155,7 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
     if (!["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED", "FAILED", "PARTIAL"].includes(draft.status)) throw new HttpError(409, `draft is ${draft.status}`);
+    // Пауза останавливает автоматику, но не эту кнопку: владелец смотрит на текст и решает сам.
     // A partially published post keeps its status: the publisher only sends the platforms that are still missing.
     if (draft.status === "PARTIAL") await updateDraft(id, { approved_by_user: true });
     else await updateDraft(id, { status: "APPROVED", scheduled_at: new Date(), review_reason: null, error: null, approved_by_user: true });
@@ -169,9 +172,11 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     const draft = await getDraft(id);
     if (!draft) throw new HttpError(404, "draft not found");
     await query(`INSERT INTO draft_feedback (draft_id, rating, note) VALUES ($1,$2,$3)`, [id, parsed.data.rating, parsed.data.note ?? null]);
-    // A liked draft becomes a style example candidate (rating 4) so the voice improves over time.
+    // A liked draft becomes a style example candidate so the voice improves over time. Rating 3, not
+    // 4: it is still the model's own output and must never outrank the owner's real posts (rating 5),
+    // otherwise after a handful of likes the writers only ever see themselves.
     if (parsed.data.rating === "LIKE") {
-      await query(`INSERT INTO style_examples (text, rating, source, enabled, tags) VALUES ($1, 4, 'liked_draft', true, $2)`, [draft.text, [draft.type.toLowerCase()]]);
+      await query(`INSERT INTO style_examples (text, rating, source, enabled, tags) VALUES ($1, 3, 'liked_draft', true, $2)`, [draft.text, [draft.type.toLowerCase()]]);
     }
     return { ok: true };
   });

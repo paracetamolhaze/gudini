@@ -16,7 +16,7 @@ type Settings = {
   sources: { defaultPollMinutes: number; searchPollMinutes: number; searchKeywords: string[]; profileFallbackKeywords: string[] };
   engagement: { watchKeywords: string[]; minimumScore: number; pollMinutes: number };
   replies: { pollMinutes: number; lookbackHours: number; maxUnansweredPerPost: number; minConfidence: number };
-  images: { retries: number; minFontPx: number; maxImagesPerPost: number };
+  images: { mode: "off" | "original" | "translate"; retries: number; minFontPx: number; maxImagesPerPost: number };
   expiry: { breakingHours: number; normalHours: number; evergreenHours: number };
   writer: { variantsPerDraft: number; maxStyleExamples: number; language: string };
   analytics: { insightsPollMinutes: number; snapshotDays: number };
@@ -85,7 +85,13 @@ export default function SettingsPage({ onSaved }: { onSaved: () => void }) {
             <Toggle checked={s.flags.autoPost} onChange={(v) => set("flags", { autoPost: v })} label="AUTO_POST_ENABLED — автопубликация в режиме AUTO" />
             <Toggle checked={s.flags.autoOwnReplies} onChange={(v) => set("flags", { autoOwnReplies: v })} label="AUTO_OWN_REPLIES — автоответы под нашими постами" />
             <Toggle checked={s.flags.autoPublicReplies} onChange={(v) => set("flags", { autoPublicReplies: v })} label="AUTO_PUBLIC_REPLIES — автоответы на чужие посты" />
-            <Toggle checked={s.flags.imageTranslation} onChange={(v) => set("flags", { imageTranslation: v })} label="IMAGE_TRANSLATION_ENABLED — перевод картинок" />
+            <Field label="Картинки в постах" note="«как есть» работает всегда; «перевод надписей» требует модели, умеющей смотреть картинки — локальный мост Claude этого не умеет">
+              <select value={s.images.mode} onChange={(e) => set("images", { mode: e.target.value as "off" | "original" | "translate" })}>
+                <option value="original">брать картинку источника как есть</option>
+                <option value="translate">переводить надписи на картинке</option>
+                <option value="off">посты без картинок</option>
+              </select>
+            </Field>
           </div>
         </Card>
         <Card title="Модели (provider:model)">

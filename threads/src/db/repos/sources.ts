@@ -64,7 +64,8 @@ export async function insertSource(input: SourceInput): Promise<SourceRow> {
       input.priority ?? 2,
       input.enabled ?? true,
       input.trust_score ?? 60,
-      input.translate_images ?? false,
+      // Картинка из публикации — нормальная часть поста; выключается галочкой у источника.
+      input.translate_images ?? true,
       input.minimum_score ?? null,
       input.keywords ?? [],
       input.poll_minutes ?? 15,

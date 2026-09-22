@@ -83,6 +83,14 @@ export const settingsSchema = z.object({
     minConfidence: z.number().min(0).max(100),
   }),
   images: z.object({
+    /**
+     * Что делать с картинкой исходной публикации:
+     *   original  — взять как есть (модель не нужна, работает всегда);
+     *   translate — перерисовать надписи по-русски (нужен провайдер с распознаванием картинок:
+     *               локальный мост Claude принимает только текст и такую задачу не выполнит);
+     *   off       — посты без картинок.
+     */
+    mode: z.enum(["off", "original", "translate"]),
     retries: z.number().int().min(0).max(3),
     minFontPx: z.number().int().min(8),
     maxImagesPerPost: z.number().int().min(1).max(10),
@@ -222,7 +230,7 @@ export function defaultSettings(): Settings {
       pollMinutes: 30,
     },
     replies: { pollMinutes: 5, lookbackHours: 72, maxUnansweredPerPost: 20, minConfidence: 85 },
-    images: { retries: 1, minFontPx: 14, maxImagesPerPost: 4 },
+    images: { mode: "original", retries: 1, minFontPx: 14, maxImagesPerPost: 4 },
     expiry: { breakingHours: 24, normalHours: 72, evergreenHours: 24 * 14 },
     writer: { variantsPerDraft: 2, maxStyleExamples: 6, language: "ru" },
     analytics: { insightsPollMinutes: 180, snapshotDays: 14 },

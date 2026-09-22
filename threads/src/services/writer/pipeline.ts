@@ -109,10 +109,10 @@ export async function generateDraftForCandidate(candidateId: string, opts: { for
     await audit("POST_VALIDATION_FAILED", `Все варианты нарушили правила: ${composed.reviewReasons.join("; ")}`, { candidateId, draftId: draft.id }, null, "warn");
   }
 
-  // Images: only when the source asks for it and the feature flag is on; otherwise the draft is text-only.
-  const wantsImages = settings.flags.imageTranslation && (source?.translate_images ?? false) && (sourcePost?.media_json.some((m) => m.type === "image") ?? false);
+  // Картинка берётся, если режим это разрешает, источник отмечен и в публикации она вообще есть.
+  const wantsImages = settings.images.mode !== "off" && (source?.translate_images ?? false) && (sourcePost?.media_json.some((m) => m.type === "image") ?? false);
   if (wantsImages && sourcePost) {
-    await enqueue("media", "media:translate", { draftId: draft.id, sourcePostId: sourcePost.id }, { priority: PRIORITY[candidate.priority], jobId: `media-${draft.id}` });
+    await enqueue("media", "media:attach", { draftId: draft.id, sourcePostId: sourcePost.id }, { priority: PRIORITY[candidate.priority], jobId: `media-${draft.id}` });
   }
   return { kind: "draft", draftId: draft.id, status };
 }

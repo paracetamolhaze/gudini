@@ -28,7 +28,7 @@ type SourcePost = { id: string; author_username: string; text: string; permalink
 export default function Sources() {
   const { data, error, reload } = useFetch<{ sources: Source[] }>("/sources", { intervalMs: 20_000 });
   const act = useAction();
-  const [form, setForm] = useState({ type: "THREADS_PROFILE", username: "", url: "", name: "", priority: 2, language: "en", translate_images: false, minimum_score: "", keywords: "" });
+  const [form, setForm] = useState({ type: "THREADS_PROFILE", username: "", url: "", name: "", priority: 2, language: "en", translate_images: true, minimum_score: "", keywords: "" });
   const [open, setOpen] = useState<string | null>(null);
   const posts = useFetch<{ posts: SourcePost[] }>(open ? `/sources/${open}/posts?limit=20` : null);
 
@@ -74,7 +74,7 @@ export default function Sources() {
           <Field label="Язык"><input value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })} /></Field>
           <Field label="Минимальный балл (пусто = общий порог)"><input value={form.minimum_score} onChange={(e) => setForm({ ...form, minimum_score: e.target.value })} placeholder="65" /></Field>
           <Field label="Ключевые слова для fallback-поиска" note="через запятую; используются, если profile_posts недоступен"><input value={form.keywords} onChange={(e) => setForm({ ...form, keywords: e.target.value })} placeholder="bitcoin, etf, eth" /></Field>
-          <Field label=" "><Toggle checked={form.translate_images} onChange={(v) => setForm({ ...form, translate_images: v })} label="Переводить картинки" /></Field>
+          <Field label=" "><Toggle checked={form.translate_images} onChange={(v) => setForm({ ...form, translate_images: v })} label="Брать картинки из этого источника" /></Field>
         </div>
         <div className="row" style={{ marginTop: 10 }}>
           <Button tone="primary" busy={act.busy === "Добавить источник"} onClick={() => void add()}>Добавить</Button>

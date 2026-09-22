@@ -99,6 +99,50 @@ export async function translateImageBuffer(
   return { status: qa.passed ? "QA_PASSED" : "NEEDS_REVIEW", final, blocks: rendered.blocks, sourceOcr, finalOcr, qa };
 }
 
+/**
+ * Картинка исходной публикации как есть: скачать и приложить к посту. Ни распознавания, ни перевода,
+ * ни модели — поэтому работает и на локальном мосте Claude, который умеет только текст.
+ *
+ * Threads скачивает картинку по публичному адресу, X загружает файл, поэтому обеим площадкам нужен
+ * один и тот же готовый файл: кладём его туда же, куда кладёт переводчик, и ставим статус
+ * QA_PASSED — проверять здесь нечего, мы ничего не меняли.
+ */
+export async function attachOriginalForDraft(draftId: string, sourcePostId: string): Promise<{ assetId: string | null; status: MediaStatus; reason?: string }> {
+  const draft = await getDraft(draftId);
+  if (!draft) return { assetId: null, status: "SKIPPED", reason: "draft not found" };
+  if (["PUBLISHED", "PUBLISHING", "REJECTED", "EXPIRED"].includes(draft.status)) return { assetId: null, status: "SKIPPED", reason: `draft is ${draft.status}` };
+  const post = await getSourcePost(sourcePostId);
+  const image = post?.media_json.find((m) => m.type === "image");
+  if (!post || !image) return { assetId: null, status: "SKIPPED", reason: "source has no image" };
+  const settings = await loadSettings();
+  if (settings.images.mode !== "original") return { assetId: null, status: "SKIPPED", reason: `режим картинок: ${settings.images.mode}` };
+
+  const existing = await one<MediaAssetRow>(`SELECT * FROM media_assets WHERE draft_id = $1 ORDER BY created_at ASC LIMIT 1`, [draftId]);
+  if (existing?.final_path && existing.status === "QA_PASSED") return { assetId: existing.id, status: existing.status };
+  const asset = existing ?? (await one<MediaAssetRow>(`INSERT INTO media_assets (source_post_id, draft_id, original_url, media_type, status) VALUES ($1,$2,$3,'image','PENDING') RETURNING *`, [post.id, draftId, image.url]));
+  if (!asset) throw new Error("insert media asset failed");
+  const id = asset.id;
+  const dir = mediaDir(id);
+  await setAsset(id, { attempts: asset.attempts + 1, error: null });
+  try {
+    const dl = await downloadImage(image.url, { dir });
+    await setAsset(id, { status: "DOWNLOADED", local_path: dl.path, width: dl.width, height: dl.height });
+    // Threads принимает JPEG по ссылке; приводим к нему один раз, чтобы обе площадки брали один файл.
+    await mkdir(dir, { recursive: true });
+    const finalPath = path.join(dir, "final.jpg");
+    await writeFile(finalPath, await sharp(await readFile(dl.path)).jpeg({ quality: 90 }).toBuffer());
+    await setAsset(id, { status: "QA_PASSED", final_path: finalPath, translated_path: finalPath });
+    await updateDraft(draftId, { image_asset_id: id });
+    await audit("IMAGE_DOWNLOADED", `Картинка из источника приложена к посту (${dl.width}×${dl.height})`, { mediaAssetId: id, draftId }, { url: dl.finalUrl });
+    return { assetId: id, status: "QA_PASSED" };
+  } catch (err) {
+    const reason = errorMessage(err);
+    await setAsset(id, { status: "FAILED", error: reason });
+    await audit("IMAGE_FAILED", `Картинку не удалось приложить: ${reason}`, { mediaAssetId: id, draftId }, null, "warn");
+    return { assetId: id, status: "FAILED", reason };
+  }
+}
+
 export async function translateImageForDraft(draftId: string, sourcePostId: string): Promise<{ assetId: string | null; status: MediaStatus; reason?: string }> {
   const draft = await getDraft(draftId);
   if (!draft) return { assetId: null, status: "SKIPPED", reason: "draft not found" };
@@ -107,7 +151,7 @@ export async function translateImageForDraft(draftId: string, sourcePostId: stri
   const image = post?.media_json.find((m) => m.type === "image");
   if (!post || !image) return { assetId: null, status: "SKIPPED", reason: "source has no image" };
   const settings = await loadSettings();
-  if (!settings.flags.imageTranslation) return { assetId: null, status: "SKIPPED", reason: "IMAGE_TRANSLATION_ENABLED is off" };
+  if (settings.images.mode !== "translate") return { assetId: null, status: "SKIPPED", reason: `режим картинок: ${settings.images.mode}` };
 
   let asset = await one<MediaAssetRow>(`SELECT * FROM media_assets WHERE draft_id = $1 ORDER BY created_at ASC LIMIT 1`, [draftId]);
   if (asset && (asset.status === "QA_PASSED" || asset.status === "NEEDS_REVIEW") && asset.final_path) return { assetId: asset.id, status: asset.status };

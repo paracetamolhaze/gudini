@@ -49,10 +49,8 @@ export async function firstVisible(scope: Page | Locator, strategies: Strategy[]
 
 const COMPOSER: Strategy[] = [
   { name: "testid:tweetTextarea_0", find: (s) => s.locator('[data-testid="tweetTextarea_0"]') },
-  { name: "testid:tweetTextarea*", find: (s) => s.locator('[data-testid^="tweetTextarea"]') },
+  { name: "testid:tweetTextarea*", find: (s) => s.locator('[data-testid^="tweetTextarea"][contenteditable="true"]') },
   { name: "role:textbox[post]", find: (s) => s.getByRole("textbox", { name: /post text|what.s happening|что происходит|новый пост/i }) },
-  { name: "contenteditable:textbox", find: (s) => s.locator('div[contenteditable="true"][role="textbox"]') },
-  { name: "contenteditable:any", find: (s) => s.locator('[contenteditable="true"]') },
 ];
 
 const SUBMIT: Strategy[] = [
@@ -166,7 +164,9 @@ export async function readIdentity(page: Page): Promise<{ username: string } | n
 
 /** Type and then read back: X must hold the whole text, or nothing is sent. */
 export async function fillComposer(page: Page, text: string): Promise<void> {
-  const { locator } = await firstVisible(page, COMPOSER, 30_000);
+  // Точный селектор ищем дольше остальных: на странице есть и другие поля ввода (чат Grok),
+  // и промах здесь означает пост, набранный не туда.
+  const { locator } = await firstVisible(page, COMPOSER, 45_000);
   await locator.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Backspace");
@@ -189,11 +189,22 @@ export async function attachImage(page: Page, file: string): Promise<void> {
 }
 
 /** Caller must record "submitted" BEFORE calling: clicking this is not idempotent. */
+/**
+ * X рисует кнопку публикации не формой, а div с aria-disabled, поэтому Playwright-овское isEnabled()
+ * у неё всегда true. Пустой пост давал живой клик по мёртвой кнопке: «отправили» — и ни поста,
+ * ни ошибки. Спрашиваем сам X, готов ли он отправлять.
+ */
+async function submitReady(locator: Locator): Promise<boolean> {
+  if (!(await locator.isEnabled())) return false;
+  const aria = await locator.getAttribute("aria-disabled").catch(() => null);
+  return aria !== "true";
+}
+
 export async function submitComposer(page: Page): Promise<void> {
   const { locator } = await firstVisible(page, SUBMIT, 30_000);
   const deadline = Date.now() + 60_000;
-  while (!(await locator.isEnabled())) {
-    if (Date.now() > deadline) throw new XLayoutChanged("Кнопка публикации в X осталась неактивной.");
+  while (!(await submitReady(locator))) {
+    if (Date.now() > deadline) throw new XLayoutChanged("Кнопка публикации в X осталась неактивной — X не принял текст поста.");
     await page.waitForTimeout(500);
   }
   await locator.click();

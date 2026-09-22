@@ -8,6 +8,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Playwright нужен только контейнеру браузера X; здесь его движки качать не надо.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 

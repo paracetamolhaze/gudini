@@ -110,9 +110,16 @@ export const settingsSchema = z.object({
       /** 280 without Premium; Premium accounts may raise it. */
       maxChars: z.number().int().min(100).max(25_000),
       language: z.enum(["ru", "en"]),
-      /** off — do not look at other people's posts; manual — draft a reply and let the owner post it by hand; quote — publish a quote post. */
-      engagementMode: z.enum(["off", "manual", "quote"]),
-      /** Posts X may bill us for reading per day (search + mentions). 0 = never read. */
+      /**
+       * off — do not look at other people's posts at all; manual — draft a reply and let the owner
+       * post it by hand; quote — publish a quote post; auto — answer under the post itself, which
+       * only the browser transport can do.
+       */
+      engagementMode: z.enum(["off", "manual", "quote", "auto"]),
+      /**
+       * How many of other people's posts we may read per day. On the paid API this was a bill; through
+       * our own browser it is a politeness limit, because X bans accounts that read like scripts.
+       */
       dailyReadBudget: z.number().int().min(0).max(100_000),
       /** A post with a link costs ~13x more on X, so links are stripped unless allowed. */
       allowLinks: z.boolean(),

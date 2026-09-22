@@ -11,6 +11,7 @@ import { registerPublishingRoutes } from "./publishing.js";
 import { registerReplyRoutes } from "./replies.js";
 import { registerAnalyticsRoutes } from "./analytics.js";
 import { registerTradeRoutes } from "./trades.js";
+import { registerXBrowserRoutes } from "./xBrowser.js";
 
 /** All JSON API routes live under `${prefix}/api`. Modules are added per phase. */
 export async function registerApiRoutes(app: FastifyInstance, api: string, prefix: string = api.replace(/\/api$/, "")): Promise<void> {
@@ -26,4 +27,5 @@ export async function registerApiRoutes(app: FastifyInstance, api: string, prefi
   registerReplyRoutes(app, api);
   registerAnalyticsRoutes(app, api);
   registerTradeRoutes(app, api);
+  registerXBrowserRoutes(app, api);
 }

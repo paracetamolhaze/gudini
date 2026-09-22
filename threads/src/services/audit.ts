@@ -56,6 +56,10 @@ export const AUDIT_EVENTS = [
   "TRADES_SYNCED",
   "TRADE_SKIPPED",
   "MARKET_MOVE",
+  // Вход в X делает владелец сам в окне браузера; в журнале остаётся факт, но не то, что он набирал.
+  "X_LOGIN_OPENED",
+  "X_CONNECTED",
+  "X_DISCONNECTED",
 ] as const;
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 

@@ -364,3 +364,13 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .check code { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
 @media (max-width: 600px) { .card { padding: 16px; } .compose-actions .btn { flex: 1; } .post-thumb { width: 96px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Окно входа в X: живой кадр браузера из контейнера и ручной ввод по нему. */
+.xconn { margin-top: 12px; }
+.xconn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.xconn-window { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
+.xconn-url { font-family: var(--mono, monospace); overflow-wrap: anywhere; margin-bottom: 8px; }
+.xconn-frame { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--border); cursor: crosshair; }
+.xconn-input { display: flex; gap: 8px; margin-top: 10px; }
+.xconn-input input { flex: 1; }
+.xconn-keys { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

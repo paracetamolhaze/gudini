@@ -18,7 +18,9 @@
     "test": "tsx --test tests/unit/*.test.ts",
     "test:integration": "tsx --test tests/integration/*.test.ts",
     "backup": "node scripts/backup.mjs",
-    "bridge": "node scripts/claude-bridge.mjs"
+    "bridge": "node scripts/claude-bridge.mjs",
+    "start:xbrowser": "node dist/src/xbrowser.js",
+    "dev:xbrowser": "tsx watch src/xbrowser.ts"
   },
   "engines": {
     "node": ">=22"
@@ -31,6 +33,7 @@
     "opentype.js": "^2.0.0",
     "pg": "^8.16.0",
     "pino": "^9.7.0",
+    "playwright": "^1.63.0",
     "sharp": "^0.34.3",
     "zod": "^4.0.0"
   },

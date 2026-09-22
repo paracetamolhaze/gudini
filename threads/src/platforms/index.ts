@@ -1,22 +1,33 @@
+import { env } from "../config/env.js";
 import type { Settings } from "../config/settings.js";
 import { threadsAdapter } from "./threads.js";
 import { xAdapter } from "./x.js";
+import { xBrowserAdapter } from "./xBrowser.js";
 import { PLATFORM_IDS, type PlatformAdapter, type PlatformId } from "./types.js";
 
+/**
+ * Which X we talk to. The browser transport is the normal one: our own Chromium holds the owner's
+ * login, so there is no bill and no developer keys. The paid API adapter stays reachable through
+ * X_TRANSPORT=api for the case where the browser cannot be used. Resolved on first use, not at
+ * import: reading the environment while modules load would make every importer need a full .env.
+ */
+const defaultAdapter = (id: PlatformId): PlatformAdapter => (id === "threads" ? threadsAdapter : env().X_TRANSPORT === "api" ? xAdapter : xBrowserAdapter);
+
 /** Registry of outlets. Tests swap an adapter for a fake; production code never names a concrete client. */
-const adapters = new Map<PlatformId, PlatformAdapter>([
-  ["threads", threadsAdapter],
-  ["x", xAdapter],
-]);
+const adapters = new Map<PlatformId, PlatformAdapter>();
 
 export function platform(id: PlatformId): PlatformAdapter {
-  const a = adapters.get(id);
-  if (!a) throw new Error(`unknown platform ${id}`);
-  return a;
+  const existing = adapters.get(id);
+  if (existing) return existing;
+  if (!(PLATFORM_IDS as readonly string[]).includes(id)) throw new Error(`unknown platform ${id}`);
+  const fresh = defaultAdapter(id);
+  adapters.set(id, fresh);
+  return fresh;
 }
 
 export function setPlatformForTests(id: PlatformId, adapter: PlatformAdapter | null): void {
-  adapters.set(id, adapter ?? (id === "threads" ? threadsAdapter : xAdapter));
+  if (adapter) adapters.set(id, adapter);
+  else adapters.delete(id);
 }
 
 export function platformEnabled(settings: Settings, id: PlatformId): boolean {

@@ -11,9 +11,9 @@ function todo(o: OverviewData): Array<{ key: string; title: string; hint: string
   const items: Array<{ key: string; title: string; hint: string }> = [];
   const t = o.platforms.find((p) => p.id === "threads");
   const x = o.platforms.find((p) => p.id === "x");
-  if (!o.readiness.llmKey) items.push({ key: "llm", title: "Ключ ИИ", hint: "OPENROUTER_API_KEY в threads/.env — без него не пишутся посты и ответы." });
+  if (!o.readiness.llmKey) items.push({ key: "llm", title: "Подключить ИИ для текстов", hint: "Тексты пишет Claude через мост на этом компьютере: LLM_PROVIDER=claude-bridge и запущенный мост. Без него не пишутся посты и ответы." });
   if (t?.enabled && !t.health.ok) items.push({ key: "threads", title: "Подключить Threads", hint: t.configured ? t.health.message : "THREADS_ACCESS_TOKEN в threads/.env (Meta for Developers → Threads API → User Token Generator)." });
-  if (x?.enabled && !x.health.ok) items.push({ key: "x", title: "Подключить X", hint: x.configured ? x.health.message : "Четыре ключа X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET в threads/.env (приложение с правами Read and write)." });
+  if (x?.enabled && !x.health.ok) items.push({ key: "x", title: "Подключить X", hint: x.configured ? x.health.message : "Ключи не нужны: Настройки → Подключения → «Подключить X», войдите в аккаунт в окне браузера." });
   if (o.hyperliquid.enabled && !o.hyperliquid.walletValid) items.push({ key: "hl", title: "Адрес кошелька Hyperliquid", hint: o.hyperliquid.walletSet ? "Адрес должен быть вида 0x… из 42 символов." : "Только публичный адрес 0x… — приватный ключ не нужен и нигде не спрашивается. Настройки → Сделки." });
   if (!o.persona.filled) items.push({ key: "persona", title: "Рассказать о себе", hint: "Имя, пара фраз о себе и свои правила — посты и ответы пишутся от вашего лица. Настройки → Голос." });
   if (!o.readiness.publicBaseUrl) items.push({ key: "url", title: "Публичный адрес сайта", hint: "PUBLIC_BASE_URL нужен, чтобы Threads мог скачать карточку сделки." });

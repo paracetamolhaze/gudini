@@ -4,13 +4,14 @@ import { put } from "../api";
 import { Button, Card, ErrorBox, Field, Notice, Toggle } from "../ui";
 import { Icon, PlatformMark } from "../kit";
 import type { OverviewData } from "../App";
+import { XConnect, type XStatus } from "../xconnect";
 
 type S = {
   mode: string;
   dryRun: boolean;
   killSwitch: boolean;
   flags: { autoOwnReplies: boolean; autoPublicReplies: boolean; autoPost: boolean };
-  platforms: { threads: { enabled: boolean; maxChars: number }; x: { enabled: boolean; maxChars: number; language: "ru" | "en"; engagementMode: "off" | "manual" | "quote"; dailyReadBudget: number; allowLinks: boolean; engagementQuery: string } };
+  platforms: { threads: { enabled: boolean; maxChars: number }; x: { enabled: boolean; maxChars: number; language: "ru" | "en"; engagementMode: "off" | "manual" | "quote" | "auto"; dailyReadBudget: number; allowLinks: boolean; engagementQuery: string } };
   persona: { name: string; bio: string; tone: string; rules: string };
   trades: { enabled: boolean; wallet: string; minPnlUsd: number; minRoePct: number; requireBoth: boolean; showUsd: boolean; showSize: boolean; showWallet: boolean; maxPostsPerDay: number; autoPublish: boolean; handle: string; pollMinutes: number };
   movers: { enabled: boolean; minChange24hPct: number; minChange1hPct: number; minVolumeUsd: number; maxPostsPerDay: number; topN: number };
@@ -34,6 +35,8 @@ function Connection({ mark, title, ok, status, children }: { mark: React.ReactNo
 
 export default function SimpleSettings({ navigate, changed, overview }: { navigate: (p: string) => void; changed: () => void; overview: OverviewData | null }) {
   const data = useFetch<Data>("/settings");
+  // The X connection lives in its own container, so its state is its own request.
+  const xb = useFetch<XStatus>("/x-browser/status", { intervalMs: 10_000 });
   const act = useAction();
   const [form, setForm] = useState<S | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -83,21 +86,36 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
       {s && env && (
         <>
           <Card title="Подключения">
-            <p className="small muted">Ключи хранятся только в файле <Code>threads/.env</Code> на сервере: в интерфейсе, базе и логах их нет. После правки файла перезапустите сервис — или просто напишите Claude «ключи добавил».</p>
+            <p className="small muted">Threads подключается токеном из файла <Code>threads/.env</Code> — в интерфейсе, базе и логах его нет. X подключается входом в окне браузера, никаких ключей. После правки файла перезапустите сервис — или просто напишите Claude «ключи добавил».</p>
             <div className="conn-list">
               <Connection mark={<PlatformMark id="threads" size={26} />} title="Threads" ok={Boolean(t?.health.ok)} status={t?.health.ok ? `@${t.username}` : env.threadsToken ? "токен есть, но не работает" : "нет токена"}>
                 <Code>THREADS_ACCESS_TOKEN</Code> — Meta for Developers → ваше приложение → Threads API → User Token Generator. Права: threads_basic, threads_content_publish, threads_read_replies, threads_manage_replies, threads_manage_mentions, threads_keyword_search, threads_manage_insights. Для обмена на 60-дневный токен — ещё <Code>THREADS_APP_ID</Code> и <Code>THREADS_APP_SECRET</Code>.
                 {t && !t.health.ok && env.threadsToken && <div className="error-text">{t.health.message}</div>}
               </Connection>
-              <Connection mark={<PlatformMark id="x" size={26} />} title="X" ok={Boolean(x?.health.ok)} status={x?.health.ok ? `@${x.username}` : Object.values(env.xKeys).every(Boolean) ? "ключи есть, но не работают" : `ключей ${Object.values(env.xKeys).filter(Boolean).length} из 4`}>
-                <Code>X_API_KEY</Code>, <Code>X_API_SECRET</Code>, <Code>X_ACCESS_TOKEN</Code>, <Code>X_ACCESS_SECRET</Code> — developer.x.com → проект → приложение: права «Read and write», затем Keys and tokens. API у X платный по факту (≈$0.015 за пост, $0.005 за каждый прочитанный чужой пост) — на балансе должны быть кредиты.
-                {x && !x.health.ok && Object.values(env.xKeys).every(Boolean) && <div className="error-text">{x.health.message}</div>}
+              <Connection
+                mark={<PlatformMark id="x" size={26} />}
+                title="X"
+                ok={Boolean(xb.data?.connected)}
+                status={xb.data?.connected ? `@${xb.data.username ?? ""}` : xb.data?.transport === "api" ? (Object.values(env.xKeys).every(Boolean) ? "ключи есть, но не работают" : `ключей ${Object.values(env.xKeys).filter(Boolean).length} из 4`) : "вход не выполнен"}
+              >
+                {xb.data?.transport === "api" ? (
+                  <>
+                    Включён старый платный путь через API X (<Code>X_TRANSPORT=api</Code>). Чтобы работать бесплатно, уберите эту строку из <Code>threads/.env</Code> и войдите в X в окне браузера.
+                  </>
+                ) : (
+                  <>
+                    Ключи X не нужны. Наш браузер держит ваш вход так же, как TikTok: вы один раз входите в окне ниже, дальше сервис сам публикует, отвечает и читает. Пароль идёт прямо в X — сервис его не видит и не хранит.
+                  </>
+                )}
+                {xb.data?.issue && <div className="error-text">{xb.data.issue}</div>}
+                {xb.data?.error && <div className="error-text">{xb.data.error}</div>}
+                <XConnect status={xb.data} onChanged={() => void xb.reload()} />
               </Connection>
               <Connection mark={<span className="pmark pmark-hl" style={{ width: 26, height: 26, fontSize: 13 }}>HL</span>} title="Hyperliquid" ok={Boolean(overview?.hyperliquid.walletValid)} status={overview?.hyperliquid.walletValid ? overview.hyperliquid.wallet ?? "" : "адрес не указан"}>
                 Только публичный адрес кошелька — поле ниже, в блоке «Сделки». Приватный ключ и сид-фраза не нужны и нигде не спрашиваются.
               </Connection>
-              <Connection mark={<span className="pmark pmark-ai" style={{ width: 26, height: 26, fontSize: 13 }}>AI</span>} title="ИИ для текстов" ok={Boolean(overview?.readiness.llmKey)} status={overview?.readiness.llmKey ? "ключ есть" : "нет ключа"}>
-                <Code>OPENROUTER_API_KEY</Code> (или ключ другого провайдера) в том же файле.
+              <Connection mark={<span className="pmark pmark-ai" style={{ width: 26, height: 26, fontSize: 13 }}>AI</span>} title="ИИ для текстов" ok={Boolean(overview?.readiness.llmKey)} status={overview?.readiness.llmKey ? "подключён" : "не подключён"}>
+                Тексты для Threads и X пишет Claude по вашей подписке через мост на этом компьютере (<Code>LLM_PROVIDER=claude-bridge</Code>). Платный ключ не нужен; мост должен быть запущен, пока сервис работает.
               </Connection>
             </div>
           </Card>
@@ -111,7 +129,7 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
               <Toggle checked={s.flags.autoOwnReplies} onChange={(v) => flag(v, "flags", { autoOwnReplies: v })} label="Отвечать на комментарии под моими постами" />
               <p className="muted small">До 30 ответов в сутки, пауза от 5 минут, не более двух ответов одному человеку в ветке.</p>
               <Toggle checked={s.flags.autoPublicReplies} onChange={(v) => flag(v, "flags", { autoPublicReplies: v })} label="Комментировать чужие посты" />
-              <p className="muted small">Threads — до 6 в сутки через API. X — по правилам площадки ответ готовится, а отправляете вы (или включите режим цитат ниже).</p>
+              <p className="muted small">Threads — до 6 в сутки. Что делать с чужими постами в X, выбирается ниже в «Площадках»: отвечать самому, готовить текст вам, публиковать цитатой или не трогать вовсе.</p>
             </fieldset>
             {s.dryRun && <p className="warn-text">Включён пробный запуск: в соцсети ничего не отправляется. Выключается в расширенных настройках.</p>}
           </Card>
@@ -135,11 +153,12 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
             <div className="form-grid">
               <Field label="Язык постов в X"><select value={s.platforms.x.language} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, language: e.target.value as "ru" | "en" } })}><option value="ru">русский</option><option value="en">английский</option></select></Field>
               <Field label="Лимит символов X" note="280 без Premium"><input type="number" min={100} value={s.platforms.x.maxChars} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, maxChars: num(e.target.value, 280) } })} /></Field>
-              <Field label="Чужие посты в X"><select value={s.platforms.x.engagementMode} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, engagementMode: e.target.value as "off" | "manual" | "quote" } })}><option value="manual">готовить ответ, отправляю сам</option><option value="quote">публиковать цитатой</option><option value="off">не искать</option></select></Field>
-              <Field label="Бюджет чтения X, постов в день" note={`≈ $${(s.platforms.x.dailyReadBudget * 0.005).toFixed(2)} в день`}><input type="number" min={0} value={s.platforms.x.dailyReadBudget} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, dailyReadBudget: num(e.target.value, 60) } })} /></Field>
+              <Field label="Чужие посты в X" note="«не трогать» — комментариев под чужими постами не будет вообще"><select value={s.platforms.x.engagementMode} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, engagementMode: e.target.value as "off" | "manual" | "quote" | "auto" } })}><option value="auto">отвечать под постом самому</option><option value="manual">готовить ответ, отправляю сам</option><option value="quote">публиковать цитатой</option><option value="off">не трогать</option></select></Field>
+              <Field label="Сколько чужих постов смотреть в день" note="Через браузер это бесплатно; ограничение нужно, чтобы аккаунт не выглядел роботом."><input type="number" min={0} value={s.platforms.x.dailyReadBudget} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, dailyReadBudget: num(e.target.value, 60) } })} /></Field>
             </div>
-            <Field label="Что искать в X" note="Синтаксис поиска X. Каждый найденный пост платный, поэтому запрос один."><input value={s.platforms.x.engagementQuery} maxLength={400} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, engagementQuery: e.target.value } })} /></Field>
-            <Toggle checked={s.platforms.x.allowLinks} onChange={(v) => patch("platforms", { x: { ...s.platforms.x, allowLinks: v } })} label="Разрешить ссылки в постах X (пост со ссылкой стоит ≈ $0.20 вместо $0.015)" />
+            <Field label="Что искать в X" note="Синтаксис поиска самого X — один запрос, по нему берётся свежая лента."><input value={s.platforms.x.engagementQuery} maxLength={400} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, engagementQuery: e.target.value } })} /></Field>
+            <Toggle checked={s.platforms.x.allowLinks} onChange={(v) => patch("platforms", { x: { ...s.platforms.x, allowLinks: v } })} label="Разрешить ссылки в текстах постов X" />
+            <p className="muted small">По умолчанию ссылки вырезаются: вы держите их в описании профиля и ставите туда сами.</p>
           </Card>
 
           <Card title="Сделки Hyperliquid">

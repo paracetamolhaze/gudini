@@ -41,7 +41,12 @@ export async function checkThreads(): Promise<{ ok: boolean; message: string; us
 export async function checkPlatform(id: PlatformId): Promise<{ ok: boolean; message: string; username?: string; userId?: string }> {
   if (id === "threads") return checkThreads();
   const adapter = platform(id);
-  if (!adapter.configured()) return { ok: false, message: "ключи X не заданы (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)" };
+  if (!adapter.configured()) {
+    // Two different asks, so two different sentences: sign in once in the window, or set four keys.
+    return env().X_TRANSPORT === "browser"
+      ? { ok: false, message: "X не подключён: нажмите «Подключить X» и войдите в аккаунт в окне браузера" }
+      : { ok: false, message: "ключи X не заданы (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)" };
+  }
   try {
     const me = await adapter.me();
     return { ok: true, message: `connected as @${me.username}`, username: me.username, userId: me.id };

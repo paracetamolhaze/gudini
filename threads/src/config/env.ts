@@ -38,6 +38,17 @@ const envSchema = z.object({
   THREADS_APP_SECRET: z.string().optional().default(""),
   THREADS_GRAPH_HOST: z.string().default("https://graph.threads.net"),
 
+  /**
+   * How we reach X. "browser" is the normal way: our own Chromium in the x-browser container holds
+   * the owner's login, nothing is billed and no keys exist. "api" is the old paid X API v2 path,
+   * kept only for the case where the browser transport cannot be used.
+   */
+  X_TRANSPORT: z.enum(["browser", "api"]).default("browser"),
+  /** Address of the x-browser container; from Docker that is http://x-browser:43132. */
+  X_BROWSER_URL: z.string().optional().default("http://x-browser:43132"),
+  /** Shared password between the service and the container; required once the container listens on the network. */
+  X_BROWSER_TOKEN: z.string().optional().default(""),
+
   /** X API, OAuth 1.0a user context: four strings from the developer portal (app with Read and write). */
   X_API_KEY: z.string().optional().default(""),
   X_API_SECRET: z.string().optional().default(""),
@@ -116,6 +127,7 @@ export const SECRET_ENV_KEYS = [
   "X_API_SECRET",
   "X_ACCESS_TOKEN",
   "X_ACCESS_SECRET",
+  "X_BROWSER_TOKEN",
   "COINGECKO_API_KEY",
   "LLM_API_KEY",
   "OPENROUTER_API_KEY",

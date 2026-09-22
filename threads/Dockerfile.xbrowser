@@ -11,7 +11,10 @@ RUN npm ci --no-audit --no-fund \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
-RUN npm run build:server
+# Git на Windows может отдать скрипт с CRLF, и тогда ядро не находит интерпретатор по первой строке.
+RUN tr -d '\015' < deploy/start-x-browser.sh > /usr/local/bin/start-x-browser \
+    && chmod +x /usr/local/bin/start-x-browser \
+    && npm run build:server
 
 ENV NODE_ENV=production \
     DATA_DIR=/app/data \
@@ -20,5 +23,5 @@ ENV NODE_ENV=production \
 VOLUME ["/app/data"]
 
 # Настоящий браузер на приватном экране: на рабочем столе владельца окно не появляется.
-ENTRYPOINT ["/app/deploy/start-x-browser.sh"]
+ENTRYPOINT ["/usr/local/bin/start-x-browser"]
 CMD ["node", "dist/src/xbrowser.js"]

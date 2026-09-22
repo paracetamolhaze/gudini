@@ -19,6 +19,7 @@ services:
       PORT: "3000"
       # Codex runs on Windows with the owner's ChatGPT login; credentials stay on the host.
       CODEX_BRIDGE_URL: http://host.docker.internal:43127
+      CODEX_IMAGE_BRIDGE_URL: http://host.docker.internal:43129
       # пусто — сайт открыт без пароля; GUDINI_PASSWORD воркера при этом просто не проверяется
       SITE_PASSWORD: ${SITE_PASSWORD:-}
       # монтаж только на воркере: сайт не запускает конвейер у себя, если воркер молчит
@@ -112,10 +113,13 @@ services:
     environment:
       PORT: "8600"
       DATABASE_URL: postgres://threads:threads@threads-postgres:5432/threads
+      # Тексты пишет Claude Code на хосте по подписке владельца (scripts/claude-bridge.mjs)
+      CLAUDE_BRIDGE_URL: ${CLAUDE_BRIDGE_URL:-http://host.docker.internal:43131}
       REDIS_URL: redis://threads-redis:6379
       SITE_PASSWORD: ${SITE_PASSWORD:-}
       PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
       DATA_DIR: /app/data
+      X_BROWSER_URL: http://x-browser:43132
     ports:
       # дома открывается напрямую http://192.168.1.68:8600/threads/, снаружи — через Caddy
       - "8600:8600"
@@ -138,9 +142,12 @@ services:
         required: false
     environment:
       DATABASE_URL: postgres://threads:threads@threads-postgres:5432/threads
+      # Тексты пишет Claude Code на хосте по подписке владельца (scripts/claude-bridge.mjs)
+      CLAUDE_BRIDGE_URL: ${CLAUDE_BRIDGE_URL:-http://host.docker.internal:43131}
       REDIS_URL: redis://threads-redis:6379
       PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
       DATA_DIR: /app/data
+      X_BROWSER_URL: http://x-browser:43132
     volumes:
       - threads-data:/app/data
     depends_on:
@@ -148,6 +155,25 @@ services:
         condition: service_healthy
       threads-redis:
         condition: service_started
+
+  # Браузер X: настоящий Chromium на виртуальном экране хранит вход владельца и публикует посты.
+  # Ключи разработчика X не нужны, за чтение чужих постов никто не выставляет счёт.
+  x-browser:
+    build:
+      context: ./threads
+      dockerfile: Dockerfile.xbrowser
+    container_name: gudini-x-browser
+    restart: unless-stopped
+    env_file:
+      - path: ./threads/.env
+        required: false
+    environment:
+      DATA_DIR: /app/data
+      X_BROWSER_HOST: "0.0.0.0"
+      TIMEZONE: ${TIMEZONE:-Europe/Moscow}
+    volumes:
+      - threads-data:/app/data
+    shm_size: "1gb"
 
   threads-postgres:
     image: postgres:17-alpine

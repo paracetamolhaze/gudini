@@ -154,6 +154,15 @@ test("style retrieval prefers examples about the same topic and never returns di
   assert.equal(buildWriterUserMessage({ analysis, facts, sourcePosts: [], styleExamples: ex, recentOwnPosts: ["старый пост"], variants: 2, maxStyleExamples: 2 }, ["NEWS", "SHORT"]).includes("НЕДАВНИЕ ПОСТЫ"), true);
 });
 
+test("one tag is wanted, a pile of them is not — and X may have two", () => {
+  const body = "Фандинг на перпах в боковике тихо съедает депозит, а многие его вообще не считают перед входом.";
+  assert.deepEqual(validateDraft(`${body} #перпы`, [], { minChars: 10 }).violations, [], "один тег — это то, ради чего всё делалось");
+  assert.equal(validateDraft(`${body} #перпы #крипта`, [], { minChars: 10 }).violations.some((v) => v.code === "HASHTAGS"), true, "в Threads кликается только первый");
+  const en = "Funding quietly eats your deposit in a range, and most people never check it before entry.";
+  assert.deepEqual(validateDraft(`${en} #bitcoin #crypto`, [], { language: "en", minChars: 10 }).violations, [], "в X два тега — норма");
+  assert.equal(validateDraft(`${en} #bitcoin #crypto #perps`, [], { language: "en", minChars: 10 }).violations.some((v) => v.code === "HASHTAGS"), true);
+});
+
 test("the English post for X is guarded too, not only the Russian one", () => {
   const hype = "BTC is going straight up from here, guaranteed. Buy now before you miss out, this is easy money and a risk-free trade.";
   const blocked = validateDraft(hype, [], { language: "en", minChars: 10 });

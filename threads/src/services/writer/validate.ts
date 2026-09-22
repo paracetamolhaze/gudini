@@ -223,8 +223,11 @@ export function validateDraft(text: string, facts: VerifiedFact[], opts: Validat
   if (opts.links !== undefined) {
     for (const p of linkProblems(t, opts.links)) violations.push({ code: "LINK_NOT_ALLOWED", message: p.charAt(0).toUpperCase() + p.slice(1), severity: "block" });
   }
+  // Тег в конце нужен для того, чтобы пост нашли по теме. В Threads кликается только первый,
+  // в X больше двух читаются как спам — поэтому предел зависит от площадки, а не «любой тег плохо».
+  const tagLimit = (opts.language ?? "ru") === "en" ? 2 : 1;
   const hashtags = (body.match(/#[\p{L}\p{N}_]+/gu) ?? []).length;
-  if (hashtags >= 2) violations.push({ code: "HASHTAGS", message: `Набор хэштегов (${hashtags})`, severity: "warn" });
+  if (hashtags > tagLimit) violations.push({ code: "HASHTAGS", message: `Тегов ${hashtags}, а нужно не больше ${tagLimit}${tagLimit === 1 ? " — в Threads кликается только первый" : ""}`, severity: "warn" });
   const emoji = (t.match(/\p{Extended_Pictographic}/gu) ?? []).length;
   if (emoji > 2) violations.push({ code: "EMOJI_SPAM", message: `Слишком много emoji (${emoji})`, severity: "warn" });
   const cyr = (body.match(/[а-яё]/giu) ?? []).length;

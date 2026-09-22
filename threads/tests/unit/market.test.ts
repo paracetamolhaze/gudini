@@ -55,7 +55,9 @@ test("X variant: needed for long text, English or links; it may not add numbers,
   assert.deepEqual(xVariantProblems("SOL +18.4% за сутки, уже $212. Причины не вижу.", source, o), []);
   assert.ok(xVariantProblems("SOL +25% за сутки, уже $212.", source, o).some((p) => p.includes("25")));
   assert.ok(xVariantProblems("SOL +18.4%, детали: https://x.com/a", source, o).some((p) => p.includes("ссылка")));
-  assert.ok(xVariantProblems("а".repeat(281), source, o).some((p) => p.includes("длина")));
+  // Один пост X — не предел: длинный текст выходит тредом, браковать надо то, что не влезает и в два.
+  assert.deepEqual(xVariantProblems("а".repeat(281), source, o), []);
+  assert.ok(xVariantProblems("а".repeat(561), source, o).some((p) => p.includes("длина")));
   assert.ok(xVariantProblems("SOL is up 18.4% today, now at $212.", source, o).some((p) => p.includes("русском")));
   assert.deepEqual(xVariantProblems("SOL is up 18.4% today, now at $212. No clear reason yet.", source, { ...o, language: "en" }), []);
 });

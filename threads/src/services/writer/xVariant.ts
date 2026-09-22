@@ -28,7 +28,10 @@ const schema = z.object({ text: z.string().min(10).max(2000) });
 export function xVariantProblems(text: string, source: string, opts: { maxChars: number; language: "ru" | "en"; allowLinks?: boolean }): string[] {
   const problems: string[] = [];
   const t = text.trim();
-  if (t.length > opts.maxChars) problems.push(`длина ${t.length} больше лимита X ${opts.maxChars}`);
+  // Длинный текст X публикует тредом (x/browser/publisher.ts), поэтому одного поста мало только
+  // формально. Браковать стоит то, что не влезает и в два подряд — иначе в X уходит русский
+  // основной текст вместо нормальной английской версии.
+  if (t.length > opts.maxChars * 2) problems.push(`длина ${t.length} больше двух постов X подряд (${opts.maxChars * 2})`);
   if (containsUrl(t)) problems.push("в тексте для X есть ссылка");
   if ((t.match(/#[\p{L}\p{N}_]+/gu) ?? []).length >= 2) problems.push("набор хэштегов");
   const cyr = (t.match(/[а-яё]/giu) ?? []).length;

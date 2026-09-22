@@ -383,7 +383,7 @@ export async function publishDraft(draftId: string, opts: { manual: boolean }): 
         outcomes.push({ platform: p, status: "published", postId, permalink });
         await audit(
           "POST_PUBLISHED",
-          `${dryRun ? "[DRY_RUN] " : ""}${PLATFORM_LABEL[p]}: опубликовано${parts > 1 ? ` тредом из ${parts} частей` : ""}${image.path ? " с картинкой" : ""}: ${text.slice(0, 120)}`,
+          `${dryRun ? "[DRY_RUN] НЕ отправлено, пробный запуск — " : ""}${PLATFORM_LABEL[p]}: ${dryRun ? "текст готов" : "опубликовано"}${parts > 1 ? ` тредом из ${parts} частей` : ""}${image.path ? " с картинкой" : ""}: ${text.slice(0, 120)}`,
           { draftId, candidateId: draft.candidate_id, publicationId: publication.id },
           { platform: p, platformPostId: postId, permalink, manual: opts.manual },
         );

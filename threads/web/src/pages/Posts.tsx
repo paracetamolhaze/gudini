@@ -30,7 +30,7 @@ const PLATFORMS: PlatformId[] = ["threads", "x"];
 
 function chipState(d: Draft, p: PlatformId): { state: ChipState; href: string | null; title: string } {
   const pub = d.publications?.find((x) => x.platform === p);
-  if (pub) return { state: "ok", href: pub.permalink, title: pub.dry_run ? "Пробная публикация" : "Опубликовано" };
+  if (pub) return { state: pub.dry_run ? "wait" : "ok", href: pub.permalink, title: pub.dry_run ? "Пробный запуск — в сеть не отправлено" : "Опубликовано" };
   if (d.status === "PARTIAL" || d.status === "FAILED") return { state: "fail", href: null, title: "Не опубликовано — откройте пост" };
   return { state: "wait", href: null, title: "Ещё не опубликовано" };
 }
@@ -290,6 +290,11 @@ function PostEditor({ id, navigate, platforms }: { id: string; navigate: (p: str
               </div>
             )}
             {d.scheduled_at && d.status === "SCHEDULED" && <p className="muted">Публикация: {fmtDate(d.scheduled_at)}</p>}
+            {pubs.length > 0 && pubs.every((p) => p.dry_run) && (
+              <p className="warn-text">
+                Пробный запуск: пост никуда не отправлен, в соцсетях его нет. Ссылки ниже не работают — это отметки о том, что текст прошёл проверку и был бы опубликован. Выключить пробный режим можно в расширенных настройках.
+              </p>
+            )}
             {pubs.length > 0 && (
               <div className="row">
                 {pubs.map((p) => (

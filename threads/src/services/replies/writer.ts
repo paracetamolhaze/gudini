@@ -45,7 +45,22 @@ export interface ReplyViolation {
 const TEMPLATES = /^(отличн(ый|ая|ое) (вопрос|мнение|замечание)|интересн(ое|ый|ая) (мнение|вопрос|мысль)|полностью согласен|спасибо за (вопрос|комментарий)|хороший вопрос|great (question|point|take)|thanks for|good question|interesting (point|take))/iu;
 const MEANINGLESS = /^(🔥+|согласен[.!]*|точно[.!]*|100%[.!]*|факт[.!]*|база[.!]*|\+1|да[.!]*|это точно[.!]*|this[.!]*|facts?[.!]*|agreed?[.!]*|true[.!]*|lfg[.!]*|gm[.!]*)$/iu;
 const HYPE = /(покупа(ем|й|йте)|100x|иксы|гарантирован|точно (полетит|вырастет)|to the moon|туземун|guaranteed|can't lose|free money)/iu;
-const ADVICE = /(советую (купить|продать|зайти|выйти)|бери(те)? (сейчас|пока)|заходи(те)? (сейчас|пока)|фиксируй(те)?|шорти(те)?|лонгуй(те)?|you should (buy|sell|long|short)|buy (now|the dip)|ape in)/iu;
+// Границы слова обязательны: без них «шорти» находится внутри «шортистам», и рассказ о том, кто кому
+// платит фандинг, объявлялся финансовым советом. JS-овское  работает только с латиницей.
+const ADVICE = new RegExp(
+  `(?<![\p{L}\p{N}])(?:${[
+    "советую (?:купить|продать|зайти|выйти)",
+    "бери(?:те)? (?:сейчас|пока)",
+    "заходи(?:те)? (?:сейчас|пока)",
+    "фиксируй(?:те)?",
+    "шорти(?:те)?",
+    "лонгуй(?:те)?",
+    "you should (?:buy|sell|long|short)",
+    "buy (?:now|the dip)",
+    "ape in",
+  ].join("|")})(?![\p{L}\p{N}])`,
+  "iu",
+);
 
 /** Cyrillic comment → Russian answer, anything else → English. */
 export function replyLanguageFor(comment: string): ReplyLanguage {

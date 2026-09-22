@@ -24,6 +24,21 @@ type Settings = {
 };
 type Data = { settings: Settings; env: { threadsToken: boolean; llmProvider: string; keys: Record<string, boolean>; sitePasswordSet: boolean; publicBaseUrl: string | null } };
 
+const num = (v: string) => (v === "" ? 0 : Number(v));
+
+/**
+ * Числовое поле. Объявлено на уровне модуля не случайно: компонент, созданный внутри страницы,
+ * при каждом рендере считается новым типом — React выбрасывает старый input вместе с фокусом,
+ * и набрать «85» становится невозможно (после «8» курсор выпадает).
+ */
+function N({ label, value, onChange, note }: { label: string; value: number; onChange: (v: number) => void; note?: string }) {
+  return (
+    <Field label={label} note={note}>
+      <input type="number" value={value} onChange={(e) => onChange(num(e.target.value))} />
+    </Field>
+  );
+}
+
 export default function SettingsPage({ onSaved }: { onSaved: () => void }) {
   const { data, error, reload } = useFetch<Data>("/settings");
   const act = useAction();
@@ -37,7 +52,6 @@ export default function SettingsPage({ onSaved }: { onSaved: () => void }) {
   }, [data]);
   if (error && !data) return <ErrorBox text={error} />;
   if (!s || !data) return <div className="muted">Загрузка…</div>;
-  const num = (v: string) => (v === "" ? 0 : Number(v));
   const set = <K extends keyof Settings>(key: K, patch: Partial<Settings[K]>) => setS({ ...s, [key]: { ...(s[key] as object), ...patch } as Settings[K] });
   const save = () =>
     void act.run("Сохранить настройки", async () => {
@@ -49,9 +63,6 @@ export default function SettingsPage({ onSaved }: { onSaved: () => void }) {
       }
       await put("/settings", { ...s, pricing: parsedPricing });
     }, async () => { await reload(); onSaved(); });
-  const N = ({ label, value, onChange, note }: { label: string; value: number; onChange: (v: number) => void; note?: string }) => (
-    <Field label={label} note={note}><input type="number" value={value} onChange={(e) => onChange(num(e.target.value))} /></Field>
-  );
   return (
     <>
       <div className="row row-between" style={{ marginBottom: 10 }}>

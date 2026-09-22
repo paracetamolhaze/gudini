@@ -27,12 +27,14 @@ function Moves({ navigate }: { navigate: (p: string) => void }) {
   return (
     <>
       <div className="list-head">
-        {s ? (
+        {s && !s.enabled ? (
+          <p className="small warn-text rule-line">Слежение за движениями выключено в настройках — новых постов о взлётах и падениях не будет.</p>
+        ) : s ? (
           <p className="small muted rule-line">
             Слежу за топ-{s.topN} монет: от <b>{s.minChange24hPct}%</b> за сутки или <b>{s.minChange1hPct}%</b> за час при объёме от {bigUsd(s.minVolumeUsd)}. До {s.maxPostsPerDay} постов в день; причину движения не выдумываю.
           </p>
         ) : <span />}
-        <Button busy={act.busy !== null} onClick={() => void act.run("Проверка рынка", () => post("/market/scan"), data.reload, { done: "Проверка рынка запущена — список обновится сам" })}><Icon name="refresh" size={14} /> Проверить сейчас</Button>
+        <Button disabled={s ? !s.enabled : false} busy={act.busy !== null} onClick={() => void act.run("Проверка рынка", () => post("/market/scan"), data.reload, { done: "Проверка рынка запущена — список обновится сам" })}><Icon name="refresh" size={14} /> Проверить сейчас</Button>
       </div>
       <Notice text={act.notice} />
       <ErrorBox text={act.error || data.error} />
@@ -67,8 +69,8 @@ function Moves({ navigate }: { navigate: (p: string) => void }) {
                     className="btn btn-sm btn-primary"
                     disabled={act.busy !== null}
                     onClick={() => {
-                      jobs.mark(m.id, m.job);
-                      void act.run("Пост в очередь", () => post(`/market/moves/${m.id}/draft`), data.reload, { done: "Пост поставлен в очередь — строка покажет, что из этого вышло" });
+                      // Помечаем строку «пишется» только после успешного запроса (см. Trades.tsx).
+                      void act.run("Пост в очередь", () => post(`/market/moves/${m.id}/draft`), () => { jobs.mark(m.id, m.job); data.reload(); }, { done: "Пост поставлен в очередь — строка покажет, что из этого вышло" });
                     }}
                   >
                     {job.error ? "Написать ещё раз" : "Написать пост"}

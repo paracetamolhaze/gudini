@@ -130,6 +130,23 @@ export async function goHome(page: Page): Promise<void> {
  * switched accounts must not keep posting under the old name.
  */
 export async function readIdentity(page: Page): Promise<{ username: string } | null> {
+  if (!/^https:\/\/x\.com\//.test(page.url())) await page.goto(X_HOME, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  if (await showsLoginForm(page)) return null;
+
+  // The avatar in the side navigation carries the handle in its test id — present on every page
+  // of the signed-in app, so no extra navigation is needed.
+  const avatar = await page.locator('[data-testid^="UserAvatar-Container-"]').first().getAttribute("data-testid", { timeout: 10_000 }).catch(() => null);
+  const fromAvatar = avatar?.replace("UserAvatar-Container-", "").trim();
+  if (fromAvatar && /^[A-Za-z0-9_]{1,15}$/.test(fromAvatar)) return { username: fromAvatar };
+
+  const switcher = await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').first().innerText({ timeout: 5_000 }).catch(() => "");
+  const fromSwitcher = switcher.match(/@([A-Za-z0-9_]{1,15})\b/)?.[1];
+  if (fromSwitcher) return { username: fromSwitcher };
+
+  const profileHref = await page.locator('[data-testid="AppTabBar_Profile_Link"]').first().getAttribute("href").catch(() => null);
+  const fromProfile = profileHref?.match(/^\/([A-Za-z0-9_]{1,15})$/)?.[1];
+  if (fromProfile) return { username: fromProfile };
+
   await page.goto("https://x.com/settings/account", { waitUntil: "domcontentloaded", timeout: 45_000 });
   if (await showsLoginForm(page)) return null;
   const body = await page.locator("body").innerText({ timeout: 15_000 }).catch(() => "");
@@ -236,8 +253,11 @@ export async function scrapeTimeline(page: Page, limit: number): Promise<Scraped
     }
     if (!id || seen.has(id)) continue;
     seen.add(id);
+    // Текст поста и текст всей карточки — разные вещи: «Replying to @…» живёт вне tweetText,
+    // поэтому искать признак ответа в тексте поста бессмысленно, он там никогда не встретится.
+    const articleText = await article.innerText().catch(() => "");
     const body = await article.locator('[data-testid="tweetText"]').first().innerText().catch(() => null);
-    const whole = body ?? (await article.innerText().catch(() => ""));
+    const whole = body ?? articleText;
     const iso = await article.locator("time[datetime]").first().getAttribute("datetime").catch(() => null);
     const imgs = article.locator('[data-testid="tweetPhoto"] img, img[src*="pbs.twimg.com/media/"]');
     const imageUrls: string[] = [];
@@ -251,7 +271,7 @@ export async function scrapeTimeline(page: Page, limit: number): Promise<Scraped
       text: whole.replace(/\s+/g, " ").trim().slice(0, 2000),
       timestamp: iso ? new Date(iso) : null,
       permalink: `https://x.com/${username}/status/${id}`,
-      isReply: /^(replying to|в ответ)/i.test(whole.trim()),
+      isReply: /(^|\n)\s*(replying to|в ответ)/i.test(articleText),
       imageUrls,
     });
   }

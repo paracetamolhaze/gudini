@@ -226,12 +226,16 @@ async function metrics(body: Record<string, unknown>): Promise<unknown> {
   const group = p.locator('[role="group"][aria-label]').first();
   const label = (await group.getAttribute("aria-label").catch(() => null)) ?? "";
   const numbers: Record<string, number> = {};
+  if (!label.trim()) throw new XLayoutChanged("X не показал счётчики поста");
   for (const m of label.matchAll(COUNT)) {
     const value = Number(m[1]!.replace(/[^\d]/g, ""));
     const what = m[2]!.toLowerCase();
     const key = /view|просмотр/.test(what) ? "views" : /like|нрав/.test(what) ? "likes" : /repl|ответ/.test(what) ? "replies" : /repost|репост/.test(what) ? "reposts" : /quote|цитат/.test(what) ? "quotes" : "shares";
     if (Number.isFinite(value)) numbers[key] = value;
   }
+  // Ноль совпадений — это «не смогли прочитать», а не «пост никто не видел»: записанные нули
+  // потом лягут в статистику как настоящие цифры и испортят ответ на вопрос «что заходит лучше».
+  if (!Object.keys(numbers).length) throw new XLayoutChanged("X не показал счётчики поста");
   return { metrics: { views: 0, likes: 0, replies: 0, reposts: 0, quotes: 0, shares: 0, ...numbers }, raw: label };
 }
 
@@ -332,6 +336,39 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
     state.checkedAt = undefined;
     state.issue = undefined;
     persist();
+    return status();
+  }
+
+  /**
+   * The owner signed in through a real window on his own machine; here we adopt that session.
+   * Only cookies travel, they never leave his computer, and the file they came from is deleted
+   * right after. No password is involved at any point.
+   */
+  if (action === "import") {
+    const cookies = (body as { cookies?: unknown }).cookies;
+    if (!Array.isArray(cookies) || !cookies.length) throw new Error("В файле сессии нет cookies.");
+    if (!cookies.some((c) => (c as { name?: string }).name === "auth_token")) throw new Error("В файле сессии нет ключа входа X (auth_token).");
+    login = false;
+    await closeBrowser();
+    const ctx = await openXBrowser();
+    context = ctx;
+    ctx.on("close", () => {
+      context = undefined;
+      page = undefined;
+    });
+    await ctx.clearCookies();
+    await ctx.addCookies(cookies as Parameters<typeof ctx.addCookies>[0]);
+    const p = await browserPage();
+    await goHome(p);
+    const identity = await readIdentity(p);
+    if (!identity) throw new XLoginRequired("Сессия перенесена, но X не показал имя аккаунта.");
+    state.connected = true;
+    state.username = identity.username;
+    identityCheckedAt = Date.now();
+    state.checkedAt = new Date().toISOString();
+    state.issue = undefined;
+    persist();
+    await closeBrowser();
     return status();
   }
 

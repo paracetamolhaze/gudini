@@ -125,8 +125,9 @@ export default function Trades({ navigate, overview, reloadOverview }: { navigat
                       className="btn btn-sm btn-primary"
                       disabled={act.busy !== null}
                       onClick={() => {
-                        jobs.mark(t.id, t.job);
-                        void act.run("Пост в очередь", () => post(`/trades/${t.id}/draft`), reload, { done: "Карточка и текст поставлены в очередь — строка покажет, что из этого вышло" });
+                        // Помечаем строку «пишется» только после успешного запроса: иначе упавший
+                        // запрос прячет кнопку навсегда, и повторить нечем до перезагрузки страницы.
+                        void act.run("Пост в очередь", () => post(`/trades/${t.id}/draft`), () => { jobs.mark(t.id, t.job); reload(); }, { done: "Карточка и текст поставлены в очередь — строка покажет, что из этого вышло" });
                       }}
                     >
                       {job.error ? "Сделать ещё раз" : "Сделать пост"}

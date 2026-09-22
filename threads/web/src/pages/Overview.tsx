@@ -12,7 +12,11 @@ export default function Overview({ data: o, error, navigate, reload }: { data: O
 
   const missing: Array<{ text: string; page: string }> = [];
   if (!o.health.threads.ok) missing.push({ text: "Нет токена Threads — впишите THREADS_ACCESS_TOKEN в threads/.env", page: "settings" });
-  if (!o.readiness.llmKey) missing.push({ text: "Нет ключа ИИ — впишите OPENROUTER_API_KEY в threads/.env", page: "settings" });
+  // Каждая включённая площадка отвечает за себя: «всё настроено» не должно означать «настроен Threads».
+  for (const p of o.platforms ?? []) {
+    if (p.id !== "threads" && p.enabled && !p.health.ok) missing.push({ text: `${p.label} не подключён: ${p.health.message}`, page: "settings" });
+  }
+  if (!o.readiness.llmKey) missing.push({ text: "ИИ не отвечает — проверьте, что мост Claude запущен (LLM_PROVIDER=claude-bridge, CLAUDE_BRIDGE_URL и CLAUDE_BRIDGE_TOKEN в threads/.env)", page: "settings" });
   if ((o.sources?.enabled ?? 0) === 0) missing.push({ text: "Нет источников — добавьте блогера или RSS", page: "sources" });
 
   const status = o.killSwitch

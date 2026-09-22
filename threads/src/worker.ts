@@ -6,6 +6,7 @@ import { closeRedis } from "./queue/connection.js";
 import { closeQueues } from "./queue/queues.js";
 import { startWorkers, stopWorkers } from "./workers/index.js";
 import { wireLlm } from "./services/llmWiring.js";
+import { loadSettings } from "./config/settings.js";
 
 /** Worker process: consumes every BullMQ queue. Safe to run more than one instance. */
 async function main(): Promise<void> {
@@ -14,7 +15,10 @@ async function main(): Promise<void> {
   await runMigrations();
   wireLlm();
   await startWorkers();
-  log.info({ mode: e.AUTOPILOT_MODE, dryRun: e.DRY_RUN }, "gudini-threads worker started");
+  // Режим и пробный запуск живут в настройках, а не в окружении: печатать env означало бы врать в
+  // логе после первого же нажатия кнопки в дашборде.
+  const s = await loadSettings(true).catch(() => null);
+  log.info({ mode: s?.mode ?? e.AUTOPILOT_MODE, dryRun: s?.dryRun ?? e.DRY_RUN }, "gudini-threads worker started");
 
   const shutdown = async (signal: string) => {
     log.info({ signal }, "worker shutting down");

@@ -212,6 +212,12 @@ async function metrics(body: Record<string, unknown>): Promise<unknown> {
   return { metrics: { views: 0, likes: 0, replies: 0, reposts: 0, quotes: 0, shares: 0, ...numbers }, raw: label };
 }
 
+/** A picture of the page. `settle` lets the page react to a click before we look at it. */
+async function shot(p: Page, settle = 0): Promise<{ image: string; url: string }> {
+  if (settle) await p.waitForTimeout(settle);
+  return { image: (await p.screenshot({ type: "jpeg", quality: 60 })).toString("base64"), url: p.url() };
+}
+
 function status() {
   return {
     connected: state.connected,
@@ -244,8 +250,7 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
 
   if (action === "frame") {
     if (!login) throw new Error("Окно входа X закрыто.");
-    const p = await browserPage();
-    return { image: (await p.screenshot({ type: "jpeg", quality: 75 })).toString("base64"), url: p.url() };
+    return await shot(await browserPage());
   }
 
   if (action === "input") {
@@ -267,7 +272,8 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
     else if (body.type === "scroll" && Number.isFinite(body.dy)) await p.mouse.wheel(0, Math.max(-800, Math.min(800, body.dy as number)));
     else if (body.type === "back") await p.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
     else throw new Error("Неизвестное действие окна входа");
-    return { ok: true };
+    // Answer with the page as it looks now: one round trip instead of a click and a separate frame.
+    return await shot(p, 350);
   }
 
   if (action === "finish") {
@@ -363,7 +369,22 @@ async function command(action: string, body: Record<string, unknown>): Promise<u
   }
 }
 
-let serving = false;
+/**
+ * One browser, so one command at a time — but a click must never be thrown away because a frame
+ * happened to be in flight. Requests wait their turn instead of being refused.
+ */
+let chain: Promise<unknown> = Promise.resolve();
+let waiting = 0;
+
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  if (waiting >= 8) return Promise.reject(new Error("Слишком много действий подряд, подождите секунду."));
+  waiting++;
+  const run = chain.then(fn, fn);
+  chain = run.catch(() => undefined);
+  return run.finally(() => {
+    waiting--;
+  });
+}
 
 const server = http.createServer(async (req, res) => {
   res.setHeader("Content-Type", "application/json");
@@ -376,23 +397,20 @@ const server = http.createServer(async (req, res) => {
   const action = (req.url || "").slice(1);
   if (!/^[a-z]+$/.test(action)) return respond(404, { error: "Not found" });
   if (req.method !== "POST" && !(req.method === "GET" && ["status", "frame"].includes(action))) return respond(405, { error: "Method not allowed" });
-  if (serving) return respond(409, { error: "Действие X ещё выполняется." });
-  serving = true;
   try {
     let data = "";
     for await (const chunk of req) {
       data += chunk;
       if (data.length > 32_768) throw new Error("Запрос слишком большой");
     }
-    const result = await command(action, data ? JSON.parse(data) : {});
+    const body = data ? (JSON.parse(data) as Record<string, unknown>) : {};
+    const result = await serialize(() => command(action, body));
     lastError = "";
     respond(200, result);
   } catch (err) {
     // Typed text may appear in Playwright diagnostics; never echo the request body back.
     lastError = action === "input" ? "Не удалось выполнить ввод. Обновите окно входа." : err instanceof Error ? err.message : "Ошибка X";
     respond(err instanceof XLoginRequired ? 409 : err instanceof XLayoutChanged ? 502 : 400, { error: lastError, kind: err instanceof XLoginRequired ? "login" : err instanceof XLayoutChanged ? "layout" : "error" });
-  } finally {
-    serving = false;
   }
 });
 

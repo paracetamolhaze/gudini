@@ -226,7 +226,12 @@ export function validateDraft(text: string, facts: VerifiedFact[], opts: Validat
   // Тег в конце нужен для того, чтобы пост нашли по теме. В Threads кликается только первый,
   // в X больше двух читаются как спам — поэтому предел зависит от площадки, а не «любой тег плохо».
   const tagLimit = (opts.language ?? "ru") === "en" ? 2 : 1;
-  const hashtags = (body.match(/#[\p{L}\p{N}_]+/gu) ?? []).length;
+  const tags = body.match(/#[\p{L}\p{N}_]+/gu) ?? [];
+  const hashtags = tags.length;
+  // Тег в русском посте пишется по-русски, в английском — по-английски: его смысл в том, чтобы
+  // пост нашли свои, а по латинскому тегу в Threads придёт не та аудитория.
+  const wrongTag = tags.find((tag) => ((opts.language ?? "ru") === "en" ? /[а-яё]/i.test(tag) : /[a-z]/i.test(tag)));
+  if (wrongTag) violations.push({ code: "HASHTAGS", message: `Тег «${wrongTag}» не на том языке: в ${(opts.language ?? "ru") === "en" ? "X теги английские" : "Threads теги русские"}`, severity: "warn" });
   if (hashtags > tagLimit) violations.push({ code: "HASHTAGS", message: `Тегов ${hashtags}, а нужно не больше ${tagLimit}${tagLimit === 1 ? " — в Threads кликается только первый" : ""}`, severity: "warn" });
   const emoji = (t.match(/\p{Extended_Pictographic}/gu) ?? []).length;
   if (emoji > 2) violations.push({ code: "EMOJI_SPAM", message: `Слишком много emoji (${emoji})`, severity: "warn" });

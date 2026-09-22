@@ -157,9 +157,11 @@ test("style retrieval prefers examples about the same topic and never returns di
 test("one tag is wanted, a pile of them is not — and X may have two", () => {
   const body = "Фандинг на перпах в боковике тихо съедает депозит, а многие его вообще не считают перед входом.";
   assert.deepEqual(validateDraft(`${body} #перпы`, [], { minChars: 10 }).violations, [], "один тег — это то, ради чего всё делалось");
+  assert.equal(validateDraft(`${body} #bitcoin`, [], { minChars: 10 }).violations.some((v) => v.code === "HASHTAGS"), true, "в Threads тег русский");
   assert.equal(validateDraft(`${body} #перпы #крипта`, [], { minChars: 10 }).violations.some((v) => v.code === "HASHTAGS"), true, "в Threads кликается только первый");
   const en = "Funding quietly eats your deposit in a range, and most people never check it before entry.";
   assert.deepEqual(validateDraft(`${en} #bitcoin #crypto`, [], { language: "en", minChars: 10 }).violations, [], "в X два тега — норма");
+  assert.equal(validateDraft(`${en} #перпы`, [], { language: "en", minChars: 10 }).violations.some((v) => v.code === "HASHTAGS"), true, "в X тег английский");
   assert.equal(validateDraft(`${en} #bitcoin #crypto #perps`, [], { language: "en", minChars: 10 }).violations.some((v) => v.code === "HASHTAGS"), true);
 });
 

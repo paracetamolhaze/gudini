@@ -2,11 +2,18 @@
 import { saveSettings } from '../dist/src/config/settings.js';
 import { listSources, insertSource } from '../dist/src/db/repos/sources.js';
 import { closePool } from '../dist/src/db/pool.js';
+// The normal setup writes texts through the local Claude bridge; a paid provider key is the fallback.
+const bridge = Boolean(process.env.CLAUDE_BRIDGE_URL && process.env.CLAUDE_BRIDGE_TOKEN);
+const paidKey = process.env.OPENROUTER_API_KEY || process.env.LLM_API_KEY || process.env.OPENAI_API_KEY
+  || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY;
+if (!bridge && !paidKey) {
+  throw new Error('Сначала настройте LLM в threads/.env: либо мост к Claude (CLAUDE_BRIDGE_URL и CLAUDE_BRIDGE_TOKEN), либо ключ платного провайдера (например OPENROUTER_API_KEY).');
+}
+// Models are touched only when LLM_MODEL_WRITER is set explicitly: otherwise the working setup stays.
 const model = process.env.LLM_MODEL_WRITER;
-if (!model || !process.env.OPENROUTER_API_KEY) throw new Error('Configure the LLM environment first');
 await saveSettings({ mode: 'AUTO', killSwitch: false, dryRun: false,
   flags: { autoPost: false, autoOwnReplies: true, autoPublicReplies: true, imageTranslation: false },
-  models: { writer: model, analysis: model, reply: model, vision: model, translation: model, embedding: '' },
+  ...(model ? { models: { writer: model, analysis: model, reply: model, vision: model, translation: model, embedding: '' } } : {}),
   limits: { maxPublicRepliesPerHour: 2, maxPublicRepliesPerDay: 6, maxOwnRepliesPerHour: 6, maxOwnRepliesPerDay: 30 },
   engagement: { minimumScore: 80, pollMinutes: 30 }, replies: { minConfidence: 85 },
 });

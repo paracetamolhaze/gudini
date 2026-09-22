@@ -24,6 +24,8 @@ export async function repeatableSpecs(): Promise<RepeatableSpec[]> {
     { queue: "media", name: "media:sweep", everyMs: minutes(3) },
     { queue: "publisher", name: "publisher:tick", everyMs: minutes(1) },
     { queue: "publisher", name: "publisher:expire", everyMs: minutes(10) },
+    // Housekeeping: everything above writes a `jobs` row on every tick, so once a day we sweep the old ones out.
+    { queue: "publisher", name: "publisher:retention", everyMs: minutes(24 * 60) },
     { queue: "replies", name: "replies:poll", everyMs: minutes(s.replies.pollMinutes) },
     { queue: "engagement", name: "engagement:poll", everyMs: minutes(s.engagement.pollMinutes) },
     { queue: "analytics", name: "analytics:insights", everyMs: minutes(s.analytics.insightsPollMinutes) },

@@ -4,9 +4,9 @@ import { pingRedis } from "../queue/connection.js";
 import { threadsClient } from "../threads/index.js";
 import { llm } from "../llm/index.js";
 import { env } from "../config/env.js";
+import { defaultSettings, loadSettings } from "../config/settings.js";
 import { errorMessage, scrubSecrets } from "../shared/logger.js";
 import { PLATFORM_LABEL, platform, type PlatformId } from "../platforms/index.js";
-import { xClient } from "../x/index.js";
 
 /**
  * /health          liveness + summary of every dependency
@@ -63,18 +63,23 @@ export async function checkLlm(): Promise<{ ok: boolean; message: string; tasks:
 
 export function registerHealthRoutes(app: FastifyInstance, prefix: string): void {
   app.get(`${prefix}/health`, async () => {
-    const [db, redis] = await Promise.all([checkDb(), pingRedis()]);
+    // Mode and dry run live in the settings table — the dashboard buttons write them there, so the
+    // environment only holds the first-boot defaults. With Postgres down we fall back to those
+    // defaults instead of failing the page whose whole job is to say Postgres is down, and we ask
+    // alongside the db probe so that outage costs one connection timeout here, not two in a row.
+    const [db, redis, settings] = await Promise.all([checkDb(), pingRedis(), loadSettings().catch(() => defaultSettings())]);
     return {
       status: db.ok && redis.ok ? "ok" : "degraded",
       service: "gudini-threads",
       version: "0.2.0",
       platforms: Object.keys(PLATFORM_LABEL),
-      mode: env().AUTOPILOT_MODE,
-      dryRun: env().DRY_RUN,
+      mode: settings.mode,
+      dryRun: settings.dryRun,
       db,
       redis,
       threadsConfigured: threadsClient().hasToken,
-      xConfigured: xClient().hasCredentials,
+      // Ask whichever X we actually publish through (browser by default), not the legacy paid client.
+      xConfigured: platform("x").configured(),
       uptimeSec: Math.round(process.uptime()),
     };
   });

@@ -83,8 +83,19 @@ export const xAdapter: PlatformAdapter = {
     if (budget <= 0) return { ...empty, notice: "X: дневной бюджет чтения исчерпан, новые комментарии подтянутся завтра (лимит в настройках X)" };
     const client = xClient();
     const sinceId = await readCursor();
-    const { posts, newestId } = await client.mentions({ sinceId, startTime: new Date(Date.now() - opts.lookbackHours * 3_600_000), max: Math.max(5, Math.min(50, budget)) });
-    if (newestId) await writeCursor(newestId);
+    // X answers mentions newest-first and the client has no pagination_token, so a page filled to the
+    // brim means the window was cut: older mentions are still waiting behind it. `max` is whatever is
+    // left of today's read budget and can fall to 5, so while a bigger page is still possible we leave
+    // the cursor alone and the next poll repeats the same window. Once even the largest page we ever
+    // ask for comes back full, waiting cannot help — that backlog only grows, and a cursor that never
+    // moves would re-read the same page every five minutes until the whole budget (mentions and search
+    // share it) is gone, day after day. Then we move on and say out loud that the tail was skipped.
+    const pageCap = Math.max(5, Math.min(50, cachedSettings().platforms.x.dailyReadBudget));
+    const max = Math.max(5, Math.min(50, budget));
+    const { posts, newestId } = await client.mentions({ sinceId, startTime: new Date(Date.now() - opts.lookbackHours * 3_600_000), max });
+    const cut = posts.length >= max;
+    const notice = cut && max >= pageCap ? `X: упоминаний накопилось больше, чем читаем за один опрос (${max}) — самые старые пропущены` : null;
+    if (newestId && (!cut || max >= pageCap)) await writeCursor(newestId);
     const own = opts.ownUsername.toLowerCase();
     const ours = new Set((await query<{ platform_post_id: string }>(`SELECT platform_post_id FROM publications WHERE platform = 'x' AND published_at >= now() - interval '30 days'`)).map((r) => r.platform_post_id));
     const items: InboxItem[] = [];
@@ -105,7 +116,7 @@ export const xAdapter: PlatformAdapter = {
         conversations.set(root, list);
       }
     }
-    return { items, conversations, notice: null };
+    return { items, conversations, notice };
   },
 
   async searchPosts(opts): Promise<{ found: FoundPost[]; error: string | null }> {

@@ -101,6 +101,15 @@ export const settingsSchema = z.object({
     insightsPollMinutes: z.number().int().min(15),
     snapshotDays: z.number().int().min(1),
   }),
+  /**
+   * Housekeeping. Bookkeeping tables grow by thousands of rows a day and nobody reads them after a
+   * while; a nightly job drops what is older than this. Insight snapshots follow analytics.snapshotDays.
+   */
+  retention: z.object({
+    jobDays: z.number().int().min(1).max(365),
+    auditDays: z.number().int().min(1).max(3650),
+    llmCallDays: z.number().int().min(1).max(3650),
+  }),
   pricing: z.record(z.string(), z.object({ input: z.number().min(0), output: z.number().min(0) })),
   /** Where posts go. Threads is driven by its Graph API; X is pay-per-use and forbids cold API replies. */
   platforms: z.object({
@@ -217,6 +226,7 @@ export function defaultSettings(): Settings {
     expiry: { breakingHours: 24, normalHours: 72, evergreenHours: 24 * 14 },
     writer: { variantsPerDraft: 2, maxStyleExamples: 6, language: "ru" },
     analytics: { insightsPollMinutes: 180, snapshotDays: 14 },
+    retention: { jobDays: 14, auditDays: 90, llmCallDays: 180 },
     pricing: DEFAULT_PRICING,
     platforms: {
       threads: { enabled: true, maxChars: 500 },

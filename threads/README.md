@@ -64,12 +64,19 @@ threads/
 ## Запуск
 
 Сервис — часть `docker-compose.yml` в корне репозитория (сервисы `threads-app`, `threads-worker`,
-`threads-postgres`, `threads-redis`). Ключи — в `threads/.env` (см. `threads/.env.example`).
+`x-browser`, `threads-postgres`, `threads-redis`). Ключи — в `threads/.env` (см. `threads/.env.example`).
 
 ```bash
-cp threads/.env.example threads/.env        # заполнить THREADS_ACCESS_TOKEN и ключ LLM
-docker compose up -d --build threads-app threads-worker
+cp threads/.env.example threads/.env        # заполнить THREADS_ACCESS_TOKEN, X_BROWSER_TOKEN и мост к Claude
+docker compose up -d --build threads-app threads-worker x-browser
 ```
+
+`x-browser` поднимать обязательно: без него X мёртв — дашборд отвечает «Браузер X не отвечает», а окно
+входа не открывается. Первая сборка этого контейнера идёт долго (образ скачивает Chromium), дальше
+запуск обычный.
+
+Тексты пишет Claude по подписке через локальный мост на компьютере владельца (`npm run bridge`), поэтому
+в `.env` нужны `CLAUDE_BRIDGE_URL` и `CLAUDE_BRIDGE_TOKEN`; платный ключ LLM не нужен.
 
 Адреса: дома `http://192.168.1.68:3000/threads/` (сайт проксирует в контейнер) или напрямую
 `http://192.168.1.68:8500/…` для Clipy и `:8600/threads/` для этого сервиса; снаружи
@@ -108,7 +115,8 @@ npm run dev:worker   # очереди
   ответы ждут кнопок Approve/Send. `AUTO` — уверенный контент уходит сам, рискованный — на проверку
   (`risk < 30`, `confidence > 85`, `score > 75`, пороги в Settings).
 - Feature flags по умолчанию `false`: `AUTO_POST_ENABLED`, `AUTO_OWN_REPLIES`, `AUTO_PUBLIC_REPLIES`,
-  `IMAGE_TRANSLATION_ENABLED`. `DRY_RUN=true` — Threads только читается, отправки пишутся в лог.
+  `IMAGE_TRANSLATION_ENABLED`. `DRY_RUN=true` — обе площадки, и Threads, и X, только читаются:
+  публикации и ответы пишутся в лог вместо отправки.
 - **STOP AUTOPILOT** в шапке дашборда: мгновенно запрещает публикации, ответы и engagement; идущая
   задача перечитывает флаг перед отправкой.
 - Hard caps: посты/сутки, свои и публичные ответы в час и в сутки, минимальный интервал между

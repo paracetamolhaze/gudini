@@ -27,7 +27,10 @@ function stamp() {
 async function backup() {
   mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `threads-${stamp()}.sql.gz`);
-  const dump = spawnSync("docker", ["exec", container, "pg_dump", "-U", dbUser, "--no-owner", "--no-privileges", dbName], { maxBuffer: 1024 * 1024 * 1024 });
+  // --clean --if-exists обязательны: восстанавливаем всегда в базу, где схема уже есть — контейнеры
+  // накатывают миграции на старте. Без DROP psql с ON_ERROR_STOP падает на первом CREATE TABLE,
+  // то есть дамп нельзя залить обратно вообще.
+  const dump = spawnSync("docker", ["exec", container, "pg_dump", "-U", dbUser, "--no-owner", "--no-privileges", "--clean", "--if-exists", dbName], { maxBuffer: 1024 * 1024 * 1024 });
   if (dump.status !== 0) {
     console.error(dump.stderr.toString());
     process.exit(1);
@@ -55,7 +58,20 @@ async function restore(file) {
     for await (const c of source) chunks.push(c);
   });
   const sql = Buffer.concat(chunks);
+  // Приложение и воркер на старте сами накатывают миграции — если они живы, то допишут схему
+  // поверх заливки. Останавливаем их на время восстановления и поднимаем обратно.
+  const compose = (...a) => execFileSync("docker", ["compose", ...a], { cwd: path.resolve(process.cwd(), ".."), stdio: "inherit" });
+  try {
+    compose("stop", "threads-app", "threads-worker");
+  } catch {
+    console.warn("не удалось остановить threads-app/threads-worker — восстанавливаю как есть");
+  }
   execFileSync("docker", ["exec", "-i", container, "psql", "-U", dbUser, "-d", dbName, "-v", "ON_ERROR_STOP=1"], { input: sql, stdio: ["pipe", "inherit", "inherit"] });
+  try {
+    compose("start", "threads-app", "threads-worker");
+  } catch {
+    console.warn("поднимите threads-app и threads-worker вручную");
+  }
   console.log(`restored ${file} into ${container}/${dbName}`);
 }
 

@@ -275,7 +275,9 @@ export async function publishDraft(draftId: string, opts: { manual: boolean }): 
       return { kind: "skipped", reason: limit.reason };
     }
   }
-  const locked = await transitionDraft(draftId, ["APPROVED", "SCHEDULED", "FAILED", "DRAFT", "NEEDS_REVIEW", "PARTIAL"], "PUBLISHING");
+  // DRAFT и NEEDS_REVIEW сюда не входят намеренно: пост, который владелец успел вернуть в черновики,
+  // не должен уйти из уже поставленной в очередь задачи. Ручная публикация сама ставит APPROVED.
+  const locked = await transitionDraft(draftId, ["APPROVED", "SCHEDULED", "FAILED", "PARTIAL"], "PUBLISHING");
   if (!locked) return { kind: "skipped", reason: `draft is ${draft.status} (already publishing?)` };
 
   try {

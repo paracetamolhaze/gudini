@@ -22,6 +22,9 @@ export interface ActivePrompt {
   label: string;
 }
 
+/** Пометка версии, которую посеяли мы сами: только её можно молча обновлять из кода. */
+const BUILT_IN_NOTE = "built-in default";
+
 const cache = new Map<string, { at: number; value: ActivePrompt }>();
 const CACHE_MS = 10_000;
 
@@ -34,6 +37,14 @@ export async function getActivePrompt(name: string, builtIn: string): Promise<Ac
     if (!exists || exists.n === 0) {
       row = await one<PromptVersionRow>(`INSERT INTO prompt_versions (name, version, prompt, active, note) VALUES ($1, 1, $2, true, 'built-in default') RETURNING *`, [name, builtIn]);
     }
+  } else if (row.note === BUILT_IN_NOTE && row.prompt !== builtIn) {
+    // Встроенный промпт правится в коде, а работает тот, что лежит в базе с первого запуска: без
+    // этого правка prompts.ts не доходила до постов вообще. Свою версию владельца не трогаем —
+    // обновляется только та, что мы сами когда-то и посеяли.
+    const next = await one<{ v: number }>(`SELECT COALESCE(max(version), 0) + 1 AS v FROM prompt_versions WHERE name = $1`, [name]);
+    await query(`UPDATE prompt_versions SET active = false WHERE name = $1 AND active`, [name]);
+    row = await one<PromptVersionRow>(`INSERT INTO prompt_versions (name, version, prompt, active, note) VALUES ($1,$2,$3,true,$4) RETURNING *`, [name, next?.v ?? row.version + 1, builtIn, BUILT_IN_NOTE]);
+    if (row) await audit("PROMPT_ACTIVATED", `Встроенный промпт ${name} обновлён до v${row.version} (изменён в коде)`, {}, { name, version: row.version });
   }
   const value: ActivePrompt = row
     ? { name, version: row.version, prompt: row.prompt, label: `${name}_v${row.version}` }

@@ -244,8 +244,28 @@ export interface ScrapedPost {
 
 const STATUS_HREF = /^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/;
 
+// Язык интерфейса X берётся из настроек аккаунта, а не из locale браузера: у владельца он русский,
+// поэтому лента разговора подписана «Лента: Переписка». Держим оба языка и не угадываем дальше.
+const CONVERSATION: Strategy[] = [
+  { name: "aria:Timeline Conversation", find: (s) => s.locator('[aria-label^="Timeline: Conversation" i]') },
+  { name: "aria:Лента Переписка", find: (s) => s.locator('[aria-label^="Лента: Переписка" i]') },
+  { name: "aria:Conversation", find: (s) => s.locator('[aria-label*="Conversation" i], [aria-label*="Переписк" i]') },
+];
+
+/**
+ * Лента разговора под нашим постом — и только она. Страница поста в X ниже ответов рисует блок
+ * «Discover more» с чужими, никак не связанными постами, и они такие же <article>. Если читать
+ * страницу целиком, эти чужие посты приезжают как «комментарии под нашим постом», а автоответ
+ * уходит публичным комментарием под чужой пост. Не нашли контейнер разговора — это ошибка,
+ * а не повод отдать всё подряд.
+ */
+export async function scrapeConversation(page: Page, limit: number): Promise<ScrapedPost[]> {
+  const { locator } = await firstVisible(page, CONVERSATION, 20_000);
+  return scrapeTimeline(locator, limit);
+}
+
 /** Works on any timeline: profile, search results, notifications. */
-export async function scrapeTimeline(page: Page, limit: number): Promise<ScrapedPost[]> {
+export async function scrapeTimeline(page: Page | Locator, limit: number): Promise<ScrapedPost[]> {
   const articles = page.locator("article");
   await articles.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => null);
   const out: ScrapedPost[] = [];
@@ -293,14 +313,26 @@ export async function scrapeTimeline(page: Page, limit: number): Promise<Scraped
  * Recovery probe after an ambiguous send. "Not found" and "could not look" must stay different
  * answers, so a failure to read throws instead of reporting an empty timeline.
  */
+/**
+ * Опубликованный пост X отдаёт эмодзи картинкой, и в тексте страницы его нет, а в нашем исходнике
+ * есть. Сравнение «слово в слово» тогда не совпадёт никогда, проверка решит, что поста нет, —
+ * и очередь отправит его второй раз. Поэтому сравниваем без эмодзи и без разницы в пробелах.
+ */
+const plainText = (s: string): string =>
+  s
+    .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
 export async function findOwnPostByText(page: Page, username: string, text: string, since: Date): Promise<ScrapedPost | null> {
   await page.goto(`https://x.com/${username}/with_replies`, { waitUntil: "domcontentloaded", timeout: 45_000 });
   await assertLoggedIn(page, "проверить публикацию не удалось");
-  const wanted = text.replace(/\s+/g, " ").trim().slice(0, 80).toLowerCase();
+  const wanted = plainText(text).slice(0, 80);
   const posts = await scrapeTimeline(page, 30);
   if (!posts.length) throw new XLayoutChanged("Не удалось прочитать ленту профиля для проверки публикации.");
   const floor = since.getTime() - 5 * 60_000;
-  return posts.find((p) => p.text.toLowerCase().includes(wanted) && (!p.timestamp || p.timestamp.getTime() >= floor)) ?? null;
+  return posts.find((p) => plainText(p.text).includes(wanted) && (!p.timestamp || p.timestamp.getTime() >= floor)) ?? null;
 }
 
 /** What the live page actually offers — the answer that replaces guessing at X's current markup. */
@@ -311,6 +343,15 @@ export async function probeLayout(page: Page): Promise<Record<string, string>> {
     result[key] = await firstVisible(page, strategies, 3_000).then((r) => r.name).catch(() => "не найдено");
   }
   result.articles = String(await page.locator("article").count());
+  // Разметку разговора X называет по-своему, поэтому показываем живые aria-label: по ним и
+  // подбирается контейнер, внутри которого лежат настоящие ответы, а не блок «Discover more».
+  const labelled = page.locator("[aria-label]");
+  const labels: string[] = [];
+  for (let i = 0, n = Math.min(await labelled.count(), 120); i < n; i++) {
+    const v = await labelled.nth(i).getAttribute("aria-label");
+    if (v && v.length > 3 && v.length < 80 && !labels.includes(v)) labels.push(v);
+  }
+  result.ariaLabels = labels.slice(0, 40).join(" | ") || "нет";
   const testids = page.locator("[data-testid]");
   const names = new Set<string>();
   for (let i = 0, n = Math.min(await testids.count(), 200); i < n; i++) {

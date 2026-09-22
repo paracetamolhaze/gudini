@@ -402,8 +402,11 @@ test("Hyperliquid: fills become trades; a fresh winner gets a card and a post, a
   assert.deepEqual([again.newFills, again.drafted], [0, 0]);
   assert.equal((await query("SELECT 1 FROM drafts WHERE kind = $1", ["TRADE"])).length, 1);
 
-  // published with the card; the trade is marked as posted
+  // published with the card; the trade is marked as posted.
+  // Одобряем так же, как это делает кнопка на сайте: публиковать разрешено только одобренный
+  // черновик — иначе пост, возвращённый владельцем в черновики, ушёл бы из уже стоящей задачи.
   await query("UPDATE publications SET published_at = now() - make_interval(hours => 3)");
+  await transitionDraft(draft!.id, ["DRAFT", "NEEDS_REVIEW"], "APPROVED");
   const out = await publishDraft(draft!.id, { manual: true });
   assert.equal(out.kind, "published", JSON.stringify(out));
   assert.equal(fake.images.at(-1), `https://example.test/threads/media/public/${btc!.card_asset_id}/final.jpg`);

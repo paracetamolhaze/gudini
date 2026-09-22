@@ -20,6 +20,7 @@ import {
   probeLayout,
   publishedIdFromToast,
   readIdentity,
+  scrapeConversation,
   scrapeTimeline,
   submitComposer,
 } from "./x/browser/pages.js";
@@ -203,7 +204,7 @@ async function thread(body: Record<string, unknown>): Promise<unknown> {
   const p = await ensureSession();
   await p.goto(`https://x.com/i/status/${postId}`, { waitUntil: "domcontentloaded", timeout: 45_000 });
   await assertLoggedIn(p, "ветка не прочитана");
-  const posts = await scrapeTimeline(p, max + 1);
+  const posts = await scrapeConversation(p, max + 1);
   return { posts: posts.filter((post) => post.id !== postId) };
 }
 

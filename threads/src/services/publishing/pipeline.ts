@@ -315,9 +315,10 @@ export async function publishDraft(draftId: string, opts: { manual: boolean }): 
       }
     }
 
-    // Kill switch is re-read right before the send: a stop pressed during the job wins.
+    // Стоп перечитывается перед самой отправкой: пауза, нажатая уже во время работы, побеждает
+    // автоматику. Но не владельца: если он сам нажал «Опубликовать», пост уходит и на паузе.
     const latest = await loadSettings(true);
-    if (latest.killSwitch) {
+    if (latest.killSwitch && !opts.manual) {
       await transitionDraft(draftId, ["PUBLISHING"], already.length ? "PARTIAL" : "APPROVED");
       await audit("KILL_SWITCH", "Kill switch сработал перед отправкой — публикация отменена", { draftId }, null, "warn");
       return { kind: "skipped", reason: "kill switch" };

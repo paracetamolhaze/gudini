@@ -209,6 +209,22 @@ async function submitReady(locator: Locator): Promise<boolean> {
   return aria !== "true";
 }
 
+/**
+ * Пока X грузит картинку, он держит поверх страницы прозрачный слой, и тот перехватывает клики:
+ * кнопка видна, активна — и не нажимается. Ждём, пока слой уберут.
+ */
+async function overlayGone(page: Page, timeoutMs = 90_000): Promise<void> {
+  const blockers = page.locator('[data-testid="mask"], [data-testid="progressBar-bar"]');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const count = await blockers.count().catch(() => 0);
+    let visible = false;
+    for (let i = 0; i < count; i++) if (await blockers.nth(i).isVisible().catch(() => false)) visible = true;
+    if (!visible) return;
+    await page.waitForTimeout(500);
+  }
+}
+
 export async function submitComposer(page: Page): Promise<void> {
   // Кнопка живёт в том же окне, что и уже заполненное поле: не нашли её за десять секунд — не найдём.
   // Ожить она может не сразу — X ждёт загрузку картинки, — но полминуты хватает и на это.
@@ -218,7 +234,16 @@ export async function submitComposer(page: Page): Promise<void> {
     if (Date.now() > deadline) throw new XLayoutChanged("Кнопка публикации в X осталась неактивной — X не принял текст поста.");
     await page.waitForTimeout(500);
   }
-  await locator.click();
+  await overlayGone(page);
+  try {
+    await locator.click({ timeout: 20_000 });
+  } catch (err) {
+    // Playwright не отправляет клик, пока элемент перекрыт, — значит пост ещё не ушёл и второй
+    // попыткой дубля не будет. У X есть штатное сочетание клавиш, оно проходит поверх слоя.
+    if (!/intercepts pointer events|Timeout/i.test(err instanceof Error ? err.message : String(err))) throw err;
+    await locator.focus().catch(() => {});
+    await page.keyboard.press("ControlOrMeta+Enter");
+  }
 }
 
 /**

@@ -15,6 +15,8 @@ type S = {
   persona: { name: string; bio: string; tone: string; rules: string };
   trades: { enabled: boolean; wallet: string; minPnlUsd: number; minRoePct: number; requireBoth: boolean; showUsd: boolean; showSize: boolean; showWallet: boolean; maxPostsPerDay: number; autoPublish: boolean; handle: string; pollMinutes: number };
   movers: { enabled: boolean; minChange24hPct: number; minChange1hPct: number; minVolumeUsd: number; maxPostsPerDay: number; topN: number };
+  engagement: { watchKeywords: string[]; minimumScore: number };
+  schedule: { maximumPostsPerDay: number };
 };
 type Data = { settings: S; env: { threadsToken: boolean; xKeys: { apiKey: boolean; apiSecret: boolean; accessToken: boolean; accessSecret: boolean }; keys: Record<string, boolean>; hyperliquidWalletEnv: boolean; publicBaseUrl: string | null } };
 
@@ -56,7 +58,7 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
   const save = () =>
     void act.run(
       "Настройки сохранены",
-      () => put("/settings", { platforms: form!.platforms, persona: form!.persona, trades: form!.trades, movers: form!.movers }),
+      () => put("/settings", { platforms: form!.platforms, persona: form!.persona, trades: form!.trades, movers: form!.movers, engagement: form!.engagement }),
       async () => {
         setDirty(false);
         await data.reload();
@@ -160,6 +162,7 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
               <Field label="Сколько чужих постов смотреть в день" note="Через браузер это бесплатно; ограничение нужно, чтобы аккаунт не выглядел роботом."><input type="number" min={0} value={s.platforms.x.dailyReadBudget} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, dailyReadBudget: num(e.target.value, 60) } })} /></Field>
             </div>
             <Field label="Что искать в X" note="Синтаксис поиска самого X — один запрос, по нему берётся свежая лента."><input value={s.platforms.x.engagementQuery} maxLength={400} onChange={(e) => patch("platforms", { x: { ...s.platforms.x, engagementQuery: e.target.value } })} /></Field>
+            <Field label="Что искать в Threads" note="Слова через запятую: по ним ищутся чужие обсуждения."><input value={s.engagement.watchKeywords.join(", ")} onChange={(e) => patch("engagement", { watchKeywords: e.target.value.split(",").map((w) => w.trim()).filter(Boolean) })} /></Field>
             <Toggle checked={s.platforms.x.allowLinks} onChange={(v) => patch("platforms", { x: { ...s.platforms.x, allowLinks: v } })} label="Разрешить ссылки в текстах постов X" />
             <p className="muted small">По умолчанию ссылки вырезаются: вы держите их в описании профиля и ставите туда сами.</p>
           </Card>
@@ -169,7 +172,7 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
             <div className="form-grid">
               <Field label="Минимум прибыли, $"><input type="number" min={0} value={s.trades.minPnlUsd} onChange={(e) => patch("trades", { minPnlUsd: num(e.target.value, 50) })} /></Field>
               <Field label="Минимум на маржу (ROE), %"><input type="number" min={0} value={s.trades.minRoePct} onChange={(e) => patch("trades", { minRoePct: num(e.target.value, 5) })} /></Field>
-              <Field label="Постов о сделках в день"><input type="number" min={0} max={20} value={s.trades.maxPostsPerDay} onChange={(e) => patch("trades", { maxPostsPerDay: num(e.target.value, 3) })} /></Field>
+              <Field label="Постов о сделках в день" note={s.trades.maxPostsPerDay > s.schedule.maximumPostsPerDay ? `Общий предел — ${s.schedule.maximumPostsPerDay} постов в сутки на все темы; выше него не уйдёт` : undefined}><input type="number" min={0} max={20} value={s.trades.maxPostsPerDay} onChange={(e) => patch("trades", { maxPostsPerDay: num(e.target.value, 3) })} /></Field>
             </div>
             <div className="form-grid">
               <Toggle checked={s.trades.requireBoth} onChange={(v) => patch("trades", { requireBoth: v })} label="Нужны оба порога сразу" />
@@ -184,7 +187,7 @@ export default function SimpleSettings({ navigate, changed, overview }: { naviga
             <div className="form-grid">
               <Field label="От, % за сутки"><input type="number" min={1} value={s.movers.minChange24hPct} onChange={(e) => patch("movers", { minChange24hPct: num(e.target.value, 15) })} /></Field>
               <Field label="От, % за час"><input type="number" min={1} value={s.movers.minChange1hPct} onChange={(e) => patch("movers", { minChange1hPct: num(e.target.value, 8) })} /></Field>
-              <Field label="Постов в день"><input type="number" min={0} max={20} value={s.movers.maxPostsPerDay} onChange={(e) => patch("movers", { maxPostsPerDay: num(e.target.value, 2) })} /></Field>
+              <Field label="Постов в день" note={s.movers.maxPostsPerDay > s.schedule.maximumPostsPerDay ? `Общий предел — ${s.schedule.maximumPostsPerDay} постов в сутки на все темы` : undefined}><input type="number" min={0} max={20} value={s.movers.maxPostsPerDay} onChange={(e) => patch("movers", { maxPostsPerDay: num(e.target.value, 2) })} /></Field>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={() => navigate("sources")}>Источники новостей →</button>
           </Card>

@@ -50,7 +50,25 @@ async function ourPostFor(p: PlatformId, rootPostId: string | null): Promise<{ t
   return { text: pub.published_text, publicationId: pub.id, factsText: (facts?.facts ?? []).map((f) => `- (${f.status}) ${f.claim}`).join("\n") };
 }
 
+/**
+ * Процесс мог умереть между захватом строки и отправкой (деплой, OOM). Тогда ответ навсегда остаётся
+ * «отправляется»: вывести его оттуда некому, а в панели у такой строки скрыты все кнопки. Для
+ * черновиков ровно этот случай лечит recoverStuckPublishing; здесь то же самое для ответов.
+ */
+const STUCK_SENDING_MINUTES = 15;
+
+export async function recoverStuckSending(): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    `UPDATE interactions SET status = 'FAILED', error = 'отправка оборвалась на перезапуске', updated_at = now()
+      WHERE status = 'SENDING' AND updated_at < now() - interval '${STUCK_SENDING_MINUTES} minutes'
+      RETURNING id`,
+  );
+  for (const row of rows) await audit("REPLY_FAILED", `Отправка ответа оборвалась: строка висела в статусе SENDING больше ${STUCK_SENDING_MINUTES} минут`, { interactionId: row.id }, null, "warn");
+  return rows.map((r) => r.id);
+}
+
 export async function pollReplies(): Promise<{ found: number; processed: number; sent: number; skipped: number; mentionError: string | null }> {
+  await recoverStuckSending();
   const settings = await loadSettings(true);
   const empty = { found: 0, processed: 0, sent: 0, skipped: 0, mentionError: null as string | null };
   if (settings.mode === "OFF" || settings.killSwitch) return empty;

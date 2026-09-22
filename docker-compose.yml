@@ -113,11 +113,11 @@ services:
     environment:
       PORT: "8600"
       DATABASE_URL: postgres://threads:threads@threads-postgres:5432/threads
-      # Тексты пишет Claude Code на хосте по подписке владельца (scripts/claude-bridge.mjs)
-      CLAUDE_BRIDGE_URL: ${CLAUDE_BRIDGE_URL:-http://host.docker.internal:43131}
       REDIS_URL: redis://threads-redis:6379
       SITE_PASSWORD: ${SITE_PASSWORD:-}
-      PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
+      # Публичный адрес сайта задаётся в корневом .env (SITE_URL). Пусто — честнее, чем localhost:
+      # по localhost Threads всё равно не скачает карточку, а непустая строка красит проверку в зелёный.
+      PUBLIC_BASE_URL: ${SITE_URL:-}
       DATA_DIR: /app/data
       X_BROWSER_URL: http://x-browser:43132
     ports:
@@ -142,10 +142,10 @@ services:
         required: false
     environment:
       DATABASE_URL: postgres://threads:threads@threads-postgres:5432/threads
-      # Тексты пишет Claude Code на хосте по подписке владельца (scripts/claude-bridge.mjs)
-      CLAUDE_BRIDGE_URL: ${CLAUDE_BRIDGE_URL:-http://host.docker.internal:43131}
       REDIS_URL: redis://threads-redis:6379
-      PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
+      # Публичный адрес сайта задаётся в корневом .env (SITE_URL). Пусто — честнее, чем localhost:
+      # по localhost Threads всё равно не скачает карточку, а непустая строка красит проверку в зелёный.
+      PUBLIC_BASE_URL: ${SITE_URL:-}
       DATA_DIR: /app/data
       X_BROWSER_URL: http://x-browser:43132
     volumes:

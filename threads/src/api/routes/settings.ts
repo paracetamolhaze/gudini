@@ -4,6 +4,7 @@ import { loadSettings, saveSettings, MODES } from "../../config/settings.js";
 import { audit } from "../../services/audit.js";
 import { HttpError } from "../server.js";
 import { env } from "../../config/env.js";
+import { installRepeatableJobs } from "../../queue/scheduler.js";
 
 export function registerSettingsRoutes(app: FastifyInstance, api: string): void {
   app.get(`${api}/settings`, async () => {
@@ -38,6 +39,14 @@ export function registerSettingsRoutes(app: FastifyInstance, api: string): void 
     const changed = Object.keys(body as Record<string, unknown>);
     await audit("SETTINGS_CHANGED", `Настройки изменены: ${changed.join(", ")}`, {}, { changed });
     if (before.mode !== after.mode) await audit("MODE_CHANGED", `Режим ${before.mode} → ${after.mode}`, {}, { from: before.mode, to: after.mode }, "warn");
+    // Интервалы опроса зашиты в повторяющиеся задания при старте. Без перепланирования «раз в N минут»
+    // из настроек вступало бы в силу только после перезапуска контейнера, хотя экран пишет «Сохранено».
+    const intervals = ["replies", "engagement", "trades", "movers", "analytics", "schedule"];
+    if (changed.some((key) => intervals.includes(key))) {
+      await installRepeatableJobs().catch(async (err) => {
+        await audit("SETTINGS_CHANGED", `Новые интервалы применятся после перезапуска: ${err instanceof Error ? err.message : "очередь недоступна"}`, {}, null, "warn");
+      });
+    }
     return { settings: after };
   });
 

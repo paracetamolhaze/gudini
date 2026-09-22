@@ -169,16 +169,35 @@ const HEDGES = /(по данным|по информации|как пишет|�
 
 // JS `\b` is ASCII-only, so Cyrillic words need explicit letter lookarounds.
 const W = (s: string) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${s})(?![\\p{L}\\p{N}])`, "iu");
-const FORBIDDEN: Array<[RegExp, string]> = [
-  [W("покупаем|покупайте|закупаемся|закупайтесь|шортим|лонгуем|заходим в|тарим"), "призыв к сделке"],
+/**
+ * Запреты по языкам. Раньше список был один и целиком русский, а текст для X пишется по-английски —
+ * то есть на второй площадке замок фактически не работал: «guaranteed», «buy now», «risk-free» и
+ * «easy money» уходили без единого замечания. Общие правила действуют всегда, языковые добавляются
+ * к ним по opts.language.
+ */
+const FORBIDDEN_ANY: Array<[RegExp, string]> = [
   [W("\\d{2,4}\\s?[xх]|[xх]\\s?\\d{2,4}|иксы|иксов"), "обещание иксов"],
-  [W("гарантирован(?:о|а|ы|ный|ная)?|без\\s?риска|безрисков(?:ый|ая|о)|точно (?:полетит|вырастет|упадёт|упадет)|железно|100%"), "ложная уверенность"],
   [/to the moon|туземун|ту зе мун/iu, "хайп"],
   [W("не является финансовой рекомендацией|nfa|dyor"), "шаблонный дисклеймер"],
-  // The post may end by pointing at where I trade; it may not turn into an ad for the account.
+  [W("100%"), "ложная уверенность"],
+];
+
+const FORBIDDEN_RU: Array<[RegExp, string]> = [
+  [W("покупаем|покупайте|закупаемся|закупайтесь|шортим|лонгуем|заходим в|тарим"), "призыв к сделке"],
+  [W("гарантирован(?:о|а|ы|ный|ная)?|без\\s?риска|безрисков(?:ый|ая|о)|точно (?:полетит|вырастет|упадёт|упадет)|железно"), "ложная уверенность"],
+  // Пост может закончиться указанием, где я торгую; рекламой аккаунта он стать не должен.
   [W("подписывайтесь|подписывайся|подпишись|подпишитесь|переходи(?:те)? по ссылке|жми(?:те)? (?:на )?ссылку|регистрируйся|регистрируйтесь|не упусти(?:те)?|успей(?:те)? зайти"), "рекламный призыв"],
   [W("заработай(?:те)?|заработаешь|заработаете|л[ёе]гкие деньги|л[ёе]гкий профит|пассивный доход|удвои(?:шь|те) депозит"), "обещание заработка"],
 ];
+
+const FORBIDDEN_EN: Array<[RegExp, string]> = [
+  [W("buy(?:\\s+(?:now|the\\s+dip))?|aping\\s+in|ape\\s+in|load(?:ing)?\\s+up|full\\s+port|all\\s+in"), "призыв к сделке"],
+  [W("guaranteed|risk[-\\s]?free|can.?t\\s+lose|sure\\s+thing|no[-\\s]brainer|going\\s+straight\\s+up"), "ложная уверенность"],
+  [W("subscribe|follow\\s+me|join\\s+now|link\\s+in\\s+bio|don.?t\\s+miss|last\\s+chance|hurry"), "рекламный призыв"],
+  [W("easy\\s+money|free\\s+money|passive\\s+income|life[-\\s]changing\\s+money|double\\s+your"), "обещание заработка"],
+];
+
+const forbiddenFor = (language: "ru" | "en"): Array<[RegExp, string]> => [...FORBIDDEN_ANY, ...(language === "en" ? FORBIDDEN_EN : FORBIDDEN_RU)];
 
 export interface ValidateOptions {
   maxChars?: number;
@@ -213,7 +232,7 @@ export function validateDraft(text: string, facts: VerifiedFact[], opts: Validat
   if ((opts.language ?? "ru") === "en") {
     if (lat < 20 || lat < cyr) violations.push({ code: "NOT_RUSSIAN", message: "Текст для X должен быть на английском", severity: "block" });
   } else if (cyr < 20 || cyr < lat) violations.push({ code: "NOT_RUSSIAN", message: "Текст не похож на русский пост", severity: "block" });
-  for (const [re, label] of FORBIDDEN) {
+  for (const [re, label] of forbiddenFor(opts.language ?? "ru")) {
     const m = body.match(re);
     // The owner's own leverage is a fact; it may be written either way round.
     const multiple = m ? /^(?:([0-9]{1,4})\s?[xх]|[xх]\s?([0-9]{1,4}))$/i.exec(m[0]) : null;

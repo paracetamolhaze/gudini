@@ -236,7 +236,7 @@ function PostEditor({ id, navigate, platforms }: { id: string; navigate: (p: str
                     );
                   })}
                 </div>
-                <label className="field-label" htmlFor="post-text">Текст{targets.includes("x") && !ownX ? " (для обеих площадок)" : " для Threads"}</label>
+                <label className="field-label" htmlFor="post-text">Текст{targets.includes("x") && targets.includes("threads") && !ownX ? " (для обеих площадок)" : targets.includes("threads") ? " для Threads" : " для X"}</label>
                 <textarea id="post-text" className="post-editor" value={text} readOnly={!editable} onChange={(e) => { setText(e.target.value); setDirty(true); }} />
                 {targets.includes("x") && (
                   <>
@@ -268,6 +268,13 @@ function PostEditor({ id, navigate, platforms }: { id: string; navigate: (p: str
                 <Button disabled={!dirty || act.busy !== null} onClick={() => void act.run("Сохранено", () => savedAction("save"), info.reload)}>Сохранить</Button>
                 <Button disabled={dirty || act.busy !== null || d.kind === "TRADE" || d.kind === "MOVER"} onClick={() => void act.run("Пишу заново", regenerate, info.reload)}>Написать заново</Button>
                 <Button tone="ghost" disabled={act.busy !== null} onClick={() => void act.run("Отклонено", () => post(`/drafts/${id}/reject`), () => navigate("posts"))}>Отклонить</Button>
+              </div>
+            )}
+            {d && ["APPROVED", "SCHEDULED"].includes(d.status) && (
+              <div className="compose-actions">
+                <Button busy={act.busy !== null} onClick={() => void act.run("Вернули в черновики", () => post(`/drafts/${id}/unschedule`), info.reload)}>Вернуть в черновики</Button>
+                <Button tone="ghost" disabled={act.busy !== null} onClick={() => void act.run("Отклонено", () => post(`/drafts/${id}/reject`), () => navigate("posts"))}>Отклонить</Button>
+                <span className="small muted">Пока пост в очереди, текст не редактируется — верните его в черновики.</span>
               </div>
             )}
             {partial && (

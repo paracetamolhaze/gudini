@@ -205,7 +205,19 @@ export async function expireDrafts(): Promise<string[]> {
   const rows = await query<{ id: string }>(
     `UPDATE drafts SET status = 'EXPIRED', updated_at = now() WHERE expires_at < now() AND status IN ('DRAFT','NEEDS_REVIEW','APPROVED','SCHEDULED') RETURNING id`,
   );
+  await releaseSourceRows(rows.map((r) => r.id));
   return rows.map((r) => r.id);
+}
+
+/**
+ * Черновик умер — значит сделка и движение рынка, из которых он вырос, снова свободны.
+ * Иначе строка навсегда показывает «пост готов» и ведёт на отклонённый текст, а кнопка «Сделать
+ * пост» спрятана под условием «черновика ещё нет» — и попросить новый текст нечем.
+ */
+export async function releaseSourceRows(draftIds: string[]): Promise<void> {
+  if (!draftIds.length) return;
+  await query(`UPDATE hl_trades SET post_status = 'NONE', draft_id = NULL, updated_at = now() WHERE draft_id = ANY($1::uuid[])`, [draftIds]);
+  await query(`UPDATE market_moves SET status = 'FOUND', draft_id = NULL WHERE draft_id = ANY($1::uuid[])`, [draftIds]);
 }
 
 /** Dead end for a draft: it will never be published, so it lives in the archive tab and can be thrown away. */

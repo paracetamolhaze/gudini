@@ -31,8 +31,13 @@ export interface SourceCheckResult {
 
 const priorityFor = (source: SourceRow): Priority => (["P0", "P1", "P2", "P3"][Math.min(3, Math.max(0, source.priority))] ?? "P2") as Priority;
 
+/**
+ * Свой ник в Threads. Фильтр по площадке обязателен: в accounts теперь две строки, и вход в X
+ * обновляется часто — без него сюда приезжал бы ник из X, свои посты в Threads перестали бы
+ * отсеиваться, и сервис начал бы разбирать собственные публикации как чужие.
+ */
 async function ownUsername(): Promise<string> {
-  const row = await one<{ username: string }>(`SELECT username FROM accounts ORDER BY updated_at DESC LIMIT 1`);
+  const row = await one<{ username: string }>(`SELECT username FROM accounts WHERE platform = 'threads' ORDER BY updated_at DESC LIMIT 1`);
   return row?.username ?? "";
 }
 

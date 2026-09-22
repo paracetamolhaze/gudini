@@ -154,6 +154,17 @@ test("style retrieval prefers examples about the same topic and never returns di
   assert.equal(buildWriterUserMessage({ analysis, facts, sourcePosts: [], styleExamples: ex, recentOwnPosts: ["старый пост"], variants: 2, maxStyleExamples: 2 }, ["NEWS", "SHORT"]).includes("НЕДАВНИЕ ПОСТЫ"), true);
 });
 
+test("the English post for X is guarded too, not only the Russian one", () => {
+  const hype = "BTC is going straight up from here, guaranteed. Buy now before you miss out, this is easy money and a risk-free trade.";
+  const blocked = validateDraft(hype, [], { language: "en", minChars: 10 });
+  assert.equal(blocked.blocking, true, JSON.stringify(blocked.violations));
+  const plain = validateDraft("Funding flipped negative on perps today. I am not adding size here, the book is thin and slippage eats the edge fast.", [], { language: "en", minChars: 10 });
+  assert.deepEqual(plain.violations, [], JSON.stringify(plain.violations));
+  // Русские правила остаются на месте для русского текста.
+  const ru = validateDraft("Гарантированно вырастет, покупаем прямо сейчас, это лёгкие деньги без риска совсем, обещаю.", [], { minChars: 10 });
+  assert.equal(ru.blocking, true, JSON.stringify(ru.violations));
+});
+
 test("a fall is the same number whether or not the text writes the minus", () => {
   const facts = [{ claim: "изменение за сутки", value: -12, unit: "percent", status: "VERIFIED", certainty: "FACT" }] as never[];
   const plain = validateDraft("Рынок сегодня невесёлый. Монета упала на 12% за сутки, и покупатели пока не видны в стакане совсем.", facts, { minChars: 10 });

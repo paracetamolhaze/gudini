@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ARCHIVED_STATUSES, deleteArchivedDrafts, getDraft, listDrafts, updateDraft, transitionDraft, insertDraft } from "../../db/repos/drafts.js";
+import { ARCHIVED_STATUSES, deleteArchivedDrafts, getDraft, listDrafts, updateDraft, transitionDraft, insertDraft, releaseSourceRows } from "../../db/repos/drafts.js";
 import { getCandidate } from "../../db/repos/candidates.js";
 import { getSourcePost } from "../../db/repos/sourcePosts.js";
 import { enqueue, PRIORITY } from "../../queue/queues.js";
@@ -99,7 +99,18 @@ export function registerDraftRoutes(app: FastifyInstance, api: string): void {
     // GENERATING тоже: если написание оборвалось, владельцу нужен выход, а не вечное «пишу пост».
     const row = await transitionDraft(id, ["DRAFT", "NEEDS_REVIEW", "APPROVED", "SCHEDULED", "FAILED", "GENERATING"], "REJECTED", { review_reason: reason });
     if (!row) throw new HttpError(409, "draft cannot be rejected from its current status");
+    await releaseSourceRows([id]);
     await audit("POST_REJECTED", `Черновик отклонён: ${reason}`, { draftId: id, candidateId: row.candidate_id });
+    return { draft: row };
+  });
+
+  /** Снять с очереди, не отклоняя: пост возвращается в черновики и снова редактируется. */
+  app.post(`${api}/drafts/:id/unschedule`, async (req) => {
+    const { id } = req.params as { id: string };
+    const row = await transitionDraft(id, ["APPROVED", "SCHEDULED"], "DRAFT");
+    if (!row) throw new HttpError(409, "Этот пост уже не в очереди на публикацию.");
+    await query(`UPDATE drafts SET scheduled_at = NULL WHERE id = $1`, [id]);
+    await audit("POST_APPROVED", "Пост снят с очереди и возвращён в черновики", { draftId: id, candidateId: row.candidate_id });
     return { draft: row };
   });
 

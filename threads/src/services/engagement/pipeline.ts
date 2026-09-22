@@ -15,7 +15,7 @@ import { scorePosts, type DiscoveredPost } from "./scoring.js";
 /**
  * Public engagement: find other people's posts → score → say something of substance.
  *   Threads — keyword search, replies through the API (hard caps enforced at send time).
- *   X       — the API refuses cold replies, so a found post becomes either a prepared reply the owner
+ *   X       — the owner decides: a found post becomes either a prepared reply he sends himself
  *             posts by hand (manual) or a quote post (quote). Every found post is billed, so X is
  *             searched a few times a day within the read budget, not on every tick.
  */
@@ -87,6 +87,18 @@ async function pollPlatform(adapter: PlatformAdapter, settings: Settings, force:
     );
     if (inserted) fresh.push(f);
   }
+  // Строка пишется до оценки, а оценка может не состояться (модель недоступна). Тогда пост остаётся
+  // в FOUND, при следующем поиске ON CONFLICT молча его пропустит, и он не будет оценён никогда.
+  // Поэтому вместе со свежими берём всё, что застряло в FOUND за последние сутки.
+  const stale = await query<{ platform_post_id: string; username: string; text: string; published_at: Date | null; keyword: string; permalink: string | null }>(
+    `SELECT platform_post_id, username, text, published_at, keyword, permalink FROM discovered_posts
+      WHERE platform = $1 AND status = 'FOUND' AND created_at > now() - interval '24 hours' AND platform_post_id <> ALL($2::text[])
+      ORDER BY created_at DESC LIMIT 20`,
+    [p, fresh.map((f) => f.id)],
+  );
+  for (const row of stale) {
+    fresh.push({ id: row.platform_post_id, username: row.username, text: row.text, publishedAt: row.published_at, permalink: row.permalink, keyword: row.keyword });
+  }
   if (!fresh.length) return { ...empty, error };
   const byId = new Map(fresh.map((f) => [f.id, f]));
   const scored = await scorePosts(fresh.map((f): DiscoveredPost => ({ id: f.id, username: f.username, text: f.text, publishedAt: f.publishedAt, keyword: f.keyword })), { minimumScore: settings.engagement.minimumScore });
@@ -121,7 +133,7 @@ async function pollPlatform(adapter: PlatformAdapter, settings: Settings, force:
     }
     const autoAllowed = delivery !== "manual" && settings.mode === "AUTO" && settings.flags.autoPublicReplies && written.confidence >= settings.replies.minConfidence && written.violations.length === 0;
     if (!autoAllowed) {
-      await updateInteraction(row.id, { status: "DRAFT", reason: delivery === "manual" ? "X не принимает ответы чужим авторам через API — отправьте подготовленный текст кнопкой «Открыть в X»" : s.reason });
+      await updateInteraction(row.id, { status: "DRAFT", reason: delivery === "manual" ? "Режим «готовлю ответ, отправляете вы» — нажмите «Открыть в X». Чтобы бот отвечал сам, выберите режим «отвечать под постом» в настройках" : s.reason });
       await audit("ENGAGEMENT_GENERATED", `${adapter.label}: ответ на пост @${s.username} готов${delivery === "manual" ? " к ручной отправке" : " к проверке"}: ${written.text}`, { interactionId: row.id });
       continue;
     }

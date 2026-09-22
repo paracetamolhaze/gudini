@@ -349,7 +349,15 @@ export async function publishDraft(draftId: string, opts: { manual: boolean }): 
           postId = `dryrun:${draftId}`;
           await audit("DRY_RUN", `DRY_RUN: пост не отправлен в ${PLATFORM_LABEL[p]}${image.path ? " (с картинкой)" : ""}:\n${text}`, { draftId, candidateId: draft.candidate_id }, { platform: p, imageUrl: image.url });
         } else {
-          if (!adapter.configured()) throw new Error(`${PLATFORM_LABEL[p]} не подключён: добавьте ключи в threads/.env`);
+          // У браузерного входа ключей нет: совет «добавьте ключи» отправил бы владельца заводить
+          // платное приложение разработчика X вместо того, чтобы просто войти в окне.
+          if (!adapter.configured()) {
+            throw new Error(
+              p === "x" && env().X_TRANSPORT === "browser"
+                ? "X не подключён: нажмите «Подключить X» в настройках и войдите в аккаунт в окне браузера"
+                : `${PLATFORM_LABEL[p]} не подключён: добавьте ключи в threads/.env`,
+            );
+          }
           if (draft.kind === "TRADE" && draft.image_asset_id && p === "threads" && !image.url) throw new Error("PUBLIC_BASE_URL не задан — Threads не сможет скачать карточку сделки");
           if (p === "threads" && image.path && !image.url) await audit("IMAGE_FAILED", "PUBLIC_BASE_URL не задан — Threads не сможет скачать картинку, пост уходит без неё", { draftId, mediaAssetId }, null, "warn");
           const res = await adapter.publishPost({ key: draftAttemptKey(draftId, p), text, image: image.path ? image : undefined });

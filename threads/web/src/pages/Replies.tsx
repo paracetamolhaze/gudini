@@ -4,7 +4,7 @@ import { useAction, useFetch, fmtDate } from "../hooks";
 import { Badge, Button, Card, Empty, ErrorBox, Label, Notice, Status } from "../ui";
 
 type Interaction = { id: string; type: string; status: string; target_username: string; target_text: string; target_permalink: string | null; target_published_at: string | null; our_text: string | null; decision: string | null; reason: string | null; decision_json: { confidence?: number; sentiment?: string; toxicityScore?: number; scores?: { total: number }; angle?: string } | null; permalink: string | null; error: string | null; created_at: string; sent_at: string | null };
-type Detail = { interaction: Interaction; chain: Array<{ username: string; text: string; is_ours: boolean }>; publication: { published_text: string; permalink: string | null } | null; discovered: { text: string; scores_json: unknown } | null };
+type Detail = { interaction: Interaction; chain: Array<{ username: string; text: string; is_ours: boolean }>; publication: { published_text: string; permalink: string | null; platform: string } | null; discovered: { text: string; scores_json: unknown } | null };
 
 export default function Replies({ id, navigate }: { id: string | null; navigate: (p: string) => void }) {
   if (id) return <ReplyDetail id={id} navigate={navigate} />;
@@ -84,7 +84,7 @@ function ReplyDetail({ id, navigate }: { id: string; navigate: (p: string) => vo
       <div className="split">
         <Card title={data.publication ? "Наш пост" : data.discovered ? "Чужой пост" : "Контекст"}>
           {data.publication && <div className="ours" style={{ fontSize: 14 }}>{data.publication.published_text}</div>}
-          {data.publication?.permalink && <div className="small"><a href={data.publication.permalink} target="_blank" rel="noreferrer">открыть в Threads</a></div>}
+          {data.publication?.permalink && <div className="small"><a href={data.publication.permalink} target="_blank" rel="noreferrer">{data.publication.platform === "x" ? "открыть в X" : "открыть в Threads"}</a></div>}
           {data.chain.length > 0 && (
             <div className="chain" style={{ marginTop: 10 }}>
               {data.chain.map((m, i) => <div key={i} className={`msg ${m.is_ours ? "ours" : ""}`}><span className="who">{m.is_ours ? "мы" : `@${m.username}`}</span>{m.text}</div>)}

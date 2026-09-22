@@ -43,7 +43,7 @@ function PlatformCard({ p, navigate }: { p: PlatformOverview; navigate: (p: stri
             Чужие посты: {p.publicReplies === "auto" || p.publicReplies === "api" ? "отвечаем сами под постом" : p.publicReplies === "manual" ? "ответ готовится, отправляете вы" : p.publicReplies === "quote" ? "выходит цитатой" : "не трогаем"}
           </>
         ) : (
-          <>Ответы под своими и чужими постами идут через API{p.tokenExpiresAt ? ` · токен до ${fmtDate(p.tokenExpiresAt)}` : ""}</>
+          <>Ответы под своими и чужими постами уходят сами{p.tokenExpiresAt ? ` · токен до ${fmtDate(p.tokenExpiresAt)}` : ""}</>
         )}
       </div>
       {(!p.health.ok || !p.enabled) && (

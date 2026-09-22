@@ -105,6 +105,17 @@ export function defaultModels(e: Env): ModelSettings {
   };
 }
 
+
+/**
+ * Стоимость вызова в деньгах. Мост Claude работает по подписке: счёта за вызовы нет, а прайс-лист
+ * платного API совпал бы по имени модели и выдал бы выдуманные доллары — владелец читал бы «сегодня
+ * $3.40» как реально потраченные деньги. Поэтому для моста цена не пишется вовсе.
+ */
+function billableCost(provider: string, model: string, usage: { inputTokens: number; outputTokens: number; costUsd?: number }, pricing: PricingTable): number | null {
+  if (provider === "claude-bridge" && typeof usage.costUsd !== "number") return null;
+  return estimateCostUsd(model, usage, pricing);
+}
+
 export class LlmRouter {
   private readonly providers = new Map<string, LlmProvider>();
   private ledger: LlmLedger = () => undefined;
@@ -209,7 +220,7 @@ export class LlmRouter {
         operation: req.operation,
         inputTokens: res.usage.inputTokens,
         outputTokens: res.usage.outputTokens,
-        estimatedCost: estimateCostUsd(res.model, res.usage, this.getPricing()),
+        estimatedCost: billableCost(providerKind, res.model, res.usage, this.getPricing()),
         durationMs: Date.now() - started,
         ok: true,
         refs: req.refs,
@@ -295,7 +306,7 @@ export class LlmRouter {
       operation: "embedding",
       inputTokens: res.usage.inputTokens,
       outputTokens: 0,
-      estimatedCost: estimateCostUsd(model, res.usage, this.getPricing()),
+      estimatedCost: billableCost(providerKind, model, res.usage, this.getPricing()),
       durationMs: Date.now() - started,
       ok: true,
       refs,

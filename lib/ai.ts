@@ -5,6 +5,7 @@ import { addCost } from "./pipelineCost";
 import { readSpeechProfile, rhythmLine } from "./speechProfile";
 import { EXPLAINER_SYSTEM, isExplainerTopic } from "./explainerScript";
 import { ensureParagraphs } from "./scriptParagraphs";
+import { seriesLine } from "./seriesPlan";
 
 /** Блок сценария со ссылкой на факты, которые его подтверждают. */
 export type ScriptBeat = { text: string; factIds: string[] };
@@ -181,9 +182,11 @@ export function scriptPrompt(
 ): { system: string; user: string; explainer: boolean } {
   const explainer = isExplainerTopic(topic, kind ? { kind } : research);
   const brief = explainer ? "" : todayBrief(research);
+  // место в плане серии: призыв обещает следующий ролик по плану, а не придуманную тему
+  const series = seriesLine(topic);
   return {
     system: explainer ? EXPLAINER_SYSTEM : SCRIPT_SYSTEM,
-    user: `${todayLine()}\n${rhythm ? `${rhythm}\n` : ""}${brief ? `${brief}\n\n` : ""}Напиши сценарий ${explainer ? "ролика-объяснения" : "видео"} на тему: «${topic}»`,
+    user: `${todayLine()}\n${rhythm ? `${rhythm}\n` : ""}${series ? `${series}\n` : ""}${brief ? `${brief}\n\n` : ""}Напиши сценарий ${explainer ? "ролика-объяснения" : "видео"} на тему: «${topic}»`,
     explainer,
   };
 }

@@ -4,6 +4,20 @@ import { EXPLAINER_SYSTEM, isExplainerTopic } from "../lib/explainerScript";
 import { scriptPrompt } from "../lib/ai";
 import { researchFollowUps } from "../lib/storyResearch";
 import { ensureParagraphs } from "../lib/scriptParagraphs";
+import { CRYPTO_SERIES, seriesPosition } from "../lib/seriesPlan";
+
+test("сценарист знает номер ролика в плане серии и следующий по плану", () => {
+  assert.equal(CRYPTO_SERIES.length, 100);
+  const pizza = "Пицца за 10 000 биткоинов: самый дорогой ужин в истории";
+  assert.deepEqual(seriesPosition("Биткоин за минуту: объясняю так, чтобы понял младший брат"), { number: 1, total: 100, next: pizza });
+  assert.equal(seriesPosition("Биткоин за минуту")?.number, 1);
+  assert.equal(seriesPosition("Мой путь в крипту: с чего всё началось 🎙")?.number, 11);
+  assert.equal(seriesPosition("Первая покупка крипты: 5 ошибок почти всех новичков (18+)")?.number, 85);
+  assert.equal(seriesPosition("«Все уже заработали, а мне уже поздно»: почему так кажется каждый год")?.next, undefined);
+  assert.equal(seriesPosition("Беспилотное такси Waymo: пассажиры, наблюдение и вызов полиции"), null);
+  assert.match(scriptPrompt("Биткоин за минуту", null).user, /Следующий ролик серии: «Пицца за 10 000 биткоинов/);
+  assert.doesNotMatch(scriptPrompt("Беспилотное такси Waymo: пассажиры, наблюдение и вызов полиции", null).user, /серии/);
+});
 
 test("сплошной сценарий делится на абзацы без потери слов, призыв — отдельным абзацем", () => {
   const solid = "Представь: ты отправляешь другу деньги, и никакого банка в этой истории нет вообще. Это биткоин. " +

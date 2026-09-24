@@ -1,4 +1,4 @@
-import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
+import { mediaComplete, mediaLlmAvailable, scriptTransport } from "./mediaLlm";
 import { ProjectMeta } from "./store";
 import type { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
@@ -172,25 +172,49 @@ export function todayBrief(research?: StoryResearchPack | null): string {
  * справки исследования: по «Биткоин за минуту» поиск нашёл только руководство по майнингу,
  * и ролик для новичка ушёл в nonce, награду за блок и майнинг-пулы.
  */
-export function scriptPrompt(topic: string, research?: StoryResearchPack | null, rhythm = ""): { system: string; user: string } {
-  const explainer = isExplainerTopic(topic, research);
+export function scriptPrompt(
+  topic: string,
+  research?: StoryResearchPack | null,
+  rhythm = "",
+  kind?: StoryResearchPack["kind"],
+): { system: string; user: string; explainer: boolean } {
+  const explainer = isExplainerTopic(topic, kind ? { kind } : research);
   const brief = explainer ? "" : todayBrief(research);
   return {
     system: explainer ? EXPLAINER_SYSTEM : SCRIPT_SYSTEM,
     user: `${todayLine()}\n${rhythm ? `${rhythm}\n` : ""}${brief ? `${brief}\n\n` : ""}Напиши сценарий ${explainer ? "ролика-объяснения" : "видео"} на тему: «${topic}»`,
+    explainer,
   };
 }
 
+const TOPIC_KIND_SYSTEM = `Ты помогаешь сценаристу коротких видео понять, что обещает тема. Ответь одним словом:
+EXPLAINER — объяснение понятия, явления, схемы или того, как что-то устроено, включая разбор мифа или ошибки;
+NEWS_EVENT — свежее событие или новость; HISTORY — история из прошлого; PRODUCT — продукт, сервис или выбор
+между вариантами; PERSON — человек; ENTERTAINMENT — фильм, сериал, игра или музыка; OTHER — остальное.`;
+const KINDS = ["EXPLAINER", "NEWS_EVENT", "HISTORY", "PRODUCT", "PERSON", "ENTERTAINMENT", "OTHER"] as const;
+
+/** Тип темы, когда исследования перед сценарием нет: объяснение пишется иначе, чем история или новость. */
+export async function topicKind(topic: string): Promise<NonNullable<StoryResearchPack["kind"]>> {
+  const answer = (await mediaComplete({ stage: "Script Generation", system: TOPIC_KIND_SYSTEM, user: `Тема: «${topic}»` })).toUpperCase();
+  return KINDS.find((k) => answer.includes(k)) ?? "OTHER";
+}
+
 export async function generateScript(topic: string, research?: StoryResearchPack | null): Promise<{ script: string; demo: boolean }> {
-  if (!haveKey()) return { script: demoScript(topic), demo: true };
+  // Сценарии через мост Claude не зависят от ключей общего транспорта.
+  const claude = scriptTransport() === "claude";
+  if (!claude && !haveKey()) return { script: demoScript(topic), demo: true };
+  // Без исследования Claude сам определяет тип темы, а для историй и новостей проверяет свежие
+  // факты поиском. Объяснению поиск не нужен: справка уводила его в устройство сети.
+  const kind = claude && !research && !isExplainerTopic(topic) ? await topicKind(topic) : undefined;
   // ритм автора из профиля подачи (темп и длина фраз) — чтобы текст ложился на его речь
-  const { system, user } = scriptPrompt(topic, research, rhythmLine(readSpeechProfile()));
+  const { system, user, explainer } = scriptPrompt(topic, research, rhythmLine(readSpeechProfile()), kind);
   const script = await mediaComplete({
     model: MODEL_SCRIPT,
     maxTokens: 16000,
     stage: "Script Generation",
     system,
     user,
+    ...(claude && !research && !explainer ? { claudeTools: "web" as const } : {}),
   });
   return { script, demo: false };
 }

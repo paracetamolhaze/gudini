@@ -231,6 +231,8 @@ export type CompleteArgs = {
   model?: string;
   /** "off" — запретить модели скрытые размышления (только транспорт OpenRouter) */
   reasoning?: ReasoningMode;
+  /** "web" — Claude через мост сам проверяет свежие факты поиском (только мост Claude) */
+  claudeTools?: "web";
 };
 
 /**
@@ -274,7 +276,7 @@ async function completeWithClaudeBridge(args: CompleteArgs): Promise<string> {
   const stage = args.stage || "Script Generation";
   assertProvider(stage, "anthropic");
   const model = process.env.CLAUDE_SCRIPT_MODEL || "claude-opus-5";
-  return claudeBridgeComplete({ stage, model, system: args.system, user: args.user, task: "script" });
+  return claudeBridgeComplete({ stage, model, system: args.system, user: args.user, task: "script", tools: args.claudeTools });
 }
 
 async function completeWithCodex(args: CompleteArgs & { images?: VisionImage[] }): Promise<string> {

@@ -3,6 +3,7 @@ import { getSettings } from "./store";
 import { recordTokens, withBudget, projectRequestCost, CostStage, CostProvider } from "./costLedger";
 import { assertProvider, ProviderPolicyError } from "./providerPolicy";
 import { codexComplete, codexModel, codexEffort, CODEX_ADAPTER_VERSION } from "./codexLlm";
+import { claudeBridgeComplete } from "./claudeBridgeClient";
 
 /**
  * Explicit transport for the main video pipeline:
@@ -11,6 +12,8 @@ import { codexComplete, codexModel, codexEffort, CODEX_ADAPTER_VERSION } from ".
  * No automatic switch after missing credentials, quota or failed requests.
  * Claude model overrides stay in their existing stage callers; Codex resolves
  * CODEX_SCRIPT_MODEL / CODEX_STORY_MODEL / CODEX_MODEL / CODEX_UTIL_MODEL by stage.
+ * The script stage alone can go to the Claude bridge (SCRIPT_LLM_TRANSPORT=claude):
+ * the owner compared scripts and chose Claude's text; research and the rest stay on the media transport.
  */
 export const MEDIA_PROVIDER = "anthropic" as const;
 
@@ -252,10 +255,26 @@ async function withOneRetry<T>(fn: (isRetry: boolean) => Promise<T>): Promise<T>
   }
 }
 
+/** Кто пишет сценарии: Claude через мост на Windows или общий транспорт конвейера. */
+export function scriptTransport(): "claude" | "media" {
+  const t = String(process.env.SCRIPT_LLM_TRANSPORT ?? "").toLowerCase();
+  if (t === "" || t === "media") return "media";
+  if (t === "claude") return "claude";
+  throw new Error(`SCRIPT_LLM_TRANSPORT=${t}: допустимы claude и media`);
+}
+
 /** Один текстовый запрос. Возвращает текст ответа или бросает ошибку — молча не глотаем. */
 export async function mediaComplete(args: CompleteArgs): Promise<string> {
+  if (args.stage === "Script Generation" && scriptTransport() === "claude") return completeWithClaudeBridge(args);
   if (mediaTransport() === "codex") return completeWithCodex(args);
   return withOneRetry((isRetry) => completeOnce(args, isRetry));
+}
+
+async function completeWithClaudeBridge(args: CompleteArgs): Promise<string> {
+  const stage = args.stage || "Script Generation";
+  assertProvider(stage, "anthropic");
+  const model = process.env.CLAUDE_SCRIPT_MODEL || "claude-opus-5";
+  return claudeBridgeComplete({ stage, model, system: args.system, user: args.user, task: "script" });
 }
 
 async function completeWithCodex(args: CompleteArgs & { images?: VisionImage[] }): Promise<string> {

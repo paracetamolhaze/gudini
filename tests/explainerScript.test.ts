@@ -19,6 +19,7 @@ test("промпт объяснения учит приёмам: одна ана
   assert.match(EXPLAINER_SYSTEM, /«смотри», «представь»/);
   assert.match(EXPLAINER_SYSTEM, /конкретная сцена из жизни зрителя/);
   assert.match(EXPLAINER_SYSTEM, /у каждого понятия свой ролик/);
+  assert.match(EXPLAINER_SYSTEM, /главный герой ролика: назови его в первой фразе/);
   assert.ok(!/тезис автора|противоречащие данные|Справка/i.test(EXPLAINER_SYSTEM));
 });
 

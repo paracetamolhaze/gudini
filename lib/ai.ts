@@ -3,6 +3,7 @@ import { ProjectMeta } from "./store";
 import type { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
 import { readSpeechProfile, rhythmLine } from "./speechProfile";
+import { EXPLAINER_SYSTEM, explainerBrief, isExplainerTopic } from "./explainerScript";
 
 /** Блок сценария со ссылкой на факты, которые его подтверждают. */
 export type ScriptBeat = { text: string; factIds: string[] };
@@ -166,17 +167,29 @@ export function todayBrief(research?: StoryResearchPack | null): string {
   return `${statusLine(research)}\n${brief}Справка на сегодня (факты для конкретных аргументов; источники вслух не называть):\n${facts}`;
 }
 
+/**
+ * Промпт сценариста. Объяснение для новичка идёт по своим правилам и получает только факты:
+ * общие правила и записка исследования превращали его в пересказ документации.
+ */
+export function scriptPrompt(topic: string, research?: StoryResearchPack | null, rhythm = ""): { system: string; user: string } {
+  const explainer = isExplainerTopic(topic, research);
+  const brief = explainer ? explainerBrief(research) : todayBrief(research);
+  return {
+    system: explainer ? EXPLAINER_SYSTEM : SCRIPT_SYSTEM,
+    user: `${todayLine()}\n${rhythm ? `${rhythm}\n` : ""}${brief ? `${brief}\n\n` : ""}Напиши сценарий ${explainer ? "ролика-объяснения" : "видео"} на тему: «${topic}»`,
+  };
+}
+
 export async function generateScript(topic: string, research?: StoryResearchPack | null): Promise<{ script: string; demo: boolean }> {
   if (!haveKey()) return { script: demoScript(topic), demo: true };
-  const brief = todayBrief(research);
   // ритм автора из профиля подачи (темп и длина фраз) — чтобы текст ложился на его речь
-  const rhythm = rhythmLine(readSpeechProfile());
+  const { system, user } = scriptPrompt(topic, research, rhythmLine(readSpeechProfile()));
   const script = await mediaComplete({
     model: MODEL_SCRIPT,
     maxTokens: 16000,
     stage: "Script Generation",
-    system: SCRIPT_SYSTEM,
-    user: `${todayLine()}\n${rhythm ? `${rhythm}\n` : ""}${brief ? `${brief}\n\n` : ""}Напиши сценарий видео на тему: «${topic}»`,
+    system,
+    user,
   });
   return { script, demo: false };
 }

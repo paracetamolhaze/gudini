@@ -3,6 +3,21 @@ import assert from "node:assert/strict";
 import { EXPLAINER_SYSTEM, isExplainerTopic } from "../lib/explainerScript";
 import { scriptPrompt } from "../lib/ai";
 import { researchFollowUps } from "../lib/storyResearch";
+import { ensureParagraphs } from "../lib/scriptParagraphs";
+
+test("сплошной сценарий делится на абзацы без потери слов, призыв — отдельным абзацем", () => {
+  const solid = "Представь: ты отправляешь другу деньги, и никакого банка в этой истории нет вообще. Это биткоин. " +
+    "Смотри, объясню как младшему брату. Представь общий чат, где сидят все на свете. Каждый перевод пишется туда сообщением. " +
+    "Вот и весь биткоин: деньги, которые никто не может допечатать. Подпишись, дальше разберём блокчейн и кошельки.";
+  const out = ensureParagraphs(solid);
+  const paragraphs = out.split("\n\n");
+  assert.ok(paragraphs.length >= 3);
+  assert.equal(out.replace(/\s+/g, " "), solid);
+  assert.match(paragraphs.at(-1)!, /^Подпишись, дальше разберём блокчейн и кошельки\.$/);
+  const ready = "Хук.\n\nМысль один. Мысль два.\n\nПодпишись.";
+  assert.equal(ensureParagraphs(ready), ready);
+  assert.equal(ensureParagraphs("Коротко. Всего две фразы."), "Коротко. Всего две фразы.");
+});
 
 test("объяснение определяется по исследованию или по обещанию темы", () => {
   assert.equal(isExplainerTopic("Любая тема", { kind: "EXPLAINER" }), true);

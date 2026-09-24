@@ -4,6 +4,7 @@ import type { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
 import { readSpeechProfile, rhythmLine } from "./speechProfile";
 import { EXPLAINER_SYSTEM, isExplainerTopic } from "./explainerScript";
+import { ensureParagraphs } from "./scriptParagraphs";
 
 /** Блок сценария со ссылкой на факты, которые его подтверждают. */
 export type ScriptBeat = { text: string; factIds: string[] };
@@ -216,7 +217,7 @@ export async function generateScript(topic: string, research?: StoryResearchPack
     user,
     ...(claude && !research && !explainer ? { claudeTools: "web" as const } : {}),
   });
-  return { script, demo: false };
+  return { script: ensureParagraphs(script), demo: false };
 }
 
 // ===== Описание и хэштеги =====

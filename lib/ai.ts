@@ -3,7 +3,7 @@ import { ProjectMeta } from "./store";
 import type { StoryResearchPack } from "./storyResearch";
 import { addCost } from "./pipelineCost";
 import { readSpeechProfile, rhythmLine } from "./speechProfile";
-import { EXPLAINER_SYSTEM, explainerBrief, isExplainerTopic } from "./explainerScript";
+import { EXPLAINER_SYSTEM, isExplainerTopic } from "./explainerScript";
 
 /** Блок сценария со ссылкой на факты, которые его подтверждают. */
 export type ScriptBeat = { text: string; factIds: string[] };
@@ -168,12 +168,13 @@ export function todayBrief(research?: StoryResearchPack | null): string {
 }
 
 /**
- * Промпт сценариста. Объяснение для новичка идёт по своим правилам и получает только факты:
- * общие правила и записка исследования превращали его в пересказ документации.
+ * Промпт сценариста. Объяснение для новичка идёт по своим правилам и пишется от темы, без
+ * справки исследования: по «Биткоин за минуту» поиск нашёл только руководство по майнингу,
+ * и ролик для новичка ушёл в nonce, награду за блок и майнинг-пулы.
  */
 export function scriptPrompt(topic: string, research?: StoryResearchPack | null, rhythm = ""): { system: string; user: string } {
   const explainer = isExplainerTopic(topic, research);
-  const brief = explainer ? explainerBrief(research) : todayBrief(research);
+  const brief = explainer ? "" : todayBrief(research);
   return {
     system: explainer ? EXPLAINER_SYSTEM : SCRIPT_SYSTEM,
     user: `${todayLine()}\n${rhythm ? `${rhythm}\n` : ""}${brief ? `${brief}\n\n` : ""}Напиши сценарий ${explainer ? "ролика-объяснения" : "видео"} на тему: «${topic}»`,

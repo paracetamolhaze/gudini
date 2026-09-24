@@ -3,6 +3,7 @@ import { mediaComplete, mediaLlmAvailable } from "./mediaLlm";
 
 import { braveNews, braveWeb, BraveResult } from "./braveSearch";
 import { addCost } from "./pipelineCost";
+import { isExplainerTopic } from "./explainerScript";
 
 /**
  * Story Research — первый этап конвейера, которого раньше не существовало.
@@ -189,6 +190,15 @@ export function researchFollowUpQueries(value: unknown): string[] {
     .map(q => q.trim()).filter(q => q.length >= 5 && q.length <= 240))].slice(0, 3) : [];
 }
 
+/**
+ * Второй круг поиска добирает основания для выбора и новостей. Объяснению факты нужны только
+ * для проверки точности, а второй круг добавлял к нему до трёх с половиной минут.
+ */
+export function researchFollowUps(topic: string, initial: { kind?: unknown; followUpQueries?: unknown } | null): string[] {
+  if (isExplainerTopic(topic, { kind: initial?.kind as StoryKind | undefined })) return [];
+  return researchFollowUpQueries(initial?.followUpQueries);
+}
+
 /** Search the exact topic, then fill specific evidence gaps in at most one further round. */
 export async function buildStoryResearchPack(
   topic: string,
@@ -233,7 +243,7 @@ ${list}`,
   let raw = await ask(false);
   let initial: any;
   try { initial = JSON.parse(raw); } catch { return null; }
-  const queries = researchFollowUpQueries(initial?.followUpQueries);
+  const queries = researchFollowUps(topic, initial);
   if (queries.length) {
     const extra: BraveResult[] = [];
     for (const query of queries) extra.push(...(await braveWeb(query)).slice(0, 4));

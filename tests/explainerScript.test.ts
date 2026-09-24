@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EXPLAINER_SYSTEM, explainerBrief, isExplainerTopic } from "../lib/explainerScript";
 import { scriptPrompt } from "../lib/ai";
+import { researchFollowUps } from "../lib/storyResearch";
 
 test("объяснение определяется по исследованию или по обещанию темы", () => {
   assert.equal(isExplainerTopic("Любая тема", { kind: "EXPLAINER" }), true);
@@ -19,15 +20,24 @@ test("в справку объяснения идут только факты, �
     editorialBrief: "Тезис: три опоры",
   } as any);
   assert.match(brief, /- Биткоинов будет не больше 21 миллиона/);
-  assert.match(brief, /Ролик по ней не строй/);
+  assert.match(brief, /Справка для проверки точности/);
   assert.ok(!/Тезис: три опоры|https/.test(brief));
 });
 
-test("промпт объяснения держит новичка, одну аналогию и живой хук без анонса", () => {
+test("промпт объяснения учит приёмам: одна аналогия, мало терминов, уверенный голос, хук-сцена", () => {
   assert.match(EXPLAINER_SYSTEM, /одну аналогию/);
-  assert.match(EXPLAINER_SYSTEM, /Не больше двух специальных терминов/);
-  assert.match(EXPLAINER_SYSTEM, /Не анонсируй план/);
+  assert.match(EXPLAINER_SYSTEM, /одного-двух терминов/);
+  assert.match(EXPLAINER_SYSTEM, /«смотри», «представь»/);
+  assert.match(EXPLAINER_SYSTEM, /конкретная сцена из жизни зрителя/);
   assert.ok(!/тезис автора|противоречащие данные/i.test(EXPLAINER_SYSTEM));
+});
+
+test("объяснению не нужен второй круг поиска, выбору и новостям он остаётся", () => {
+  const followUpQueries = ["Bitcoin full node validation rules", "Camera A battery life"];
+  assert.deepEqual(researchFollowUps("Биткоин за минуту", { kind: "EXPLAINER", followUpQueries }), []);
+  assert.deepEqual(researchFollowUps("Блокчейн простыми словами", { kind: "OTHER", followUpQueries }), []);
+  assert.deepEqual(researchFollowUps("Две лучшие камеры для путешествий", { kind: "PRODUCT", followUpQueries }), followUpQueries);
+  assert.deepEqual(researchFollowUps("FTX: как рухнула биржа", null), []);
 });
 
 test("сценарист объяснения получает свой промпт и справку без записки исследования", () => {

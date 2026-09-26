@@ -132,42 +132,56 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
    * Astra looks at every prepared picture next to what it must show. What is wrong is drawn again
    * with the problem spelled out; a photo that fails is replaced by a generated scene.
    */
-  const verifyPictures = async (analysis: ReturnType<typeof analyzeMontage>) => {
+  const verifyPictures = async (analysis: ReturnType<typeof analyzeMontage>, only?: Set<string>) => {
     const needs = assetNeeds(analysis.blocks);
     const wanted: { key: string; need: string; redraw: string }[] = [
       ...needs.scenes.map(prompt => ({ key: `scene:${prompt}`, need: prompt, redraw: prompt })),
       ...needs.photos.map(query => ({ key: `photo:${query}`, need: needs.looks[query] ?? query, redraw: needs.looks[query] ?? query })),
       ...needs.morphs.map(m => ({ key: `morph:${m.from.toFixed(2)}`, need: `автор в той же позе и комнате превращён в ${m.into}`, redraw: "" })),
-    ].filter(w => input.assets[w.key]).slice(0, 20);
+    ].filter(w => input.assets[w.key] && (!only || only.has(w.key))).slice(0, 20);
     if (!wanted.length) return;
     const images: BridgeImage[] = [];
     for (const w of wanted) {
-      const file = path.join(publicDir, input.assets[w.key]);
-      const meta = await sharp(file).metadata();
-      const tall = (meta.width ?? 1) / (meta.height ?? 1) <= 0.85;
-      // Exactly the part of a tall picture that fills the screen; a wide one is shown whole.
-      const buffer = await (tall && !w.key.startsWith("morph:") ? sharp(file).resize(450, 800, { fit: "cover" }) : sharp(file).resize(560, 700, { fit: "inside" })).jpeg({ quality: 82 }).toBuffer();
+      const buffer = await sharp(path.join(publicDir, input.assets[w.key])).resize(640, 800, { fit: "inside" }).jpeg({ quality: 82 }).toBuffer();
       images.push({ base64: buffer.toString("base64"), mediaType: "image/jpeg" });
     }
     const user = [
-      "Перед рендером проверь картинки, которые войдут в ролик. Каждая показана ровно так, как её увидит зритель на экране телефона.",
+      "Перед рендером проверь картинки, которые войдут в ролик. Картинка займёт вертикальный экран телефона: если всё важное помещается в вертикальную полосу, экран кадрируется по ней, иначе картинка показывается целиком.",
       "Для каждой ответь, показывает ли она требуемое: нужные участники и их число, нужные предметы (пистолет — это пистолет, а не автомат), действие, место.",
-      "Хорошая картинка похожа на настоящее фото и читается с первого взгляда. Мультяшность, лишние люди, другой предмет или обрезанный главный объект — это ошибка.",
+      "Хорошая картинка похожа на настоящее фото и читается с первого взгляда. Мультяшность, лишние люди, другой предмет или обрезанный краем картинки главный объект — это ошибка.",
+      "Отметь span — левую и правую границу всего важного на картинке в долях ширины (от 0 до 1): людей, машину, предмет целиком.",
       "", ...wanted.map((w, i) => `${i + 1}. должно быть: ${w.need}`), "",
-      `Ответ — только JSON: {"1": {"ok": true}, "2": {"ok": false, "problem": "что не так, одной фразой по-английски"}}`,
+      `Ответ — только JSON: {"1": {"ok": true, "span": [0.2, 0.75]}, "2": {"ok": false, "problem": "что не так, одной фразой по-английски", "span": [0.1, 0.9]}}`,
     ].join("\n");
     log(`Астра проверяет картинки: ${wanted.length}...`);
     const result = await askAstra("Ты — Астра, монтажёр. Проверяешь картинки для ролика перед рендером.", user, images);
-    let verdicts: Record<string, { ok?: boolean; problem?: string }> = {};
+    let verdicts: Record<string, { ok?: boolean; problem?: string; span?: [number, number] }> = {};
     try { verdicts = JSON.parse(result.text.slice(result.text.indexOf("{"), result.text.lastIndexOf("}") + 1)); } catch { return; }
     fs.writeFileSync(path.join(outDir, `pictures-check-${Date.now()}.json`), JSON.stringify({ wanted, verdicts }, null, 2));
+    const redrawn = new Set<string>();
     for (const [index, w] of wanted.entries()) {
       const verdict = verdicts[String(index + 1)];
-      if (!verdict || verdict.ok !== false || !w.redraw) continue;
-      log(`Перерисовка ${w.key.slice(0, 60)}: ${verdict.problem ?? ""}`);
-      const redrawn = await redrawScene(w.redraw, verdict.problem ?? "it did not show the described scene", publicDir, job.assetCache ?? "asset-cache");
-      if (redrawn) input = { ...input, assets: { ...input.assets, [w.key]: redrawn.file }, sizes: redrawn.size ? { ...input.sizes, [w.key]: redrawn.size } : input.sizes };
+      const span = verdict?.span;
+      const size = input.sizes[w.key];
+      let problem = verdict?.ok === false ? verdict.problem ?? "it did not show the described scene" : undefined;
+      if (Array.isArray(span) && span.length === 2 && span.every(n => typeof n === "number" && n >= 0 && n <= 1) && span[0] < span[1] && size) {
+        input = { ...input, sizes: { ...input.sizes, [w.key]: { ...size, span: [span[0], span[1]] } } };
+        // A vertical screen shows only part of the width: the important part has to fit into it.
+        const visible = Math.min(1, (1080 / 1920) / (size.w / size.h));
+        if (!problem && !only && size.w / size.h <= 0.85 && span[1] - span[0] > visible + 0.05) {
+          problem = `everything important spans ${Math.round((span[1] - span[0]) * 100)}% of the width, but a vertical phone screen shows only the central ${Math.round(visible * 100)}%: reframe closer so the subject is large and fits in the central part`;
+        }
+      }
+      if (!problem || !w.redraw || only) continue;
+      log(`Перерисовка ${w.key.slice(0, 60)}: ${problem}`);
+      const result = await redrawScene(w.redraw, problem, publicDir, job.assetCache ?? "asset-cache");
+      if (result) {
+        input = { ...input, assets: { ...input.assets, [w.key]: result.file }, sizes: result.size ? { ...input.sizes, [w.key]: result.size } : input.sizes };
+        redrawn.add(w.key);
+      }
     }
+    // Redrawn pictures are looked at once more, to frame them; they are not redrawn again.
+    if (redrawn.size && !only) await verifyPictures(analysis, redrawn);
   };
 
   const cutouts = (analysis: ReturnType<typeof analyzeMontage>) => {

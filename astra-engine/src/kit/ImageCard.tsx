@@ -43,26 +43,31 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, pos = "full",
 
   if (pos === "full") {
     const fade = Math.min(interpolate(frame, [0, 0.22 * fps], [0, 1], { extrapolateRight: "clamp", easing: EASE_OUT }), out);
-    // Tall pictures are composed for the phone screen: they fill it edge to edge, keeping their central 70%.
+    const blur = <Img src={url} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", scale: "1.3", filter: "blur(50px) brightness(0.38) saturate(1.3)" }} />;
+    // How much of the picture's width a full screen shows, and where the important part is.
+    const visible = Math.min(1, (1080 / 1920) / aspect);
     if (aspect <= 0.85) {
+      // A tall picture fills the screen; the frame is centred on what matters (Astra marks it when checking pictures).
+      const span = size?.span ?? [0.5 - visible / 2, 0.5 + visible / 2];
+      const center = Math.min(1 - visible / 2, Math.max(visible / 2, (span[0] + span[1]) / 2));
+      const position = visible >= 1 ? 50 : ((center - visible / 2) / (1 - visible)) * 100;
       return (
         <AbsoluteFill style={{ opacity: fade, backgroundColor: theme.color.ink, overflow: "hidden" }}>
-          <Img src={url} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", scale: String(drift * (1.05 - 0.05 * inP)) }} />
+          <Img src={url} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", objectPosition: `${position}% 50%`,
+            scale: String(drift * (1.05 - 0.05 * inP)) }} />
         </AbsoluteFill>
       );
     }
-    // Wide pictures stay whole in the middle of the safe area over their own blur.
-    const w = Math.min(1080, SAFE.height * aspect);
+    // Too wide to crop: the whole picture across the screen, its edges melting into its own dark blur.
+    const w = 1080;
     const h = w / aspect;
-    const top = SAFE.top + SAFE.height / 2 - h / 2;
+    const top = Math.max(0, SAFE.top + SAFE.height / 2 - h / 2);
+    const feather = "linear-gradient(180deg, transparent 0%, #000 9%, #000 91%, transparent 100%)";
     return (
       <AbsoluteFill style={{ opacity: fade, backgroundColor: theme.color.ink, overflow: "hidden" }}>
-        <Img src={url} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", scale: "1.25", filter: "blur(46px) brightness(0.5) saturate(1.2)" }} />
-        <Img src={url} style={{
-          position: "absolute", left: (1080 - w) / 2, top, width: w, height: h, objectFit: "contain",
-          scale: String(drift * (1.05 - 0.05 * inP)), borderRadius: w < 1070 ? 28 : 0,
-          boxShadow: w < 1070 ? "0 30px 80px rgba(0,0,0,0.55)" : "none",
-        }} />
+        {blur}
+        <Img src={url} style={{ position: "absolute", left: 0, top, width: w, height: h, objectFit: "contain",
+          scale: String(drift * (1.05 - 0.05 * inP)), WebkitMaskImage: feather, maskImage: feather }} />
       </AbsoluteFill>
     );
   }

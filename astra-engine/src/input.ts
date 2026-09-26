@@ -30,7 +30,11 @@ export const astraInputSchema = z.object({
   /** Images and logos prepared for this video, by name. */
   assets: z.record(z.string(), z.string()).default({}),
   /** Pixel size of each prepared picture, so the kit can show it whole. */
-  sizes: z.record(z.string(), z.object({ w: z.number(), h: z.number() })).default({}),
+  sizes: z.record(z.string(), z.object({
+    w: z.number(), h: z.number(),
+    /** Left and right edge of everything important on the picture, as fractions of its width. */
+    span: z.tuple([z.number(), z.number()]).optional(),
+  })).default({}),
 });
 export type AstraInput = z.infer<typeof astraInputSchema>;
 

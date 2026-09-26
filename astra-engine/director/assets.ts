@@ -9,8 +9,8 @@ import { postBridge } from "./bridge";
 
 /** One look for every generated picture of a video: a real vertical photo, the subject whole and centered. */
 export const SCENE_STYLE = "Photorealistic vertical photo, as if shot on a good phone camera for a news story: natural light, real materials and people, " +
-  "realistic proportions, sharp focus on the subject. The picture fills a vertical 9:16 phone screen and is cropped to its central 70% width: " +
-  "keep the main subject and everything important inside the central 70% of the width, large and whole, with only background in the outer side strips. " +
+  "realistic proportions, sharp focus on the subject. Vertical composition for a phone screen: the main subject is large, whole and centered, " +
+  "as close together as the scene allows, with some background around it; nothing important touches the edges. " +
   "No text, no captions, no watermark, no logos except those that are part of real objects. Scene: ";
 
 /**
@@ -172,14 +172,35 @@ async function generate(prompt: string, file: string, references: string[] = [],
   return null;
 }
 
-const scene = (prompt: string, dir: string) =>
-  generate(SCENE_STYLE + prompt, path.join(dir, `${slugify(prompt)}-${createHash("sha1").update(SCENE_STYLE + prompt).digest("hex").slice(0, 8)}.png`));
+const sceneTag = (prompt: string) => createHash("sha1").update(SCENE_STYLE + prompt).digest("hex").slice(0, 8);
+
+/**
+ * A scene that was redrawn or rewritten stays attached to the prompt the montage uses,
+ * so the next build takes the approved picture instead of generating the first attempt again.
+ */
+function aliases(dir: string): Record<string, string> {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, "aliases.json"), "utf8")); } catch { return {}; }
+}
+function remember(dir: string, prompt: string, file: string) {
+  const all = aliases(dir);
+  all[sceneTag(prompt)] = path.basename(file);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "aliases.json"), JSON.stringify(all, null, 2));
+}
+
+const scene = (prompt: string, dir: string) => {
+  const approved = aliases(dir)[sceneTag(prompt)];
+  if (approved && fs.existsSync(path.join(dir, approved))) return Promise.resolve(path.join(dir, approved));
+  return generate(SCENE_STYLE + prompt, path.join(dir, `${slugify(prompt)}-${sceneTag(prompt)}.png`));
+};
 
 /** A generated picture again, with what was wrong in the previous attempt spelled out. */
 export async function redrawScene(prompt: string, fix: string, publicDir: string, cacheSubdir: string): Promise<{ file: string; size?: { w: number; h: number } } | null> {
   const full = `${prompt}\nThe previous attempt was wrong: ${fix}. Make sure this time the picture shows exactly the scene described.`;
-  const file = await scene(full, path.join(publicDir, cacheSubdir, "scenes"));
+  const dir = path.join(publicDir, cacheSubdir, "scenes");
+  const file = await generate(SCENE_STYLE + full, path.join(dir, `${slugify(prompt)}-${sceneTag(full)}.png`));
   if (!file) return null;
+  remember(dir, prompt, file);
   const m = await sharp(file).metadata().catch(() => null);
   return { file: path.relative(publicDir, file).split(path.sep).join("/"), size: m?.width && m.height ? { w: m.width, h: m.height } : undefined };
 }
@@ -257,6 +278,7 @@ export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheS
     if (!file && options.drawMissingPhotos && options.rescue) {
       const rewritten = await options.rescue(prompt, generationErrors.at(-1) ?? "the generator returned no picture");
       if (rewritten) file = await scene(rewritten, path.join(cache, "scenes"));
+      if (file) remember(path.join(cache, "scenes"), prompt, file);
     }
     if (file) await put(`scene:${prompt}`, file);
     else missing.push(`Сцену «${prompt.slice(0, 80)}…» сгенерировать не удалось (${generationErrors.at(-1) ?? "генератор не вернул картинку"}) — опиши её иначе: например, покажи действие со стороны, без крупных лиц, или покажи иначе.`);

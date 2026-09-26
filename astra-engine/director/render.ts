@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { bundle } from "@remotion/bundler";
@@ -24,4 +26,13 @@ export async function renderVideo(opts: {
     scale: opts.scale ?? 1,
     onProgress: ({ progress }) => opts.onProgress?.(progress),
   });
+  masterAudio(opts.out);
+}
+
+/** A voice at TikTok loudness plus effects can sum above 0 dB: a soft limiter keeps peaks under -1 dB. The picture is copied as is. */
+export function masterAudio(file: string) {
+  const temp = `${file}.master.mp4`;
+  execFileSync("ffmpeg", ["-hide_banner", "-v", "error", "-y", "-i", file, "-c:v", "copy",
+    "-af", "alimiter=limit=0.891:attack=5:release=60:level=false", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", temp], { stdio: "pipe" });
+  fs.renameSync(temp, file);
 }

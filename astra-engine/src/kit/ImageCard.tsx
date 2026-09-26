@@ -42,11 +42,19 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, pos = "full",
   const drift = interpolate(frame, [0, lengthFrames], [1, 1.05]);
 
   if (pos === "full") {
-    // Tall pictures fill the width; wide ones sit in the middle of the safe area.
-    const w = aspect <= 0.85 ? 1080 : Math.min(1080, SAFE.height * aspect);
+    const fade = Math.min(interpolate(frame, [0, 0.22 * fps], [0, 1], { extrapolateRight: "clamp", easing: EASE_OUT }), out);
+    // Tall pictures are composed for the phone screen: they fill it edge to edge, keeping their central 70%.
+    if (aspect <= 0.85) {
+      return (
+        <AbsoluteFill style={{ opacity: fade, backgroundColor: theme.color.ink, overflow: "hidden" }}>
+          <Img src={url} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", scale: String(drift * (1.05 - 0.05 * inP)) }} />
+        </AbsoluteFill>
+      );
+    }
+    // Wide pictures stay whole in the middle of the safe area over their own blur.
+    const w = Math.min(1080, SAFE.height * aspect);
     const h = w / aspect;
     const top = SAFE.top + SAFE.height / 2 - h / 2;
-    const fade = Math.min(interpolate(frame, [0, 0.22 * fps], [0, 1], { extrapolateRight: "clamp", easing: EASE_OUT }), out);
     return (
       <AbsoluteFill style={{ opacity: fade, backgroundColor: theme.color.ink, overflow: "hidden" }}>
         <Img src={url} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", scale: "1.25", filter: "blur(46px) brightness(0.5) saturate(1.2)" }} />

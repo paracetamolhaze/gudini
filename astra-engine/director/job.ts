@@ -72,7 +72,7 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
         const needs = assetNeeds(analysis.blocks);
         // On the second round, photos that still do not fit are drawn from what should be visible on them.
         const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", {
-          pick: pickPhotos, memesDir: job.memesDir, drawMissingPhotos: assetRounds >= 1,
+          pick: pickPhotos, memesDir: job.memesDir, drawMissingPhotos: assetRounds >= 1, rescue: rescueScene,
           video: path.join(publicDir, input.video), face: input.face,
         });
         input = { ...input, assets: { ...input.assets, ...resolved.assets }, sizes: { ...input.sizes, ...resolved.sizes } };
@@ -91,6 +91,21 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
       if (attempt >= 3) throw new Error(`Астра: монтаж не собирается после ${attempt} попыток: ${problems.slice(0, 5).join("; ")}`);
       code = await ask(`${label}-fix-${attempt}`, fixPrompt(task, code, problems));
     }
+  };
+
+  /** A scene the image generator refused is rewritten by Astra so it can be generated, keeping its meaning. */
+  const rescueScene = async (prompt: string, error: string): Promise<string | null> => {
+    const user = [
+      "Генератор картинок не сделал сцену для ролика.", `Ошибка: ${error}`, "", "Сцена:", prompt, "",
+      "Перепиши описание так, чтобы генератор его принял, и сохрани смысл истории: кто участвует и сколько их, что у них в руках, что происходит, где.",
+      "Что обычно помогает: несовершеннолетних показывать со спины, в профиль или издалека, без крупных лиц; у игрушечного оружия подчеркнуть, что это игрушка (яркий оранжевый наконечник, прозрачный магазин с цветными шариками); действие показать через его результат (шарики летят из окна).",
+      "Ответ — только новое описание сцены по-английски, одним абзацем.",
+    ].join("\n");
+    log(`Астра переписывает сцену для генератора: ${prompt.slice(0, 60)}...`);
+    try {
+      const result = await askAstra("Ты — Астра, монтажёр. Помогаешь генератору картинок сделать сцену для ролика.", user);
+      return result.text.trim().replace(/^```\w*\n?|```$/g, "").trim() || null;
+    } catch { return null; }
   };
 
   /** Astra looks at stock photo candidates and picks the one that shows the thing clearly. */
@@ -127,11 +142,15 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
     if (!wanted.length) return;
     const images: BridgeImage[] = [];
     for (const w of wanted) {
-      const buffer = await sharp(path.join(publicDir, input.assets[w.key])).resize(560, 700, { fit: "inside" }).jpeg({ quality: 82 }).toBuffer();
+      const file = path.join(publicDir, input.assets[w.key]);
+      const meta = await sharp(file).metadata();
+      const tall = (meta.width ?? 1) / (meta.height ?? 1) <= 0.85;
+      // Exactly the part of a tall picture that fills the screen; a wide one is shown whole.
+      const buffer = await (tall && !w.key.startsWith("morph:") ? sharp(file).resize(450, 800, { fit: "cover" }) : sharp(file).resize(560, 700, { fit: "inside" })).jpeg({ quality: 82 }).toBuffer();
       images.push({ base64: buffer.toString("base64"), mediaType: "image/jpeg" });
     }
     const user = [
-      "Перед рендером проверь картинки, которые войдут в ролик. Картинка показывается целиком на весь экран вертикального видео.",
+      "Перед рендером проверь картинки, которые войдут в ролик. Каждая показана ровно так, как её увидит зритель на экране телефона.",
       "Для каждой ответь, показывает ли она требуемое: нужные участники и их число, нужные предметы (пистолет — это пистолет, а не автомат), действие, место.",
       "Хорошая картинка похожа на настоящее фото и читается с первого взгляда. Мультяшность, лишние люди, другой предмет или обрезанный главный объект — это ошибка.",
       "", ...wanted.map((w, i) => `${i + 1}. должно быть: ${w.need}`), "",

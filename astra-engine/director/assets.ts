@@ -9,8 +9,9 @@ import { postBridge } from "./bridge";
 
 /** One look for every generated picture of a video: a real vertical photo, the subject whole and centered. */
 export const SCENE_STYLE = "Photorealistic vertical photo, as if shot on a good phone camera for a news story: natural light, real materials and people, " +
-  "realistic proportions, sharp focus on the subject. Composition for a tall 4:5 frame: the main subject is large, centered and completely inside the frame " +
-  "with some space around it, nothing important touches the edges. No text, no captions, no watermark, no logos except those that are part of real objects. Scene: ";
+  "realistic proportions, sharp focus on the subject. The picture fills a vertical 9:16 phone screen and is cropped to its central 70% width: " +
+  "keep the main subject and everything important inside the central 70% of the width, large and whole, with only background in the outer side strips. " +
+  "No text, no captions, no watermark, no logos except those that are part of real objects. Scene: ";
 
 /**
  * Turns what a montage asks for into files in the bundle's public folder:
@@ -220,6 +221,8 @@ export function listMemes(memesDir: string | undefined): Record<string, string> 
 /** Resolves every need into `assets` keys the kit reads: emoji:, logo:, photo:, scene:, meme:, morph:. */
 export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheSubdir: string, options: {
   pick?: PhotoPicker; memesDir?: string; drawMissingPhotos?: boolean; video?: string; face?: { y: number };
+  /** Rewrites a scene the generator refused, keeping who, what and where; the result replaces it under the same key. */
+  rescue?: (prompt: string, error: string) => Promise<string | null>;
 } = {}): Promise<ResolvedAssets> {
   const assets: Record<string, string> = {};
   const sizes: Record<string, { w: number; h: number }> = {};
@@ -249,7 +252,12 @@ export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheS
     else missing.push(`Фото по запросу «${query}» не нашлось: на фотостоках ищут 2–4 словами («water beads», «police dog»). Дай другой запрос или покажи сценой (Scene).`);
   }
   for (const prompt of needs.scenes ?? []) {
-    const file = await scene(prompt, path.join(cache, "scenes"));
+    let file = await scene(prompt, path.join(cache, "scenes"));
+    // On the last round a refused scene gets a second life: Astra rewrites it so it can be generated.
+    if (!file && options.drawMissingPhotos && options.rescue) {
+      const rewritten = await options.rescue(prompt, generationErrors.at(-1) ?? "the generator returned no picture");
+      if (rewritten) file = await scene(rewritten, path.join(cache, "scenes"));
+    }
     if (file) await put(`scene:${prompt}`, file);
     else missing.push(`Сцену «${prompt.slice(0, 80)}…» сгенерировать не удалось (${generationErrors.at(-1) ?? "генератор не вернул картинку"}) — опиши её иначе: например, покажи действие со стороны, без крупных лиц, или покажи иначе.`);
   }

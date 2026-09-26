@@ -67,7 +67,8 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
       if (!problems.length) {
         // Emoji, logos and photos the montage asks for are fetched now; what cannot be found goes back to Astra once.
         const needs = assetNeeds(analysis.blocks);
-        const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", pickPhotos, job.memesDir);
+        // On the second round, photos that still do not fit are drawn from what should be visible on them.
+        const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", pickPhotos, job.memesDir, assetRounds >= 1);
         input = { ...input, assets: { ...input.assets, ...resolved.assets } };
         missing = resolved.missing;
         log(`Материалы: эмодзи ${needs.emoji.length}, логотипы ${needs.logos.length}, фото ${needs.photos.length}, рисунки ${needs.illustrations.length}, мемы ${needs.memes.length}; не нашлось ${missing.length}`);
@@ -75,7 +76,7 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
       fs.writeFileSync(path.join(outDir, `${label}-analysis-${attempt}.json`), JSON.stringify({ ...analysis, errors, problems, missing }, null, 2));
       // A photo that still cannot be found is shown by its fallback emoji (or skipped): the montage goes on.
       if (!problems.length && (!missing.length || assetRounds >= 1)) {
-        if (missing.length) log(`Без фото, с запасными эмодзи: ${missing.length}`);
+        if (missing.length) log(`Без картинки остались: ${missing.length} — эти места пропущены`);
         return { code, analysis };
       }
       if (!problems.length) assetRounds++;
@@ -97,8 +98,8 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
     });
     const user = [
       "Для монтажа нужны фото. К заданию приложены варианты в таком порядке:", lines.join("\n"), "",
-      "Для каждого запроса выбери вариант, где предмет из запроса узнаётся с первого взгляда. Надписи на самих предметах — нормально (POLICE на форме, марка на бутылке).",
-      "Не подходят: водяные знаки, коллажи, другой предмет, слишком тёмное или размытое фото. -1 — только если ни один вариант не показывает предмет.",
+      "Для каждого запроса выбери вариант, на котором видно всё, что указано в «должно быть видно». Если чего-то из этого на фото нет (например, шариков рядом с бластером) — вариант не подходит, выбери -1: тогда эту сцену нарисуют.",
+      "Надписи на самих предметах — нормально (POLICE на форме, марка на бутылке). Не подходят водяные знаки, коллажи, другой предмет, тёмные и размытые фото.",
       `Ответ — только JSON вида {"запрос": номер варианта}.`,
     ].join("\n");
     log(`Астра выбирает фото: ${sets.length} запрос(ов), ${images.length} вариантов...`);

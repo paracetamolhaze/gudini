@@ -38,6 +38,8 @@ const Body: React.FC<Omit<Props, "sfx">> = ({ from, to, name, pos = "above", siz
   const cy = behind ? face.y + face.h * 0.3 : Math.max(theme.safe.top + 20 + side / 2, headTop - 30 - side / 2);
   const cx = face.x + face.w / 2;
   const cutout = behind ? input.cutouts.find(c => c.from <= from + 0.05 && c.to >= to - 0.05) : undefined;
+  // A logo that was not found is simply not shown.
+  if (!input.assets[`logo:${name.toLowerCase()}`]) return null;
   return (
     <>
       <AbsoluteFill style={{ pointerEvents: "none" }}>

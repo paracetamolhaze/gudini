@@ -40,7 +40,15 @@ export const List: React.FC<{ items: ListItem[]; size?: number; numbered?: boole
   items, size = 50, numbered = false, gap = 14,
 }) => {
   const { fps, frame, absolute: t } = useClip();
-  const active = items.reduce((found, item, i) => (item.at !== undefined && item.at <= t ? i : found), -1);
+  // Each item is lit from the moment it is named until the next item is named: a crossfade between neighbours only.
+  const litOf = (i: number) => {
+    const at = items[i].at;
+    if (at === undefined) return 0;
+    const next = items.map(item => item.at).filter((x): x is number => x !== undefined && x > at).sort((a, b) => a - b)[0];
+    const rise = interpolate(t, [at - 0.05, at + 0.2], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+    const fall = next === undefined ? 1 : interpolate(t, [next - 0.05, next + 0.2], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+    return Math.min(rise, fall);
+  };
   const dot = size * 1.15;
   const lineIn = interpolate(frame, [0.2 * fps, (0.6 + items.length * 0.09) * fps], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_OUT });
   return (
@@ -53,10 +61,7 @@ export const List: React.FC<{ items: ListItem[]; size?: number; numbered?: boole
       {items.map((item, i) => {
         // Items arrive together at the start, one after another in a quick cascade.
         const p = interpolate(frame, [(0.15 + i * 0.09) * fps, (0.55 + i * 0.09) * fps], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_OUT });
-        const lit = item.at === undefined ? 0 : Math.min(
-          interpolate(t, [item.at - 0.05, item.at + 0.2], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
-          i === active ? 1 : interpolate(t, [(items[active]?.at ?? Infinity) - 0.05, (items[active]?.at ?? Infinity) + 0.2], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
-        );
+        const lit = litOf(i);
         return (
           <div key={i} style={{
             display: "flex", alignItems: "center", gap: 18, alignSelf: "flex-start",

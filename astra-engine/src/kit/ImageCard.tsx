@@ -38,7 +38,8 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, pos = "lower"
   const zoom = interpolate(frame, [0, lengthFrames], [1, 1.08]);
   // A photo that was not found turns into its fallback emoji instead of breaking the render.
   if (/^(photo|gen):/.test(src) && !assets[src]) {
-    if (!fallback) return null;
+    // Only an emoji can stand in; any other text would show up as words on screen.
+    if (!fallback || !/\p{Extended_Pictographic}/u.test(fallback)) return null;
     const s = pop(frame, fps);
     return (
       <AbsoluteFill style={{ pointerEvents: "none" }}>

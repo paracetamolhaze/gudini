@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import * as simpleIcons from "simple-icons";
@@ -7,7 +8,7 @@ import { postBridge } from "./bridge";
 /** One look for every drawn picture of a video, so illustrations match each other. */
 export const ILLUSTRATION_STYLE = "Cartoon illustration in a modern 2D animation style: bold clean outlines, bright saturated colors, soft cel shading, " +
   "friendly and playful mood, simple uncluttered background with a soft gradient, one clear subject in the center. " +
-  "No text, no letters, no numbers, no logos, no watermark. Scene: ";
+  "No text, no letters, no numbers, no logos, no watermark. If the scene below mentions a photo, draw it as this illustration anyway. Scene: ";
 
 /**
  * Turns what a montage asks for into files in the bundle's public folder:
@@ -84,6 +85,12 @@ async function logo(name: string, dir: string): Promise<string | null> {
 
 type Candidate = { preview: string; full: string };
 
+/** A photo is chosen for a query *and* what must be visible on it, so a new `look` picks again. */
+function photoFile(dir: string, query: string, look?: string): string {
+  const tag = look ? createHash("sha1").update(look).digest("hex").slice(0, 8) : "any";
+  return path.join(dir, `${slugify(query)}-${tag}.jpg`);
+}
+
 /** Up to four stock photos per query from Pexels, then Pixabay. */
 async function photoCandidates(query: string): Promise<Candidate[]> {
   const found: Candidate[] = [];
@@ -110,11 +117,12 @@ async function photoCandidates(query: string): Promise<Candidate[]> {
  * Photos are chosen by eye: Astra sees the candidates for every query and picks the one that
  * shows the thing clearly, or none. Without a picker the first result is taken.
  */
-async function photos(queries: string[], dir: string, pick?: PhotoPicker, looks: Record<string, string> = {}): Promise<Record<string, string | null>> {
+async function photos(queries: string[], dir: string, pick?: PhotoPicker, looks: Record<string, string> = {}): Promise<{ files: Record<string, string | null>; rejected: Set<string> }> {
   const result: Record<string, string | null> = {};
+  const rejected = new Set<string>();
   const pending: { query: string; candidates: Candidate[]; previews: Buffer[] }[] = [];
   for (const query of queries) {
-    const file = path.join(dir, `${slugify(query)}.jpg`);
+    const file = photoFile(dir, query, looks[query]);
     if (fs.existsSync(file)) { result[query] = file; continue; }
     const candidates = await photoCandidates(query);
     const previews: Buffer[] = [];
@@ -127,10 +135,11 @@ async function photos(queries: string[], dir: string, pick?: PhotoPicker, looks:
   for (const p of pending) {
     const index = pick ? choices[p.query] ?? -1 : 0;
     const chosen = index >= 0 ? p.candidates[index] : undefined;
-    const file = path.join(dir, `${slugify(p.query)}.jpg`);
+    if (!chosen && p.candidates.length) rejected.add(p.query);
+    const file = photoFile(dir, p.query, looks[p.query]);
     result[p.query] = chosen && await download(chosen.full, file) ? file : null;
   }
-  return result;
+  return { files: result, rejected };
 }
 
 /** Given previews per query (and what must be visible), returns the chosen index per query (-1 = none fits). */
@@ -156,7 +165,7 @@ export function listMemes(memesDir: string | undefined): Record<string, string> 
 }
 
 /** Resolves every need into `assets` keys the kit reads: emoji:<glyph>, logo:<name>, photo:<query>. */
-export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheSubdir: string, pick?: PhotoPicker, memesDir?: string): Promise<ResolvedAssets> {
+export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheSubdir: string, pick?: PhotoPicker, memesDir?: string, drawMissingPhotos = false): Promise<ResolvedAssets> {
   const assets: Record<string, string> = {};
   const missing: string[] = [];
   const rel = (file: string) => path.relative(publicDir, file).replace(/\\/g, "/");
@@ -172,9 +181,11 @@ export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheS
   }
   const found = await photos(needs.photos, path.join(cache, "photos"), pick, needs.looks);
   for (const query of needs.photos) {
-    const file = found[query];
+    let file = found.files[query];
+    if (!file && drawMissingPhotos) file = await illustration(needs.looks?.[query] ?? query, path.join(cache, "drawn"), "1:1");
     if (file) assets[`photo:${query}`] = rel(file);
-    else missing.push(`Фото по запросу «${query}» не нашлось: на фотостоках ищут 2–4 словами («water beads», «toy gun»). Дай запрос короче или покажи иначе; fallback с эмодзи подстрахует.`);
+    else if (found.rejected.has(query)) missing.push(`Фото по запросу «${query}» нашлись, но ни одно не показывает «${needs.looks?.[query] ?? query}». Попробуй другие слова запроса, смягчи look или покажи это рисунком (Illustration).`);
+    else missing.push(`Фото по запросу «${query}» не нашлось: на фотостоках ищут 2–4 словами («water beads», «toy gun»). Дай другой запрос или покажи рисунком (Illustration).`);
   }
   for (const prompt of needs.illustrations ?? []) {
     // Both shapes are drawn once and cached: a square card or a tall full-frame picture.

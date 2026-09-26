@@ -45,6 +45,8 @@ const AuthorCircle: React.FC<{ scale: number }> = ({ scale }) => {
 
 const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ title, items, numbered = true, children }) => {
   const { frame, fps, lengthFrames } = useClip();
+  const input = useInput();
+  const offset = useClipOffset();
   // The author's circle pops first, then the card grows out of it; on exit it folds back into the circle.
   const open = interpolate(frame, [0.12 * fps, 0.7 * fps], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_OUT });
   const close = interpolate(frame, [lengthFrames - 0.45 * fps, lengthFrames - 0.1 * fps], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_IN_OUT });
@@ -58,16 +60,22 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ title, items, numb
   return (
     <AbsoluteFill>
       <AbsoluteFill style={{ opacity: cardOpacity, clipPath: `circle(${radius}px at ${PIP.x + PIP.size / 2}px ${PIP.y + PIP.size / 2}px)` }}>
-        <AbsoluteFill style={{ background: `radial-gradient(circle at 15% 8%, rgba(255,106,31,0.16), rgba(255,106,31,0) 55%), ${theme.color.ink}` }} />
+        {/* The room behind the author, blurred and dimmed: depth instead of a flat black screen. */}
+        <AbsoluteFill style={{ backgroundColor: theme.color.ink }}>
+          <Video src={staticFile(input.video)} muted trimBefore={offset} objectFit="cover"
+            style={{ width: "100%", height: "100%", scale: "1.25", filter: "blur(38px) brightness(0.42) saturate(1.25)" }} />
+        </AbsoluteFill>
+        <AbsoluteFill style={{ background: "radial-gradient(circle at 12% 10%, rgba(255,106,31,0.34), rgba(255,106,31,0) 50%), radial-gradient(circle at 90% 95%, rgba(76,157,255,0.20), rgba(76,157,255,0) 45%), linear-gradient(180deg, rgba(8,10,14,0.15), rgba(8,10,14,0.55))" }} />
+        <div style={{ position: "absolute", left: 70, top: 262, width: 90, height: 10, borderRadius: 5, backgroundColor: theme.color.accent, scale: `${titleIn} 1`, transformOrigin: "left" }} />
         <div style={{
-          position: "absolute", left: 70, top: 290, width: 560,
-          fontFamily: theme.font.display, fontWeight: 700, fontSize: titleSize, lineHeight: 1, textTransform: "uppercase", color: theme.color.accent,
-          opacity: titleIn, translate: `0 ${(1 - titleIn) * 30}px`,
+          position: "absolute", left: 70, top: 300, width: 560,
+          fontFamily: theme.font.display, fontWeight: 700, fontSize: titleSize, lineHeight: 1, textTransform: "uppercase", color: theme.color.text,
+          textShadow: "0 8px 30px rgba(0,0,0,0.45)", opacity: titleIn, translate: `0 ${(1 - titleIn) * 30}px`,
         }}>
           {title}
         </div>
-        <div style={{ position: "absolute", left: 70, right: 90, top: 700 }}>
-          {items?.length ? <List items={items} numbered={numbered} size={74} font="display" gap={22} /> : null}
+        <div style={{ position: "absolute", left: 60, right: 90, top: 700 }}>
+          {items?.length ? <List items={items} numbered={numbered} size={54} gap={22} /> : null}
           {children}
         </div>
       </AbsoluteFill>

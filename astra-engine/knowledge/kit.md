@@ -4,7 +4,7 @@
 
 ```tsx
 import React from "react";
-import { AstraVideo, cam, Captions, BehindText, Title, Tag, SidePanel, FocusCard, IconPop, ImageCard, Arrow, Flash, Sfx, Music } from "../kit";
+import { AstraVideo, cam, Captions, BehindText, MapFocus, Logo, Photo, IconPop, Notification, CameraView, SidePanel, FocusCard, Sfx, Music } from "../kit";
 
 export const Montage: React.FC = () => (
   <AstraVideo camera={[cam.push(0, 3, 1.12), cam.punch(9.4, 1.2), cam.reset(12.1)]}>
@@ -22,74 +22,123 @@ export const Montage: React.FC = () => (
 - `cam.pull(from, to, zoom = 1)` — плавный отъезд;
 - `cam.punch(at, zoom = 1.2)` — резкий панч-ин;
 - `cam.reset(at)` — резкий возврат к общему плану;
-- `cam.move(from, to, { zoom, x, y })` — свободное плавное движение (x, y — сдвиг в пикселях).
+- `cam.move(from, to, { zoom, x, y })` — свободное плавное движение.
 
-## Captions
+## Показать то, о чём говорят
 
-`<Captions style="clean" emphasis={[индексы слов]} placements={[{ from, to, pos }]} hidden={[{ from, to }]} maxWords={3} />`
+### MapFocus
 
-- `style`: `clean` | `bold` | `minimal`;
-- `pos`: `"low"` (обычно), `"mid"`, `"high"`, `"above-panel"` или `{ y }`.
+```tsx
+<MapFocus from to region="usa|world" lat={36.7} lon={-119.4} label="Калифорния" highlight="California" zoom? />
+```
 
-Ставится последним.
+Карта на весь кадр: летит от всей страны или мира к месту, подсвечивает штат или страну, ставит точку с подписью. 2.5–4 секунды.
 
-## BehindText
+### Logo
 
-`<BehindText from to text="ТЕРМИН" y? color? sfx? />`
+```tsx
+<Logo from to name="Waymo" x={850} y={560} size={230} />
+```
 
-Огромное слово за головой автора. Текст до 14 букв. Цвет по умолчанию оранжевый, для второго акцента — `"highlight"` (жёлтый) или `"text"` (белый).
+Логотип компании, сервиса или монеты на белой плитке с бликом.
 
-## Title
+### Photo
 
-`<Title from to text="главная мысль" top? maxHeight? box? color? sfx? />`
+```tsx
+<Photo from to query="police K9 german shepherd dog" pos="lower|full" caption? />
+```
 
-Кинетический заголовок над головой, 2–6 слов, слова выезжают по очереди. `box` — плотная оранжевая плашка под текстом, для самого ударного тезиса.
+Настоящее фото: запрос по-английски, фото подбирается до рендера. `full` — перебивка на весь кадр.
 
-## Tag
+### IconPop
 
-`<Tag from to text="ЭТАП 1" tone="blue|accent|dark" pos="top-left|top-center" sfx? />`
+```tsx
+<IconPop from to emoji="🤖" x y size={220} label? />
+```
 
-Маленькая плашка раздела в углу.
+Эмодзи становится объёмной 3D-иконкой. Вместо `emoji` можно передать `src` картинки из материалов.
 
-## SidePanel
+### Notification
 
-`<SidePanel from to side="bottom|right" title="Как это работает" numbered? items={[{ text, at, icon?, tone? }]} sfx? />`
+```tsx
+<Notification from to app="Waymo" icon="Waymo" title="Обнаружена неисправность" text="Машина заедет на парковку" time? />
+```
 
-Разделение экрана: панель со списком, автор сдвигается. Пункт появляется в `at`. `icon` — эмодзи (`"🔫"`) или имя картинки из материалов. `tone: "accent"` — для вывода, `"good"` / `"bad"` — для плюсов и минусов.
+Уведомление как на телефоне: сообщения, системные предупреждения, слова поддержки. `icon` — эмодзи или название бренда.
 
-## FocusCard
+### CameraView
 
-`<FocusCard from to title="Итог" numbered? items={[{ text, at, tone? }]} sfx? />`
+```tsx
+<CameraView from to label="CAM 02 · САЛОН" />
+```
 
-Тёмная карточка на весь кадр, автор говорит в кружке справа сверху.
+Автор превращается в запись камеры наблюдения: чёрно-белый контрастный кадр, REC, время, рамка.
 
-## IconPop
+### ImageCard
 
-`<IconPop from to emoji="🚕" | src="asset-name" x y size={200} label? sfx? />`
-
-Иконка, логотип или эмодзи с пружинкой и подписью.
-
-## ImageCard
-
-`<ImageCard from to src="asset-name" pos="lower|full" caption? tilt? fit="cover|contain" sfx? />`
+```tsx
+<ImageCard from to src="asset-name" pos="lower|full" caption? tilt? fit? />
+```
 
 Фото или скриншот из материалов ролика.
 
-## Arrow
+## Списки и выводы
 
-`<Arrow from to x1 y1 x2 y2 label="коротко" bend={0.3} color? sfx? />`
+### SidePanel
 
-Стрелка от руки: подпись стоит в (x1, y1), остриё — в (x2, y2).
+```tsx
+<SidePanel from to side="bottom|right" title="Как это работает" numbered? items={[{ text, at, icon, tone? }]} />
+```
 
-## Flash
+Стеклянная панель, автор сдвигается. `icon` — эмодзи (станет 3D) или название бренда. `tone`: `"accent"` — вывод, `"good"` / `"bad"` — плюс и минус.
 
-`<Flash at tint? sfx? />`
+### FocusCard
 
-Короткая вспышка на сильном ударе.
+```tsx
+<FocusCard from to title="Итог" numbered? items={[{ text, at, icon, tone? }]} />
+```
 
-## Звук
+Карточка на размытом фоне, автор в кружке справа сверху.
 
-- `<Sfx at role="whoosh|pop|click|typing|ding|error|cash|notification|riser|impact|glitch|swipe|shutter|tick" volume={0.55} />` — отдельный эффект;
-- `<Music mood="calm|curious|upbeat|tense|dramatic|playful" from? to? volume={0.16} />` — подложка, сама приглушается под голос.
+## Текст
+
+### BehindText
+
+```tsx
+<BehindText from to text="ТЕРМИН" y? color? />
+```
+
+Огромное слово за головой автора, до 14 букв; субтитр в этот момент сам прячется. `color`: оранжевый по умолчанию, `"highlight"` — жёлтый, `"text"` — белый.
+
+### Title
+
+```tsx
+<Title from to text="мысль между строк" box? />
+```
+
+Кинетический заголовок над головой, 2–4 слова.
+
+### Tag
+
+```tsx
+<Tag from to text="ЭТАП 1" tone="blue|accent|dark" />
+```
+
+Плашка раздела в углу.
+
+### Captions
+
+```tsx
+<Captions style="clean|bold|minimal" emphasis={[индексы]} placements? hidden? />
+```
+
+Одно слово по центру в момент произнесения. Ставится последним.
+
+## Акценты и звук
+
+- `<Arrow from to x1 y1 x2 y2 label="коротко" />` — стрелка от руки, остриё в (x2, y2).
+- `<Flash at />` — вспышка на кульминации.
+- `<Sfx at role="whoosh|pop|click|typing|ding|error|cash|notification|riser|impact|glitch|swipe|shutter|tick" volume={0.55} />` — отдельный звуковой эффект.
+- `<Music mood="calm|curious|upbeat|tense|dramatic|playful" />` — музыкальная подложка, сама стихает под голос.
 
 `sfx={false}` у любого кубика выключает его встроенный звук, `sfx="ding"` заменяет его.

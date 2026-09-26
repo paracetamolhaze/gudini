@@ -29,12 +29,17 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ side = "bottom", t
   const reveal = slide * out;
   const bottom = side === "bottom";
   const panel: React.CSSProperties = bottom
-    ? { left: 0, right: 0, top: 1010, bottom: 0, borderRadius: `${theme.radius + 8}px ${theme.radius + 8}px 0 0`, translate: `0 ${(1 - reveal) * 105}%`, padding: "64px 70px 0 70px" }
-    : { left: 540, right: 0, top: 0, bottom: 0, translate: `${(1 - reveal) * 105}% 0`, padding: "300px 56px 0 56px" };
+    ? { left: 0, right: 0, top: 1010, bottom: 0, borderRadius: `${theme.radius + 8}px ${theme.radius + 8}px 0 0`, translate: `0 ${(1 - reveal) * 105}%`, padding: "58px 60px 0 60px" }
+    : { left: 540, right: 0, top: 0, bottom: 0, translate: `${(1 - reveal) * 105}% 0`, padding: "300px 48px 0 48px" };
   const titleIn = enter(frame, fps, 0.5, 0.15);
   return (
     <AbsoluteFill style={{ pointerEvents: "none" }}>
-      <div style={{ position: "absolute", ...panel, backgroundColor: theme.color.panel, boxShadow: theme.shadow, overflow: "hidden" }}>
+      {/* Frosted glass: the frame behind stays visible, blurred and darkened. */}
+      <div style={{
+        position: "absolute", ...panel, overflow: "hidden",
+        background: "linear-gradient(180deg, rgba(18,20,26,0.42), rgba(8,10,14,0.66))",
+        backdropFilter: "blur(28px) saturate(1.3)", boxShadow: "inset 0 1.5px 0 rgba(255,255,255,0.18), 0 -12px 40px rgba(0,0,0,0.25)",
+      }}>
         <div style={{
           position: "absolute", ...(bottom ? { left: 0, right: 0, top: 0, height: 5 } : { left: 0, top: 0, bottom: 0, width: 5 }),
           background: `linear-gradient(${bottom ? "90deg" : "180deg"}, ${theme.color.accent}, rgba(255,106,31,0))`,

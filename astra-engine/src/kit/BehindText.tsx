@@ -3,6 +3,7 @@ import { fitText } from "@remotion/layout-utils";
 import { AbsoluteFill, interpolate, OffthreadVideo, staticFile } from "remotion";
 import { faceOf, useInput } from "../input";
 import { color, theme } from "../theme";
+import type { LayoutDeclaration } from "./AstraVideo";
 import { BlockSfx, type SfxRole } from "./audio";
 import { CameraLayer } from "./camera";
 import { EASE_OUT, leave } from "./motion";
@@ -57,9 +58,10 @@ const Body: React.FC<Omit<Props, "sfx">> = ({ from, to, text, y, color: tint }) 
 };
 
 /** Huge word behind the author: the head and shoulders cover part of it. Needs a cutout for its time range. */
-export const BehindText: React.FC<Props> = ({ from, to, sfx, ...rest }) => (
+export const BehindText: React.FC<Props> & { layoutOf: (p: Props) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Behind ${rest.text}`}><Body from={from} to={to} {...rest} /></Clip>
     <BlockSfx at={from} sfx={sfx} fallback="whoosh" volume={0.5} />
   </>
 );
+BehindText.layoutOf = ({ from, to, text }) => ({ occupied: { from, to, zone: "word", text } });

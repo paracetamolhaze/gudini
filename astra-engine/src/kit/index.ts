@@ -16,3 +16,8 @@ export { Sfx, Music, type SfxRole, type MusicMood } from "./audio";
 export { Clip, useClip, useWordTime } from "./time";
 export { useInput } from "../input";
 export { theme } from "../theme";
+export { Logo } from "./Logo";
+export { Photo } from "./Photo";
+export { MapFocus } from "./MapFocus";
+export { Notification } from "./Notification";
+export { CameraView } from "./CameraView";

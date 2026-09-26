@@ -1,8 +1,11 @@
 import React from "react";
 import { fitText, measureText } from "@remotion/layout-utils";
 import { AbsoluteFill, interpolate } from "remotion";
+import { faceOf, useInput } from "../input";
 import { color, theme } from "../theme";
+import type { LayoutDeclaration } from "./AstraVideo";
 import { BlockSfx, type SfxRole } from "./audio";
+import { useHighestTop } from "./camera";
 import { EASE_OUT, leave } from "./motion";
 import { Clip, useClip } from "./time";
 
@@ -40,10 +43,14 @@ function layout(words: string[], maxHeight: number) {
   return size;
 }
 
-const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ text, top = theme.safe.top + 30, maxHeight = 230, color: tint, box = false }) => {
+const Body: React.FC<Omit<Props, "sfx">> = ({ from, to, text, top = theme.safe.top + 30, maxHeight = 230, color: tint, box = false }) => {
   const { frame, fps, lengthFrames } = useClip();
+  const input = useInput();
+  const highestTop = useHighestTop();
   const words = text.toUpperCase().split(/\s+/).filter(Boolean);
-  const size = layout(words, maxHeight);
+  // The block ends above the head wherever the camera puts it during the title.
+  const room = highestTop(faceOf(input), from, to) - 28 - top - (box ? 28 : 0);
+  const size = layout(words, Math.max(90, Math.min(maxHeight, room)));
   const out = leave(frame, fps, lengthFrames, 0.25);
   const boxIn = interpolate(frame, [0, 0.35 * fps], [0, 100], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_OUT });
   return (
@@ -76,9 +83,10 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ text, top = theme.
 };
 
 /** Big kinetic title in front of the author: hooks, section names, punchlines. Sits above the head. */
-export const Title: React.FC<Props> = ({ from, to, sfx, ...rest }) => (
+export const Title: React.FC<Props> & { layoutOf: (p: Props) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
   <>
-    <Clip from={from} to={to} name={`Title ${rest.text}`}><Body {...rest} /></Clip>
+    <Clip from={from} to={to} name={`Title ${rest.text}`}><Body from={from} to={to} {...rest} /></Clip>
     <BlockSfx at={from} sfx={sfx} fallback="whoosh" volume={0.45} />
   </>
 );
+Title.layoutOf = ({ from, to, text }) => ({ occupied: { from, to, zone: "top", text } });

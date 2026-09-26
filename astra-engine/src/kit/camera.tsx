@@ -76,19 +76,44 @@ function panelOffset(panels: PanelWindow[], t: number) {
   return { dx, dy, zoom };
 }
 
-/** Transform of the author shot at the current frame; shared by every layer that shows the author. */
-export function useCameraStyle(): React.CSSProperties {
+/** Camera state at the current frame: zoom around `origin`, then shift. */
+export function useCameraState() {
   const { fps } = useVideoConfig();
   const frame = useAbsoluteFrame();
   const { keys, panels, origin } = useContext(CameraContext);
   const t = frame / fps;
   const base = evalKeys(keys, t);
   const panel = panelOffset(panels, t);
-  return {
-    transformOrigin: `${origin.x}px ${origin.y}px`,
-    scale: String(base.zoom * panel.zoom),
-    translate: `${base.x + panel.dx}px ${base.y + panel.dy}px`,
+  return { zoom: base.zoom * panel.zoom, x: base.x + panel.dx, y: base.y + panel.dy, origin };
+}
+
+/** Transform of the author shot at the current frame; shared by every layer that shows the author. */
+export function useCameraStyle(): React.CSSProperties {
+  const { zoom, x, y, origin } = useCameraState();
+  return { transformOrigin: `${origin.x}px ${origin.y}px`, scale: String(zoom), translate: `${x}px ${y}px` };
+}
+
+/** Highest on-screen top edge of a source box during [from, to]: layouts use it to stay clear of the head. */
+export function useHighestTop() {
+  const { keys, panels, origin } = useContext(CameraContext);
+  return (box: { y: number }, from: number, to: number) => {
+    let top = Infinity;
+    for (let i = 0; i <= 8; i++) {
+      const t = from + ((to - from) * i) / 8;
+      const base = evalKeys(keys, t);
+      const panel = panelOffset(panels, t);
+      top = Math.min(top, origin.y + (box.y - origin.y) * base.zoom * panel.zoom + base.y + panel.dy);
+    }
+    return top;
   };
+}
+
+/** Where a box of the source frame (e.g. the head) is on screen right now, after zoom and shift. */
+export function useOnScreen(box: { x: number; y: number; w: number; h: number }) {
+  const { zoom, x, y, origin } = useCameraState();
+  const map = (px: number, py: number) => ({ x: origin.x + (px - origin.x) * zoom + x, y: origin.y + (py - origin.y) * zoom + y });
+  const a = map(box.x, box.y), b = map(box.x + box.w, box.y + box.h);
+  return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
 }
 
 export const CameraLayer: React.FC<{ children: React.ReactNode }> = ({ children }) => {

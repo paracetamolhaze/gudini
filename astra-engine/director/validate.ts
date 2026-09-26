@@ -15,9 +15,34 @@ const BLOCKS: Record<string, { time: "range" | "at" | "none" }> = {
   Flash: { time: "at" },
   Sfx: { time: "at" },
   Music: { time: "none" },
+  Logo: { time: "range" },
+  Photo: { time: "range" },
+  MapFocus: { time: "range" },
+  Notification: { time: "range" },
+  CameraView: { time: "range" },
 };
-const HEAVY = new Set(["SidePanel", "FocusCard", "ImageCard"]);
-const VISUAL = new Set(["BehindText", "Title", "Tag", "SidePanel", "FocusCard", "IconPop", "ImageCard", "Arrow", "Flash"]);
+const HEAVY = new Set(["SidePanel", "FocusCard", "ImageCard", "Photo", "MapFocus"]);
+const VISUAL = new Set(["BehindText", "Title", "Tag", "SidePanel", "FocusCard", "IconPop", "ImageCard", "Arrow", "Flash",
+  "Logo", "Photo", "MapFocus", "Notification", "CameraView"]);
+const EMOJI = /\p{Extended_Pictographic}/u;
+
+/** Emoji to draw as 3D pictures, logos and photos to fetch before rendering. */
+export function assetNeeds(blocks: Block[]): { emoji: string[]; logos: string[]; photos: string[] } {
+  const emoji = new Set<string>(), logos = new Set<string>(), photos = new Set<string>();
+  const icon = (value: unknown) => {
+    if (typeof value !== "string" || !value) return;
+    if (EMOJI.test(value)) emoji.add(value);
+    else if (!/[./:]/.test(value)) logos.add(value);
+  };
+  for (const b of blocks) {
+    if (b.type === "IconPop") icon(b.props.emoji);
+    if (b.type === "Notification") icon(b.props.icon);
+    if (b.type === "Logo" && typeof b.props.name === "string") logos.add(b.props.name);
+    if (b.type === "Photo" && typeof b.props.query === "string") photos.add(b.props.query);
+    for (const item of (Array.isArray(b.props.items) ? b.props.items : []) as { icon?: unknown }[]) icon(item?.icon);
+  }
+  return { emoji: [...emoji], logos: [...logos], photos: [...photos] };
+}
 const FORBIDDEN = new Set(["fetch", "eval", "Function", "require", "XMLHttpRequest", "WebSocket", "window", "document",
   "globalThis", "process", "navigator", "localStorage", "sessionStorage", "setTimeout", "setInterval", "Date"]);
 

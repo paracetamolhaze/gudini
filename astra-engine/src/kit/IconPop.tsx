@@ -3,6 +3,7 @@ import { AbsoluteFill, Img } from "remotion";
 import { theme } from "../theme";
 import { useAsset } from "./assets";
 import { BlockSfx, type SfxRole } from "./audio";
+import { Icon } from "./List";
 import { enter, leave, pop } from "./motion";
 import { Clip, useClip } from "./time";
 
@@ -33,9 +34,7 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, emoji, x, y, 
       <div style={{ position: "absolute", left: x - size / 2, top: y - size / 2 + bob, width: size, height: size,
         scale: String(s * (0.6 + 0.4 * out)), opacity: out, rotate: `${(1 - Math.min(1, s)) * -14}deg` }}>
         {src ? <Img src={asset(src)} style={{ width: "100%", height: "100%", objectFit: "contain", filter: "drop-shadow(0 14px 30px rgba(0,0,0,0.45))" }} /> : null}
-        {!src && emoji ? (
-          <div style={{ fontSize: size * 0.86, lineHeight: 1, textAlign: "center", fontFamily: "'Noto Color Emoji','Segoe UI Emoji','Apple Color Emoji',sans-serif" }}>{emoji}</div>
-        ) : null}
+        {!src && emoji ? <Icon icon={emoji} size={size} /> : null}
       </div>
       {label ? (
         <div style={{ position: "absolute", left: x - 300, width: 600, top: y + size / 2 + 18, display: "flex", justifyContent: "center", opacity: labelIn * out }}>

@@ -6,7 +6,8 @@ import { draftImages, keyMoments } from "./frames";
 import { makeCutouts } from "./matting";
 import { fixPrompt, reviewPrompt, systemPrompt, taskPrompt, type Task } from "./prompt";
 import { renderVideo } from "./render";
-import { analyzeMontage, cutoutRanges } from "./validate";
+import { resolveAssets, type PhotoPicker } from "./assets";
+import { analyzeMontage, assetNeeds, cutoutRanges } from "./validate";
 import { prepareWorkspace, typecheck } from "./workspace";
 
 export type MontageJob = {
@@ -19,6 +20,8 @@ export type MontageJob = {
   mediaSubdir: string;
   /** Where prompts, answers, versions of the montage and renders are kept. */
   outDir: string;
+  /** Subfolder of publicDir where fetched emoji, logos and photos are cached between jobs. */
+  assetCache?: string;
   log?: (line: string) => void;
   onStage?: (stage: "write" | "cutout" | "draft" | "review" | "final", fraction?: number) => void;
 };
@@ -54,12 +57,39 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
       const analysis = analyzeMontage(code, input.duration);
       const errors = typecheck(prepareWorkspace(code, `${path.basename(outDir)}-check-${label}-${attempt}`));
       const problems = [...analysis.problems, ...errors];
-      fs.writeFileSync(path.join(outDir, `${label}-analysis-${attempt}.json`), JSON.stringify({ ...analysis, errors }, null, 2));
+      if (!problems.length) {
+        // Emoji, logos and photos the montage asks for are fetched now; what cannot be found goes back to Astra.
+        const needs = assetNeeds(analysis.blocks);
+        const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", pickPhotos);
+        input = { ...input, assets: { ...input.assets, ...resolved.assets } };
+        log(`Материалы: эмодзи ${needs.emoji.length}, логотипы ${needs.logos.length}, фото ${needs.photos.length}; не нашлось ${resolved.missing.length}`);
+        problems.push(...resolved.missing);
+      }
+      fs.writeFileSync(path.join(outDir, `${label}-analysis-${attempt}.json`), JSON.stringify({ ...analysis, errors, problems }, null, 2));
       if (!problems.length) return { code, analysis };
       log(`Проверка: ${problems.length} проблем(ы): ${problems.slice(0, 3).join(" | ")}`);
       if (attempt >= 3) throw new Error(`Астра: монтаж не собирается после ${attempt} попыток: ${problems.slice(0, 5).join("; ")}`);
       code = await ask(`${label}-fix-${attempt}`, fixPrompt(task, code, problems));
     }
+  };
+
+  /** Astra looks at stock photo candidates and picks the one that shows the thing clearly. */
+  const pickPhotos: PhotoPicker = async (sets) => {
+    const images: BridgeImage[] = [];
+    const lines: string[] = [];
+    for (const set of sets) set.previews.forEach((buffer, index) => {
+      if (!buffer.length || images.length >= 24) return;
+      images.push({ base64: buffer.toString("base64"), mediaType: buffer[0] === 0x89 ? "image/png" : "image/jpeg" });
+      lines.push(`${images.length}. запрос «${set.query}», вариант ${index}`);
+    });
+    const user = [
+      "Для монтажа нужны фото. К заданию приложены варианты в таком порядке:", lines.join("\n"), "",
+      "Для каждого запроса выбери вариант, где предмет виден ясно, крупно и без чужих надписей; -1 — если ни один не подходит.",
+      `Ответ — только JSON вида {"запрос": номер варианта}.`,
+    ].join("\n");
+    log(`Астра выбирает фото: ${sets.length} запрос(ов), ${images.length} вариантов...`);
+    const result = await askAstra("Ты — Астра, монтажёр. Выбираешь фото для вставок в ролик.", user, images);
+    try { return JSON.parse(result.text.slice(result.text.indexOf("{"), result.text.lastIndexOf("}") + 1)); } catch { return {}; }
   };
 
   const cutouts = (analysis: ReturnType<typeof analyzeMontage>) => {

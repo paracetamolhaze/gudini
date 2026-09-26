@@ -65,7 +65,7 @@ async function main() {
   });
   const result = await directMontage({
     input, topic: spec.topic, lessons: [], facts: spec.facts, publicDir, mediaSubdir: "job", outDir,
-    memesDir: spec.memesDir, voice,
+    memesDir: spec.memesDir, voice, skipReview: process.env.ASTRA_REVIEW !== "1",
     log: line => emit(`LOG ${line}`),
     onStage: (stage, fraction) => emit(`STAGE ${stage}${fraction === undefined ? "" : ` ${fraction.toFixed(3)}`}`),
   });

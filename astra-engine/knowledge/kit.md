@@ -4,7 +4,7 @@
 
 ```tsx
 import React from "react";
-import { AstraVideo, cam, Captions, BehindText, MapFocus, Logo, Photo, IconPop, Notification, CameraView, SidePanel, FocusCard, Sfx, Music } from "../kit";
+import { AstraVideo, cam, Captions, BehindText, MapFocus, Logo, Photo, Illustration, Meme, IconPop, Notification, CameraView, SidePanel, FocusCard, Sfx, Music } from "../kit";
 
 export const Montage: React.FC = () => (
   <AstraVideo camera={[cam.push(0, 3, 1.12), cam.punch(9.4, 1.2), cam.reset(12.1)]}>
@@ -37,26 +37,42 @@ export const Montage: React.FC = () => (
 ### Logo
 
 ```tsx
-<Logo from to name="Waymo" x={850} y={560} size={230} />
+<Logo from to name="Waymo" pos="above|behind" size? />
 ```
 
-Логотип компании, сервиса или монеты на белой плитке с бликом.
+Логотип компании, сервиса или монеты на белой плитке: над головой автора или крупно за его спиной.
 
 ### Photo
 
 ```tsx
-<Photo from to query="police dog" pos="lower|full" fallback="🐕" caption? />
+<Photo from to query="gel blaster" look="игрушечный бластер и рядом гелевые шарики" pos="lower|full" fallback? />
 ```
 
-Настоящее фото: запрос по-английски в 2–4 слова, как ищут на фотостоке («police dog», «water beads», «empty car seat»). Фото подбирается и проверяется до рендера. `full` — перебивка на весь кадр. `fallback` — эмодзи на случай, если подходящего фото нет.
+Настоящее фото. `query` — 2–4 английских слова для фотостока, `look` — что обязательно должно быть видно: по нему выбирается лучшее фото. `lower` — карточка поверх нижней части кадра, `full` — перебивка на весь кадр.
+
+### Illustration
+
+```tsx
+<Illustration from to prompt="a white robotaxi, colorful gel beads flying out of its open windows" pos="lower|full" />
+```
+
+Нарисованная мультяшная сцена в едином стиле ролика (стиль добавляется сам). Одна понятная сцена, без надписей и без людей с оружием. Рисуется до рендера примерно за минуту.
+
+### Meme
+
+```tsx
+<Meme from to name="имя-из-списка" pos="lower|full|corner" volume={0} />
+```
+
+Короткий мем из библиотеки владельца (список — в задании), по умолчанию без звука.
 
 ### IconPop
 
 ```tsx
-<IconPop from to emoji="🤖" x y size={220} label? />
+<IconPop from to emoji="🤖" x y size={220} />
 ```
 
-Эмодзи становится объёмной 3D-иконкой. Вместо `emoji` можно передать `src` картинки из материалов.
+Объёмная 3D-иконка. Уместна как знак робота, ИИ, голосового помощника.
 
 ### Notification
 
@@ -64,12 +80,12 @@ export const Montage: React.FC = () => (
 <Notification from to app="Waymo" icon="Waymo" title="Обнаружена неисправность" text="Машина заедет на парковку" time? />
 ```
 
-Уведомление как на телефоне: сообщения, системные предупреждения, слова поддержки. `icon` — эмодзи или название бренда.
+Уведомление как на телефоне: сообщения, системные предупреждения, слова поддержки. `icon` — название бренда или 🤖.
 
 ### CameraView
 
 ```tsx
-<CameraView from to label="CAM 02 · САЛОН" />
+<CameraView from to />
 ```
 
 Автор превращается в запись камеры наблюдения: чёрно-белый контрастный кадр, REC, время, рамка.
@@ -87,18 +103,18 @@ export const Montage: React.FC = () => (
 ### SidePanel
 
 ```tsx
-<SidePanel from to side="bottom|right" title="Как это работает" numbered? items={[{ text, at, icon, tone? }]} />
+<SidePanel from to title="Что взяли" numbered? items={[{ text, at, icon? }]} />
 ```
 
-Стеклянная панель, автор сдвигается. `icon` — эмодзи (станет 3D) или название бренда. `tone`: `"accent"` — вывод, `"good"` / `"bad"` — плюс и минус.
+Список поверх нижней части кадра, без фона. Все пункты белые; пункт, который автор называет, подсвечивается в момент `at`, подсветка переходит дальше. `icon` — по желанию, название бренда или картинка из материалов.
 
 ### FocusCard
 
 ```tsx
-<FocusCard from to title="Итог" numbered? items={[{ text, at, icon, tone? }]} />
+<FocusCard from to title="Итог" numbered? items={[{ text, at }]} />
 ```
 
-Карточка на размытом фоне, автор в кружке справа сверху.
+Карточка во весь кадр на тёмном фоне, автор в кружке справа сверху, пункты подсвечиваются по речи.
 
 ## Текст
 

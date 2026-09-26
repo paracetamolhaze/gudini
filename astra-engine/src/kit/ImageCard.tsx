@@ -26,8 +26,8 @@ type Props = {
   sfx?: SfxRole | false;
 };
 
-// Under the raised author and below the caption line (above-panel captions sit at y 880).
-const LOWER = { x: 60, y: 965, w: 960, h: 560 };
+// Over the lower part of the shot, below the face; captions move above the head meanwhile.
+const LOWER = { x: 60, y: 1000, w: 960, h: 540 };
 
 const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, pos = "lower", caption, tilt = -1.5, fit = "cover", fallback }) => {
   const { frame, fps, lengthFrames } = useClip();
@@ -37,7 +37,7 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, pos = "lower"
   const out = leave(frame, fps, lengthFrames, 0.3);
   const zoom = interpolate(frame, [0, lengthFrames], [1, 1.08]);
   // A photo that was not found turns into its fallback emoji instead of breaking the render.
-  if (src.startsWith("photo:") && !assets[src]) {
+  if (/^(photo|gen):/.test(src) && !assets[src]) {
     if (!fallback) return null;
     const s = pop(frame, fps);
     return (
@@ -88,7 +88,7 @@ export const ImageCard: React.FC<Props> & { layoutOf: (p: Props, input?: AstraIn
 );
 ImageCard.layoutOf = ({ from, to, pos = "lower", src }, input) =>
   // A photo that was not found takes no space: nothing moves for it.
-  src.startsWith("photo:") && input && !input.assets[src] ? {}
+  /^(photo|gen):/.test(src) && input && !input.assets[src] ? {}
   : pos === "full" ? { occupied: { from, to, zone: "full" } }
-  : pos === "lower" ? { occupied: { from, to, zone: "bottom" }, panel: { from, to, dx: 0, dy: -300, zoom: 1 } }
+  : pos === "lower" ? { occupied: { from, to, zone: "bottom" } }
   : {};

@@ -6,7 +6,7 @@ import { draftImages, keyMoments } from "./frames";
 import { makeCutouts } from "./matting";
 import { fixPrompt, reviewPrompt, systemPrompt, taskPrompt, type Task } from "./prompt";
 import { renderVideo } from "./render";
-import { resolveAssets, type PhotoPicker } from "./assets";
+import { listMemes, resolveAssets, type PhotoPicker } from "./assets";
 import { analyzeMontage, assetNeeds, cutoutRanges } from "./validate";
 import { prepareWorkspace, typecheck } from "./workspace";
 
@@ -22,6 +22,8 @@ export type MontageJob = {
   outDir: string;
   /** Subfolder of publicDir where fetched emoji, logos and photos are cached between jobs. */
   assetCache?: string;
+  /** The owner's meme library (video clips by file name). */
+  memesDir?: string;
   /** Continue from a montage Astra already wrote (and reviewed), without asking her again. */
   startCode?: string;
   skipReview?: boolean;
@@ -40,7 +42,7 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
   fs.mkdirSync(outDir, { recursive: true });
   const log = (line: string) => { job.log?.(line); fs.appendFileSync(path.join(outDir, "log.txt"), `${new Date().toISOString()} ${line}\n`); };
   let input: AstraInput = { ...job.input, cutouts: [] };
-  const task: Task = { topic: job.topic, input, lessons: job.lessons };
+  const task: Task = { topic: job.topic, input, lessons: job.lessons, memes: Object.keys(listMemes(job.memesDir)) };
   const system = systemPrompt();
   fs.writeFileSync(path.join(outDir, "system.md"), system);
 
@@ -65,10 +67,10 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
       if (!problems.length) {
         // Emoji, logos and photos the montage asks for are fetched now; what cannot be found goes back to Astra once.
         const needs = assetNeeds(analysis.blocks);
-        const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", pickPhotos);
+        const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", pickPhotos, job.memesDir);
         input = { ...input, assets: { ...input.assets, ...resolved.assets } };
         missing = resolved.missing;
-        log(`Материалы: эмодзи ${needs.emoji.length}, логотипы ${needs.logos.length}, фото ${needs.photos.length}; не нашлось ${missing.length}`);
+        log(`Материалы: эмодзи ${needs.emoji.length}, логотипы ${needs.logos.length}, фото ${needs.photos.length}, рисунки ${needs.illustrations.length}, мемы ${needs.memes.length}; не нашлось ${missing.length}`);
       }
       fs.writeFileSync(path.join(outDir, `${label}-analysis-${attempt}.json`), JSON.stringify({ ...analysis, errors, problems, missing }, null, 2));
       // A photo that still cannot be found is shown by its fallback emoji (or skipped): the montage goes on.
@@ -91,7 +93,7 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
     for (const set of sets) set.previews.forEach((buffer, index) => {
       if (!buffer.length || images.length >= 24) return;
       images.push({ base64: buffer.toString("base64"), mediaType: buffer[0] === 0x89 ? "image/png" : "image/jpeg" });
-      lines.push(`${images.length}. запрос «${set.query}», вариант ${index}`);
+      lines.push(`${images.length}. запрос «${set.query}»${set.look ? ` (должно быть видно: ${set.look})` : ""}, вариант ${index}`);
     });
     const user = [
       "Для монтажа нужны фото. К заданию приложены варианты в таком порядке:", lines.join("\n"), "",

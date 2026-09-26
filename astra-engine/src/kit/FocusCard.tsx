@@ -45,8 +45,6 @@ const AuthorCircle: React.FC<{ scale: number }> = ({ scale }) => {
 
 const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ title, items, numbered = true, children }) => {
   const { frame, fps, lengthFrames } = useClip();
-  const input = useInput();
-  const offset = useClipOffset();
   // The author's circle pops first, then the card grows out of it; on exit it folds back into the circle.
   const open = interpolate(frame, [0.12 * fps, 0.7 * fps], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_OUT });
   const close = interpolate(frame, [lengthFrames - 0.45 * fps, lengthFrames - 0.1 * fps], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_IN_OUT });
@@ -60,12 +58,10 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ title, items, numb
   return (
     <AbsoluteFill>
       <AbsoluteFill style={{ opacity: cardOpacity, clipPath: `circle(${radius}px at ${PIP.x + PIP.size / 2}px ${PIP.y + PIP.size / 2}px)` }}>
-        {/* The room behind the author, blurred and dimmed: depth instead of a flat black screen. */}
-        <AbsoluteFill style={{ backgroundColor: theme.color.ink }}>
-          <Video src={staticFile(input.video)} muted trimBefore={offset} objectFit="cover"
-            style={{ width: "100%", height: "100%", scale: "1.25", filter: "blur(38px) brightness(0.42) saturate(1.25)" }} />
-        </AbsoluteFill>
-        <AbsoluteFill style={{ background: "radial-gradient(circle at 12% 10%, rgba(255,106,31,0.34), rgba(255,106,31,0) 50%), radial-gradient(circle at 90% 95%, rgba(76,157,255,0.20), rgba(76,157,255,0) 45%), linear-gradient(180deg, rgba(8,10,14,0.15), rgba(8,10,14,0.55))" }} />
+        {/* Designed backdrop: deep navy, a fine grid and two soft glows — the same world as the map. */}
+        <AbsoluteFill style={{ background: "radial-gradient(circle at 50% 38%, #172440 0%, #0b111e 62%, #070b14 100%)" }} />
+        <AbsoluteFill style={{ backgroundImage: "linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)", backgroundSize: "60px 60px", translate: `0 ${-frame * 0.4}px` }} />
+        <AbsoluteFill style={{ background: "radial-gradient(circle at 8% 12%, rgba(255,106,31,0.30), rgba(255,106,31,0) 45%), radial-gradient(circle at 95% 92%, rgba(76,157,255,0.22), rgba(76,157,255,0) 45%)" }} />
         <div style={{ position: "absolute", left: 70, top: 262, width: 90, height: 10, borderRadius: 5, backgroundColor: theme.color.accent, scale: `${titleIn} 1`, transformOrigin: "left" }} />
         <div style={{
           position: "absolute", left: 70, top: 300, width: 560,
@@ -74,8 +70,8 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ title, items, numb
         }}>
           {title}
         </div>
-        <div style={{ position: "absolute", left: 60, right: 90, top: 700 }}>
-          {items?.length ? <List items={items} numbered={numbered} size={54} gap={22} /> : null}
+        <div style={{ position: "absolute", left: 50, right: 70, top: 660 }}>
+          {items?.length ? <List items={items} numbered={numbered} size={58} gap={26} /> : null}
           {children}
         </div>
       </AbsoluteFill>
@@ -91,4 +87,4 @@ export const FocusCard: React.FC<Props> & { layoutOf: (p: Props) => LayoutDeclar
     <BlockSfx at={from} sfx={sfx} fallback="whoosh" />
   </>
 );
-FocusCard.layoutOf = ({ from, to }) => ({ occupied: { from, to, zone: "full" } });
+FocusCard.layoutOf = ({ from, to }) => ({ occupied: { from, to, zone: "card" } });

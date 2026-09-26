@@ -14,7 +14,7 @@ export const Montage: React.FC = () => (
       items={[
         { text: "У каждого своя копия", at: 4.6 },
         { text: "Все сверяют записи", at: 5.5 },
-        { text: "Подделку сразу видно", at: 6.95, tone: "accent" },
+        { text: "Подделку сразу видно", at: 6.95 },
       ]}
     />
     <Captions emphasis={[0, 4, 12]} />

@@ -22,6 +22,7 @@ async function main() {
   await directMontage({
     input, topic: arg("topic", "")!, lessons, publicDir, mediaSubdir: arg("media", "dev")!, outDir: out, log: console.log,
     startCode: start ? fs.readFileSync(path.resolve(start), "utf8") : undefined, skipReview: process.argv.includes("--skip-review"),
+    memesDir: arg("memes"),
   });
 }
 

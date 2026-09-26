@@ -10,7 +10,7 @@
 
 ```tsx
 import React from "react";
-import { AstraVideo, BehindText, Captions, cam, FocusCard, IconPop, Logo, MapFocus, Music, Photo, SidePanel, Sfx } from "../kit";
+import { AstraVideo, Captions, cam, FocusCard, Illustration, Logo, MapFocus, Music, Photo, SidePanel, Sfx } from "../kit";
 
 export const Montage: React.FC = () => (
   <AstraVideo
@@ -22,31 +22,29 @@ export const Montage: React.FC = () => (
       cam.push(18.6, 23.5, 1.14), // мораль — медленно ближе
     ]}
   >
-    {/* Крючок: год за спиной, затем карта — где это было */}
-    <BehindText from={0.15} to={1.9} text="2013" />
-    <MapFocus from={1.9} to={4.5} region="world" lat={51.59} lon={-2.99} label="Уэльс" highlight="United Kingdom" zoom={5} />
-    <Photo from={4.6} to={6.0} query="hard drive" fallback="💽" pos="lower" />
+    {/* История: крючок — место, где всё случилось */}
+    <MapFocus from={0.15} to={3.0} region="world" lat={51.59} lon={-2.99} label="Уэльс" highlight="United Kingdom" zoom={5} />
+    <Photo from={3.2} to={6.0} query="hard drive" look="старый жёсткий диск компьютера крупно" pos="lower" />
     <Sfx at={6.0} role="riser" volume={0.4} />
-    <Logo from={7.2} to={9.2} name="Bitcoin" x={850} y={560} />
-    <BehindText from={7.55} to={9.2} text="8 000 BTC" color="highlight" sfx="impact" />
-    {/* Числа — это то, что стоит показать текстом: сравнение цены */}
+    <Logo from={7.2} to={9.2} name="Bitcoin" pos="above" sfx="impact" />
+    {/* Числа — то, что стоит показать текстом: сравнение цены */}
     <SidePanel
       from={9.3}
       to={13.9}
       title="Цена ошибки"
       items={[
-        { text: "2013 — пара тысяч $", at: 9.6, icon: "💵" },
-        { text: "Сегодня — сотни миллионов $", at: 11.8, icon: "💰", tone: "accent" },
+        { text: "2013 — пара тысяч $", at: 9.3 },
+        { text: "Сегодня — сотни миллионов $", at: 11.8 },
       ]}
       sfx="cash"
     />
-    {/* «раскопать свалку» — настоящая свалка на весь кадр */}
-    <Photo from={14.9} to={17.2} query="landfill" fallback="🗑️" pos="full" />
-    <IconPop from={17.1} to={18.4} emoji="🚫" x={850} y={560} sfx="error" />
+    {/* «раскопать свалку» — настоящая свалка на весь кадр, затем рисунок того, что ищут */}
+    <Photo from={14.9} to={16.4} query="landfill" look="огромная городская свалка сверху" pos="full" />
+    <Illustration from={16.4} to={18.5} prompt="a man with a shovel in front of a huge mountain of garbage, a tiny glowing hard drive hidden deep inside" sfx="error" />
     <FocusCard from={18.6} to={25.9} title="Мораль" items={[
-      { text: "Биткоин — в ключе, не в диске", at: 19.9, icon: "🔑" },
-      { text: "Нет ключа — нет денег", at: 22.4, icon: "💸", tone: "accent" },
-      { text: "Делай резервные копии", at: 24.3, icon: "💾" },
+      { text: "Биткоин — в ключе, не в диске", at: 19.9 },
+      { text: "Нет ключа — нет денег", at: 22.4 },
+      { text: "Делай резервные копии", at: 24.3 },
     ]} />
     <Music mood="tense" />
     <Captions style="minimal" emphasis={[1, 16, 18, 19, 29, 30, 41, 50, 55]} />
@@ -56,7 +54,6 @@ export const Montage: React.FC = () => (
 
 ## Почему так
 
-- «Из Уэльса» — это место, значит карта; «жёсткий диск» — настоящее фото; «биткоин» — логотип.
-- Текстом показаны только числа: цена тогда и сейчас — это то, что зритель должен сравнить глазами.
-- «Свалка» — перебивка настоящим фото на весь кадр.
-- Мораль — карточка из трёх коротких пунктов с иконками.
+- История: место — карта, предмет — фото, монета — логотип над головой, событие без фото — рисунок.
+- Текстом показаны только числа: цена тогда и сейчас.
+- Мораль — карточка, подсветка идёт по пунктам вслед за речью.

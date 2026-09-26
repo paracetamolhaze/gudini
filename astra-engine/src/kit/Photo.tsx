@@ -12,6 +12,8 @@ type Props = {
    * "police K9 german shepherd dog", "self-driving taxi on city street at night".
    */
   query: string;
+  /** What must be visible for the photo to fit, in words: "the whole cabin, the driver's seat is empty". */
+  look?: string;
   /** lower: card under the face while the author moves up; full: cutaway over the whole frame. */
   pos?: "lower" | "full";
   caption?: string;
@@ -22,7 +24,7 @@ type Props = {
 };
 
 /** A real photo of what is being talked about, found for the query before rendering. */
-export const Photo: React.FC<Props> & { layoutOf: (p: Props, input?: AstraInput) => LayoutDeclaration } = ({ query, ...rest }) => (
+export const Photo: React.FC<Props> & { layoutOf: (p: Props, input?: AstraInput) => LayoutDeclaration } = ({ query, look: _look, ...rest }) => (
   <ImageCard src={`photo:${query}`} {...rest} />
 );
 Photo.layoutOf = ({ from, to, pos = "lower", query }, input) => ImageCard.layoutOf({ from, to, pos, src: `photo:${query}` }, input);

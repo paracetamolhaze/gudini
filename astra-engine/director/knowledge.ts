@@ -9,7 +9,7 @@ export type Example = { name: string; text: string; code: string; duration: numb
 /** Worked examples: transcript plus the montage a strong editor would make. */
 export function loadExamples(): Example[] {
   return fs.readdirSync(path.join(dir, "examples")).filter(f => f.endsWith(".md")).sort().map(file => {
-    const text = fs.readFileSync(path.join(dir, "examples", file), "utf8");
+    const text = fs.readFileSync(path.join(dir, "examples", file), "utf8").replace(/\r\n/g, "\n");
     const code = text.match(/```tsx\n([\s\S]*?)```/)?.[1] ?? "";
     const times = [...text.matchAll(/@(\d+(?:\.\d+)?)/g)].map(m => Number(m[1]));
     return { name: file.replace(/\.md$/, ""), text, code, duration: Math.max(0, ...times) + 1.5 };

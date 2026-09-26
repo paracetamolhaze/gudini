@@ -68,7 +68,8 @@ export const Captions: React.FC<Props> = ({ style = "clean", emphasis = [], plac
   const strong = emphasis.includes(current.index);
   const zones = zonesAt(occupied, current.from);
   const placed = placements.find(p => current.from >= p.from && current.from < p.to)?.pos;
-  const pos: CaptionPos = placed ?? (zones.includes("bottom") ? "above-panel" : "low");
+  // A list or a photo card in the lower half sends captions above the head; a card sends them below its list.
+  const pos: CaptionPos = placed ?? (zones.includes("bottom") ? "high" : zones.includes("card") ? { y: 1500 } : "low");
   const y = typeof pos === "string" ? POS_Y[pos] : pos.y;
   const local = frame - Math.round(current.from * fps);
   const p = spring({ frame: local, fps, config: { damping: 14, stiffness: 260, mass: 0.5 } });

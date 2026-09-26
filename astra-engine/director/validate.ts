@@ -20,15 +20,18 @@ const BLOCKS: Record<string, { time: "range" | "at" | "none" }> = {
   MapFocus: { time: "range" },
   Notification: { time: "range" },
   CameraView: { time: "range" },
+  Illustration: { time: "range" },
+  Meme: { time: "range" },
 };
-const HEAVY = new Set(["SidePanel", "FocusCard", "ImageCard", "Photo", "MapFocus"]);
+const HEAVY = new Set(["SidePanel", "FocusCard", "ImageCard", "Photo", "MapFocus", "Illustration", "Meme"]);
 const VISUAL = new Set(["BehindText", "Title", "Tag", "SidePanel", "FocusCard", "IconPop", "ImageCard", "Arrow", "Flash",
-  "Logo", "Photo", "MapFocus", "Notification", "CameraView"]);
+  "Logo", "Photo", "MapFocus", "Notification", "CameraView", "Illustration", "Meme"]);
 const EMOJI = /\p{Extended_Pictographic}/u;
 
-/** Emoji to draw as 3D pictures, logos and photos to fetch before rendering. */
-export function assetNeeds(blocks: Block[]): { emoji: string[]; logos: string[]; photos: string[] } {
-  const emoji = new Set<string>(), logos = new Set<string>(), photos = new Set<string>();
+/** Emoji to draw as 3D pictures, logos and photos to fetch, illustrations to draw, memes to take from the library. */
+export function assetNeeds(blocks: Block[]): { emoji: string[]; logos: string[]; photos: string[]; looks: Record<string, string>; illustrations: string[]; memes: string[] } {
+  const emoji = new Set<string>(), logos = new Set<string>(), photos = new Set<string>(), illustrations = new Set<string>(), memes = new Set<string>();
+  const looks: Record<string, string> = {};
   const icon = (value: unknown) => {
     if (typeof value !== "string" || !value) return;
     if (EMOJI.test(value)) emoji.add(value);
@@ -38,10 +41,15 @@ export function assetNeeds(blocks: Block[]): { emoji: string[]; logos: string[];
     if (b.type === "IconPop") icon(b.props.emoji);
     if (b.type === "Notification") icon(b.props.icon);
     if (b.type === "Logo" && typeof b.props.name === "string") logos.add(b.props.name);
-    if (b.type === "Photo" && typeof b.props.query === "string") photos.add(b.props.query);
+    if (b.type === "Photo" && typeof b.props.query === "string") {
+      photos.add(b.props.query);
+      if (typeof b.props.look === "string") looks[b.props.query] = b.props.look;
+    }
+    if (b.type === "Illustration" && typeof b.props.prompt === "string") illustrations.add(b.props.prompt);
+    if (b.type === "Meme" && typeof b.props.name === "string") memes.add(b.props.name);
     for (const item of (Array.isArray(b.props.items) ? b.props.items : []) as { icon?: unknown }[]) icon(item?.icon);
   }
-  return { emoji: [...emoji], logos: [...logos], photos: [...photos] };
+  return { emoji: [...emoji], logos: [...logos], photos: [...photos], looks, illustrations: [...illustrations], memes: [...memes] };
 }
 const FORBIDDEN = new Set(["fetch", "eval", "Function", "require", "XMLHttpRequest", "WebSocket", "window", "document",
   "globalThis", "process", "navigator", "localStorage", "sessionStorage", "setTimeout", "setInterval", "Date"]);
@@ -157,7 +165,8 @@ export function analyzeMontage(code: string, duration: number): Analysis {
 
 /** Time ranges that need the author cut out (text behind the author), padded and merged. */
 export function cutoutRanges(blocks: Block[], duration: number): { from: number; to: number }[] {
-  const ranges = blocks.filter(b => b.type === "BehindText").map(b => ({ from: Math.max(0, b.from - 0.1), to: Math.min(duration, b.to + 0.1) }))
+  const ranges = blocks.filter(b => b.type === "BehindText" || (b.type === "Logo" && b.props.pos === "behind"))
+    .map(b => ({ from: Math.max(0, b.from - 0.1), to: Math.min(duration, b.to + 0.1) }))
     .sort((a, b) => a.from - b.from);
   const merged: { from: number; to: number }[] = [];
   for (const r of ranges) {

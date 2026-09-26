@@ -6,6 +6,8 @@ export type Task = {
   input: AstraInput;
   /** Owner's feedback on earlier videos, newest last. */
   lessons: string[];
+  /** Meme clips available in the owner's library, by name. */
+  memes?: string[];
 };
 
 const OUTPUT = `## Ответ
@@ -36,7 +38,8 @@ export function taskPrompt(task: Task): string {
     face ? `Голова автора в обычном кадре: x ${face.x}–${face.x + face.w}, y ${face.y}–${face.y + face.h}.` : "",
     `Звуки в библиотеке: ${sounds.length ? sounds.join(", ") : "пока пусто (встроенные звуки кубиков прозвучат, когда библиотеку наполнят)"}.`,
     `Музыка в библиотеке: ${music.length ? music.join(", ") : "пока пусто — всё равно выбери настроение, оно зазвучит, когда треки появятся"}.`,
-    `Картинки: настоящие фото (<Photo query="...">) и логотипы (<Logo name="...">) находятся по твоему запросу перед рендером; эмодзи превращаются в объёмные 3D-иконки.` +
+    `Картинки: настоящие фото (<Photo query="...">), логотипы (<Logo name="...">) и нарисованные иллюстрации (<Illustration prompt="...">) готовятся по твоему запросу перед рендером.` +
+      ` Мемы в библиотеке: ${task.memes?.length ? task.memes.join(", ") : "пока нет"}.` +
       (Object.keys(input.assets).length ? ` Готовые материалы автора: ${Object.keys(input.assets).join(", ")}.` : ""),
     ``,
     `## Расшифровка`,

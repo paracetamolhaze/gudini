@@ -2,13 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import * as simpleIcons from "simple-icons";
 import emojiData from "unicode-emoji-json/data-by-emoji.json";
+import { postBridge } from "./bridge";
+
+/** One look for every drawn picture of a video, so illustrations match each other. */
+export const ILLUSTRATION_STYLE = "Cartoon illustration in a modern 2D animation style: bold clean outlines, bright saturated colors, soft cel shading, " +
+  "friendly and playful mood, simple uncluttered background with a soft gradient, one clear subject in the center. " +
+  "No text, no letters, no numbers, no logos, no watermark. Scene: ";
 
 /**
  * Turns what a montage asks for into files in the bundle's public folder:
  * emoji become Microsoft Fluent 3D pictures (MIT), logos come from Simple Icons (CC0)
  * or the company's Wikipedia page, photos from Pexels / Pixabay (free licenses).
  */
-export type AssetNeeds = { emoji: string[]; logos: string[]; photos: string[] };
+export type AssetNeeds = { emoji: string[]; logos: string[]; photos: string[]; looks?: Record<string, string>; illustrations?: string[]; memes?: string[] };
 export type ResolvedAssets = { assets: Record<string, string>; missing: string[] };
 
 const FLUENT = "https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets";
@@ -104,7 +110,7 @@ async function photoCandidates(query: string): Promise<Candidate[]> {
  * Photos are chosen by eye: Astra sees the candidates for every query and picks the one that
  * shows the thing clearly, or none. Without a picker the first result is taken.
  */
-async function photos(queries: string[], dir: string, pick?: PhotoPicker): Promise<Record<string, string | null>> {
+async function photos(queries: string[], dir: string, pick?: PhotoPicker, looks: Record<string, string> = {}): Promise<Record<string, string | null>> {
   const result: Record<string, string | null> = {};
   const pending: { query: string; candidates: Candidate[]; previews: Buffer[] }[] = [];
   for (const query of queries) {
@@ -117,7 +123,7 @@ async function photos(queries: string[], dir: string, pick?: PhotoPicker): Promi
     }
     pending.push({ query, candidates, previews });
   }
-  const choices = pick && pending.some(p => p.candidates.length) ? await pick(pending.map(p => ({ query: p.query, previews: p.previews }))) : {};
+  const choices = pick && pending.some(p => p.candidates.length) ? await pick(pending.map(p => ({ query: p.query, look: looks[p.query], previews: p.previews }))) : {};
   for (const p of pending) {
     const index = pick ? choices[p.query] ?? -1 : 0;
     const chosen = index >= 0 ? p.candidates[index] : undefined;
@@ -127,11 +133,30 @@ async function photos(queries: string[], dir: string, pick?: PhotoPicker): Promi
   return result;
 }
 
-/** Given previews per query, returns the chosen index per query (-1 = none fits). */
-export type PhotoPicker = (sets: { query: string; previews: Buffer[] }[]) => Promise<Record<string, number>>;
+/** Given previews per query (and what must be visible), returns the chosen index per query (-1 = none fits). */
+export type PhotoPicker = (sets: { query: string; look?: string; previews: Buffer[] }[]) => Promise<Record<string, number>>;
+
+async function illustration(prompt: string, dir: string, aspectRatio: "1:1" | "4:5"): Promise<string | null> {
+  const file = path.join(dir, `${slugify(prompt)}-${aspectRatio.replace(":", "x")}.png`);
+  if (fs.existsSync(file)) return file;
+  try {
+    const result = await postBridge<{ base64: string }>("/image", { prompt: ILLUSTRATION_STYLE + prompt, aspectRatio, references: [], mode: "generate" },
+      20 * 60_000, process.env.CODEX_IMAGE_BRIDGE_URL ?? process.env.CODEX_BRIDGE_URL);
+    if (!result?.base64) return null;
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, Buffer.from(result.base64, "base64"));
+    return file;
+  } catch { return null; }
+}
+
+/** Meme clips the owner put into the library (assets/astra/memes), by file name without extension. */
+export function listMemes(memesDir: string | undefined): Record<string, string> {
+  if (!memesDir || !fs.existsSync(memesDir)) return {};
+  return Object.fromEntries(fs.readdirSync(memesDir).filter(f => /\.(mp4|webm|mov)$/i.test(f)).map(f => [f.replace(/\.[^.]+$/, ""), path.join(memesDir, f)]));
+}
 
 /** Resolves every need into `assets` keys the kit reads: emoji:<glyph>, logo:<name>, photo:<query>. */
-export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheSubdir: string, pick?: PhotoPicker): Promise<ResolvedAssets> {
+export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheSubdir: string, pick?: PhotoPicker, memesDir?: string): Promise<ResolvedAssets> {
   const assets: Record<string, string> = {};
   const missing: string[] = [];
   const rel = (file: string) => path.relative(publicDir, file).replace(/\\/g, "/");
@@ -145,11 +170,26 @@ export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheS
     if (file) assets[`logo:${name.toLowerCase()}`] = rel(file);
     else missing.push(`Логотип «${name}» не нашёлся ни в библиотеке, ни в Википедии — покажи это иначе (фото, эмодзи, карта).`);
   }
-  const found = await photos(needs.photos, path.join(cache, "photos"), pick);
+  const found = await photos(needs.photos, path.join(cache, "photos"), pick, needs.looks);
   for (const query of needs.photos) {
     const file = found[query];
     if (file) assets[`photo:${query}`] = rel(file);
     else missing.push(`Фото по запросу «${query}» не нашлось: на фотостоках ищут 2–4 словами («water beads», «toy gun»). Дай запрос короче или покажи иначе; fallback с эмодзи подстрахует.`);
+  }
+  for (const prompt of needs.illustrations ?? []) {
+    // Both shapes are drawn once and cached: a square card or a tall full-frame picture.
+    const file = await illustration(prompt, path.join(cache, "drawn"), "1:1");
+    if (file) assets[`gen:${prompt}`] = rel(file);
+    else missing.push(`Иллюстрацию «${prompt}» нарисовать не удалось — упрости сцену (без людей с оружием и надписей) или покажи иначе.`);
+  }
+  const library = listMemes(memesDir);
+  for (const name of needs.memes ?? []) {
+    const source = library[name];
+    if (!source) { missing.push(`Мема «${name}» нет в библиотеке — выбери из списка в задании или покажи иначе.`); continue; }
+    const target = path.join(cache, "memes", path.basename(source));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (!fs.existsSync(target)) fs.copyFileSync(source, target);
+    assets[`meme:${name}`] = rel(target);
   }
   return { assets, missing };
 }

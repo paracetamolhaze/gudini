@@ -7,8 +7,6 @@ import { Clip, useClip } from "./time";
 type Props = {
   from: number;
   to: number;
-  /** Camera name in the corner, e.g. "CAM 02 · САЛОН". */
-  label?: string;
   sfx?: SfxRole | false;
 };
 
@@ -16,7 +14,7 @@ const Corner: React.FC<{ style: React.CSSProperties }> = ({ style }) => (
   <div style={{ position: "absolute", width: 110, height: 110, borderColor: "rgba(255,255,255,0.9)", borderStyle: "solid", ...style }} />
 );
 
-const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ label = "CAM 01" }) => {
+const Body: React.FC = () => {
   const { frame, fps, lengthFrames, elapsed, absolute } = useClip();
   const fade = Math.min(
     interpolate(frame, [0, 0.2 * fps], [0, 1], { extrapolateRight: "clamp" }),
@@ -41,15 +39,14 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ label = "CAM 01" }
         REC
       </div>
       <div style={{ position: "absolute", right: 210, top: 244, ...mono, fontSize: 34 }}>{clock}</div>
-      <div style={{ position: "absolute", left: 110, bottom: 480, ...mono, fontSize: 34, letterSpacing: 2 }}>{label}</div>
     </AbsoluteFill>
   );
 };
 
 /** Security-camera overlay on the author: REC, timecode, frame corners. For "the camera sees / watches". */
-export const CameraView: React.FC<Props> = ({ from, to, sfx, ...rest }) => (
+export const CameraView: React.FC<Props> = ({ from, to, sfx }) => (
   <>
-    <Clip from={from} to={to} name={`CameraView ${rest.label ?? ""}`}><Body {...rest} /></Clip>
+    <Clip from={from} to={to} name="CameraView"><Body /></Clip>
     <BlockSfx at={from} sfx={sfx} fallback="glitch" volume={0.35} />
   </>
 );

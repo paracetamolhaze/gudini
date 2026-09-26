@@ -1,0 +1,36 @@
+{
+  "name": "astra-engine",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Remotion engine for the Astra montage style: kit of animated building blocks that Astra composes",
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.529",
+    "@remotion/cli": "4.0.529",
+    "@remotion/fonts": "4.0.529",
+    "@remotion/layout-utils": "4.0.529",
+    "@remotion/media-utils": "4.0.529",
+    "@remotion/motion-blur": "4.0.529",
+    "@remotion/noise": "4.0.529",
+    "@remotion/paths": "4.0.529",
+    "@remotion/renderer": "4.0.529",
+    "@remotion/shapes": "4.0.529",
+    "@remotion/transitions": "4.0.529",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.529",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@fontsource/caveat": "5.2.8",
+    "@fontsource/montserrat": "5.2.8",
+    "@types/node": "22.18.1",
+    "@types/react": "19.1.12",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}

@@ -47,6 +47,6 @@ const Body: React.FC = () => {
 export const CameraView: React.FC<Props> = ({ from, to, sfx }) => (
   <>
     <Clip from={from} to={to} name="CameraView"><Body /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="glitch" volume={0.35} />
+    <BlockSfx at={from} sfx={sfx} fallback="glitch" />
   </>
 );

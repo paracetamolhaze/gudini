@@ -21,5 +21,6 @@ export { Photo } from "./Photo";
 export { MapFocus } from "./MapFocus";
 export { Notification } from "./Notification";
 export { CameraView } from "./CameraView";
-export { Illustration } from "./Illustration";
+export { Scene } from "./Scene";
+export { Morph } from "./Morph";
 export { Meme } from "./Meme";

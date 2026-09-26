@@ -60,6 +60,6 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ x1, y1, x2, y2, la
 export const Arrow: React.FC<Props> = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Arrow ${rest.label ?? ""}`}><Body {...rest} /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="swipe" volume={0.35} />
+    <BlockSfx at={from} sfx={sfx} fallback="swipe" />
   </>
 );

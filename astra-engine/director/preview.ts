@@ -25,10 +25,10 @@ async function main() {
   const workspace = prepareWorkspace(code, "preview");
   const problems = [...analysis.problems, ...typecheck(workspace)];
   if (problems.length) throw new Error(problems.join("\n"));
-  const resolved = await resolveAssets(assetNeeds(analysis.blocks), publicDir, "asset-cache");
+  const resolved = await resolveAssets(assetNeeds(analysis.blocks), publicDir, "asset-cache", { video: path.join(publicDir, input.video), face: input.face, drawMissingPhotos: true });
   if (resolved.missing.length) console.log(resolved.missing.join("\n"));
   const cutouts = makeCutouts({ video: path.join(publicDir, input.video), publicDir, subdir: `${arg("media", "dev")}/cutouts`, ranges: cutoutRanges(analysis.blocks, input.duration) });
-  input = { ...input, assets: { ...input.assets, ...resolved.assets }, cutouts };
+  input = { ...input, assets: { ...input.assets, ...resolved.assets }, sizes: { ...input.sizes, ...resolved.sizes }, cutouts };
   const serveUrl = await bundle({ entryPoint: path.join(workspace, "src/index.ts"), publicDir });
   const inputProps = input as unknown as Record<string, unknown>;
   const composition = await selectComposition({ serveUrl, id: "Astra", inputProps });

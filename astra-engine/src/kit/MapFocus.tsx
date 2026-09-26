@@ -105,7 +105,7 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ region, lat, lon, 
 export const MapFocus: React.FC<Props> & { layoutOf: (p: Props) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Map ${rest.label}`}><Body {...rest} /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="whoosh" volume={0.5} />
+    <BlockSfx at={from} sfx={sfx} fallback="whoosh" />
   </>
 );
 MapFocus.layoutOf = ({ from, to }) => ({ occupied: { from, to, zone: "full" } });

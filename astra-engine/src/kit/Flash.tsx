@@ -13,6 +13,6 @@ const Body: React.FC<{ tint: string }> = ({ tint }) => {
 export const Flash: React.FC<{ at: number; tint?: string; sfx?: SfxRole | false }> = ({ at, tint = "#ffffff", sfx }) => (
   <>
     <Clip from={at} to={at + 0.25} name="Flash"><Body tint={tint} /></Clip>
-    <BlockSfx at={at} sfx={sfx} fallback="impact" volume={0.5} />
+    <BlockSfx at={at} sfx={sfx} fallback="impact" />
   </>
 );

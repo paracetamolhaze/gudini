@@ -86,7 +86,7 @@ const Body: React.FC<Omit<Props, "sfx">> = ({ from, to, text, top = theme.safe.t
 export const Title: React.FC<Props> & { layoutOf: (p: Props) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Title ${rest.text}`}><Body from={from} to={to} {...rest} /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="whoosh" volume={0.45} />
+    <BlockSfx at={from} sfx={sfx} fallback="whoosh" />
   </>
 );
 Title.layoutOf = ({ from, to, text }) => ({ occupied: { from, to, zone: "top", text } });

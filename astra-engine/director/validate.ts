@@ -20,18 +20,20 @@ const BLOCKS: Record<string, { time: "range" | "at" | "none" }> = {
   MapFocus: { time: "range" },
   Notification: { time: "range" },
   CameraView: { time: "range" },
-  Illustration: { time: "range" },
+  Scene: { time: "range" },
+  Morph: { time: "range" },
   Meme: { time: "range" },
 };
-const HEAVY = new Set(["SidePanel", "FocusCard", "ImageCard", "Photo", "MapFocus", "Illustration", "Meme"]);
+const HEAVY = new Set(["SidePanel", "FocusCard", "ImageCard", "Photo", "MapFocus", "Scene", "Meme", "Morph"]);
 const VISUAL = new Set(["BehindText", "Title", "Tag", "SidePanel", "FocusCard", "IconPop", "ImageCard", "Arrow", "Flash",
-  "Logo", "Photo", "MapFocus", "Notification", "CameraView", "Illustration", "Meme"]);
+  "Logo", "Photo", "MapFocus", "Notification", "CameraView", "Scene", "Meme", "Morph"]);
 const EMOJI = /\p{Extended_Pictographic}/u;
 
-/** Emoji to draw as 3D pictures, logos and photos to fetch, illustrations to draw, memes to take from the library. */
-export function assetNeeds(blocks: Block[]): { emoji: string[]; logos: string[]; photos: string[]; looks: Record<string, string>; illustrations: string[]; memes: string[] } {
-  const emoji = new Set<string>(), logos = new Set<string>(), photos = new Set<string>(), illustrations = new Set<string>(), memes = new Set<string>();
+/** Emoji and logos to fetch, photos to find, scenes to generate, morphs to make, memes to take from the library. */
+export function assetNeeds(blocks: Block[]) {
+  const emoji = new Set<string>(), logos = new Set<string>(), photos = new Set<string>(), scenes = new Set<string>(), memes = new Set<string>();
   const looks: Record<string, string> = {};
+  const morphs: { from: number; into: string }[] = [];
   const icon = (value: unknown) => {
     if (typeof value !== "string" || !value) return;
     if (EMOJI.test(value)) emoji.add(value);
@@ -45,11 +47,12 @@ export function assetNeeds(blocks: Block[]): { emoji: string[]; logos: string[];
       photos.add(b.props.query);
       if (typeof b.props.look === "string") looks[b.props.query] = b.props.look;
     }
-    if (b.type === "Illustration" && typeof b.props.prompt === "string") illustrations.add(b.props.prompt);
+    if (b.type === "Scene" && typeof b.props.prompt === "string") scenes.add(b.props.prompt);
+    if (b.type === "Morph" && typeof b.props.into === "string") morphs.push({ from: b.from, into: b.props.into });
     if (b.type === "Meme" && typeof b.props.name === "string") memes.add(b.props.name);
     for (const item of (Array.isArray(b.props.items) ? b.props.items : []) as { icon?: unknown }[]) icon(item?.icon);
   }
-  return { emoji: [...emoji], logos: [...logos], photos: [...photos], looks, illustrations: [...illustrations], memes: [...memes] };
+  return { emoji: [...emoji], logos: [...logos], photos: [...photos], looks, scenes: [...scenes], morphs, memes: [...memes] };
 }
 const FORBIDDEN = new Set(["fetch", "eval", "Function", "require", "XMLHttpRequest", "WebSocket", "window", "document",
   "globalThis", "process", "navigator", "localStorage", "sessionStorage", "setTimeout", "setInterval", "Date"]);
@@ -140,6 +143,9 @@ export function analyzeMontage(code: string, duration: number): Analysis {
     for (const item of (Array.isArray(b.props.items) ? b.props.items : []) as { at?: unknown }[]) {
       if (typeof item?.at === "number" && (item.at < b.from - 0.05 || item.at > b.to)) problems.push(`<${b.type}> ${b.from}–${b.to}: пункт с at=${item.at} вне сцены.`);
     }
+  }
+  for (const m of blocks.filter(b => b.type === "Morph")) {
+    if (m.to - m.from > 2.5) problems.push(`<Morph> ${m.from}–${m.to}: превращение держится 1–2.5 секунды, иначе застывший кадр заметен.`);
   }
   const heavy = blocks.filter(b => HEAVY.has(b.type)).sort((a, b) => a.from - b.from);
   heavy.forEach((b, i) => {

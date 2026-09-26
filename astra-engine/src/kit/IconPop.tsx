@@ -51,6 +51,6 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, emoji, x, y, 
 export const IconPop: React.FC<Props> = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Icon ${rest.label ?? rest.src ?? rest.emoji ?? ""}`}><Body {...rest} /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="pop" volume={0.45} />
+    <BlockSfx at={from} sfx={sfx} fallback="pop" />
   </>
 );

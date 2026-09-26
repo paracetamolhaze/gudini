@@ -1,22 +1,27 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import * as simpleIcons from "simple-icons";
+import sharp from "sharp";
 import emojiData from "unicode-emoji-json/data-by-emoji.json";
 import { postBridge } from "./bridge";
 
-/** One look for every drawn picture of a video, so illustrations match each other. */
-export const ILLUSTRATION_STYLE = "Cartoon illustration in a modern 2D animation style: bold clean outlines, bright saturated colors, soft cel shading, " +
-  "friendly and playful mood, simple uncluttered background with a soft gradient, one clear subject in the center. " +
-  "No text, no letters, no numbers, no logos, no watermark. If the scene below mentions a photo, draw it as this illustration anyway. Scene: ";
+/** One look for every generated picture of a video: a real vertical photo, the subject whole and centered. */
+export const SCENE_STYLE = "Photorealistic vertical photo, as if shot on a good phone camera for a news story: natural light, real materials and people, " +
+  "realistic proportions, sharp focus on the subject. Composition for a tall 4:5 frame: the main subject is large, centered and completely inside the frame " +
+  "with some space around it, nothing important touches the edges. No text, no captions, no watermark, no logos except those that are part of real objects. Scene: ";
 
 /**
  * Turns what a montage asks for into files in the bundle's public folder:
  * emoji become Microsoft Fluent 3D pictures (MIT), logos come from Simple Icons (CC0)
  * or the company's Wikipedia page, photos from Pexels / Pixabay (free licenses).
  */
-export type AssetNeeds = { emoji: string[]; logos: string[]; photos: string[]; looks?: Record<string, string>; illustrations?: string[]; memes?: string[] };
-export type ResolvedAssets = { assets: Record<string, string>; missing: string[] };
+export type AssetNeeds = {
+  emoji: string[]; logos: string[]; photos: string[]; looks?: Record<string, string>;
+  scenes?: string[]; memes?: string[]; morphs?: { from: number; into: string }[];
+};
+export type ResolvedAssets = { assets: Record<string, string>; sizes: Record<string, { w: number; h: number }>; missing: string[] };
 
 const FLUENT = "https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets";
 const UA = { "User-Agent": "Gudini-Astra/1.0 (video montage; contact: owner)" };
@@ -91,26 +96,26 @@ function photoFile(dir: string, query: string, look?: string): string {
   return path.join(dir, `${slugify(query)}-${tag}.jpg`);
 }
 
-/** Up to four stock photos per query from Pexels, then Pixabay. */
+/** Up to six vertical stock photos per query from Pexels, then Pixabay: vertical pictures fill a vertical video. */
 async function photoCandidates(query: string): Promise<Candidate[]> {
   const found: Candidate[] = [];
   const pexels = process.env.PEXELS_API_KEY;
   if (pexels) {
     try {
-      const res = await fetch(`https://api.pexels.com/v1/search?per_page=4&query=${encodeURIComponent(query)}`, { headers: { Authorization: pexels } });
+      const res = await fetch(`https://api.pexels.com/v1/search?per_page=6&orientation=portrait&query=${encodeURIComponent(query)}`, { headers: { Authorization: pexels } });
       const data = await res.json() as { photos?: { src: { medium: string; large2x: string } }[] };
       for (const p of data.photos ?? []) found.push({ preview: p.src.medium, full: p.src.large2x });
     } catch { /* Pixabay next */ }
   }
   const pixabay = process.env.PIXABAY_API_KEY;
-  if (pixabay && found.length < 4) {
+  if (pixabay && found.length < 6) {
     try {
-      const res = await fetch(`https://pixabay.com/api/?key=${pixabay}&image_type=photo&per_page=4&safesearch=true&q=${encodeURIComponent(query)}`);
+      const res = await fetch(`https://pixabay.com/api/?key=${pixabay}&image_type=photo&orientation=vertical&per_page=6&safesearch=true&q=${encodeURIComponent(query)}`);
       const data = await res.json() as { hits?: { webformatURL: string; largeImageURL: string }[] };
       for (const h of data.hits ?? []) found.push({ preview: h.webformatURL, full: h.largeImageURL });
     } catch { /* nothing more */ }
   }
-  return found.slice(0, 4);
+  return found.slice(0, 6);
 }
 
 /**
@@ -145,17 +150,65 @@ async function photos(queries: string[], dir: string, pick?: PhotoPicker, looks:
 /** Given previews per query (and what must be visible), returns the chosen index per query (-1 = none fits). */
 export type PhotoPicker = (sets: { query: string; look?: string; previews: Buffer[] }[]) => Promise<Record<string, number>>;
 
-async function illustration(prompt: string, dir: string, aspectRatio: "1:1" | "4:5"): Promise<string | null> {
-  const file = path.join(dir, `${slugify(prompt)}-${aspectRatio.replace(":", "x")}.png`);
+/** Last generation errors, so a failure can be explained to Astra instead of "did not work". */
+export const generationErrors: string[] = [];
+
+async function generate(prompt: string, file: string, references: string[] = [], mode: "generate" | "edit" = "generate"): Promise<string | null> {
   if (fs.existsSync(file)) return file;
-  try {
-    const result = await postBridge<{ base64: string }>("/image", { prompt: ILLUSTRATION_STYLE + prompt, aspectRatio, references: [], mode: "generate" },
-      20 * 60_000, process.env.CODEX_IMAGE_BRIDGE_URL ?? process.env.CODEX_BRIDGE_URL);
-    if (!result?.base64) return null;
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(file, Buffer.from(result.base64, "base64"));
-    return file;
-  } catch { return null; }
+  // The image tool sometimes ends a run without a picture; a second try usually succeeds.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const result = await postBridge<{ base64: string }>("/image", { prompt, aspectRatio: "4:5", references, mode },
+        20 * 60_000, process.env.CODEX_IMAGE_BRIDGE_URL ?? process.env.CODEX_BRIDGE_URL);
+      if (!result?.base64) continue;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, Buffer.from(result.base64, "base64"));
+      return file;
+    } catch (error) {
+      generationErrors.push(String((error as Error).message).slice(0, 300));
+    }
+  }
+  return null;
+}
+
+const scene = (prompt: string, dir: string) =>
+  generate(SCENE_STYLE + prompt, path.join(dir, `${slugify(prompt)}-${createHash("sha1").update(SCENE_STYLE + prompt).digest("hex").slice(0, 8)}.png`));
+
+/** A generated picture again, with what was wrong in the previous attempt spelled out. */
+export async function redrawScene(prompt: string, fix: string, publicDir: string, cacheSubdir: string): Promise<{ file: string; size?: { w: number; h: number } } | null> {
+  const full = `${prompt}\nThe previous attempt was wrong: ${fix}. Make sure this time the picture shows exactly the scene described.`;
+  const file = await scene(full, path.join(publicDir, cacheSubdir, "scenes"));
+  if (!file) return null;
+  const m = await sharp(file).metadata().catch(() => null);
+  return { file: path.relative(publicDir, file).split(path.sep).join("/"), size: m?.width && m.height ? { w: m.width, h: m.height } : undefined };
+}
+
+/**
+ * The author turned into something for a moment: the frame at `from` is edited around the author
+ * (a 4:5 region, pose and room kept) and pasted back into the full frame with soft edges.
+ */
+async function morph(video: string, from: number, into: string, face: { y: number }, dir: string): Promise<string | null> {
+  const tag = createHash("sha1").update(`${video}|${from.toFixed(2)}|${into}`).digest("hex").slice(0, 10);
+  const out = path.join(dir, `morph-${tag}.jpg`);
+  if (fs.existsSync(out)) return out;
+  fs.mkdirSync(dir, { recursive: true });
+  const base = path.join(dir, `morph-${tag}-base.png`);
+  execFileSync("ffmpeg", ["-v", "error", "-y", "-ss", from.toFixed(3), "-i", video, "-frames:v", "1", "-vf", "scale=1080:1920", base]);
+  const y0 = Math.max(0, Math.min(1920 - 1350, Math.round(face.y - 150)));
+  const region = await sharp(base).extract({ left: 0, top: y0, width: 1080, height: 1350 }).jpeg({ quality: 95 }).toBuffer();
+  const edited = await generate(
+    `Edit this photo: transform the person into ${into}, keeping EXACTLY the same pose, head position, framing, camera angle, ` +
+      "every object in front of the person (microphone, hands), the chair, the room and the lighting. Photorealistic, same composition and image size. No text.",
+    path.join(dir, `morph-${tag}-edit.png`), [`data:image/jpeg;base64,${region.toString("base64")}`], "edit");
+  if (!edited) return null;
+  // Soft top and bottom edges so the edited region melts into the untouched frame.
+  const mask = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.07" stop-color="#fff" stop-opacity="1"/>
+    <stop offset="0.93" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
+    <rect width="1080" height="1350" fill="url(#g)"/></svg>`);
+  const patch = await sharp(edited).resize(1080, 1350, { fit: "fill" }).ensureAlpha().composite([{ input: mask, blend: "dest-in" }]).png().toBuffer();
+  await sharp(base).composite([{ input: patch, top: y0, left: 0 }]).jpeg({ quality: 92 }).toFile(out);
+  return out;
 }
 
 /** Meme clips the owner put into the library (assets/astra/memes), by file name without extension. */
@@ -164,36 +217,49 @@ export function listMemes(memesDir: string | undefined): Record<string, string> 
   return Object.fromEntries(fs.readdirSync(memesDir).filter(f => /\.(mp4|webm|mov)$/i.test(f)).map(f => [f.replace(/\.[^.]+$/, ""), path.join(memesDir, f)]));
 }
 
-/** Resolves every need into `assets` keys the kit reads: emoji:<glyph>, logo:<name>, photo:<query>. */
-export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheSubdir: string, pick?: PhotoPicker, memesDir?: string, drawMissingPhotos = false): Promise<ResolvedAssets> {
+/** Resolves every need into `assets` keys the kit reads: emoji:, logo:, photo:, scene:, meme:, morph:. */
+export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheSubdir: string, options: {
+  pick?: PhotoPicker; memesDir?: string; drawMissingPhotos?: boolean; video?: string; face?: { y: number };
+} = {}): Promise<ResolvedAssets> {
   const assets: Record<string, string> = {};
+  const sizes: Record<string, { w: number; h: number }> = {};
   const missing: string[] = [];
-  const rel = (file: string) => path.relative(publicDir, file).replace(/\\/g, "/");
+  const rel = (file: string) => path.relative(publicDir, file).split(path.sep).join("/");
   const cache = path.join(publicDir, cacheSubdir);
+  const put = async (key: string, file: string) => {
+    assets[key] = rel(file);
+    try { const m = await sharp(file).metadata(); if (m.width && m.height) sizes[key] = { w: m.width, h: m.height }; } catch { /* svg or broken: shown by its box */ }
+  };
   for (const glyph of needs.emoji) {
     const file = await fluentEmoji(glyph, path.join(cache, "emoji"));
-    if (file) assets[`emoji:${glyph}`] = rel(file);
+    if (file) await put(`emoji:${glyph}`, file);
   }
   for (const name of needs.logos) {
     const file = await logo(name, path.join(cache, "logos"));
-    if (file) assets[`logo:${name.toLowerCase()}`] = rel(file);
-    else missing.push(`Логотип «${name}» не нашёлся ни в библиотеке, ни в Википедии — покажи это иначе (фото, эмодзи, карта).`);
+    if (file) await put(`logo:${name.toLowerCase()}`, file);
+    else missing.push(`Логотип «${name}» не нашёлся — покажи название словом за спиной автора (BehindText) или сценой.`);
   }
-  const found = await photos(needs.photos, path.join(cache, "photos"), pick, needs.looks);
+  const found = await photos(needs.photos, path.join(cache, "photos"), options.pick, needs.looks);
   for (const query of needs.photos) {
     let file = found.files[query];
-    if (!file && drawMissingPhotos) file = await illustration(needs.looks?.[query] ?? query, path.join(cache, "drawn"), "1:1");
-    if (file) assets[`photo:${query}`] = rel(file);
-    else if (found.rejected.has(query)) missing.push(`Фото по запросу «${query}» нашлись, но ни одно не показывает «${needs.looks?.[query] ?? query}». Попробуй другие слова запроса, смягчи look или покажи это рисунком (Illustration).`);
-    else missing.push(`Фото по запросу «${query}» не нашлось: на фотостоках ищут 2–4 словами («water beads», «toy gun»). Дай другой запрос или покажи рисунком (Illustration).`);
+    // No stock photo shows it: a realistic picture is generated from what must be visible.
+    if (!file && options.drawMissingPhotos) file = await scene(needs.looks?.[query] ?? query, path.join(cache, "scenes"));
+    if (file) await put(`photo:${query}`, file);
+    else if (found.rejected.has(query)) missing.push(`Фото по запросу «${query}» нашлись, но ни одно не показывает «${needs.looks?.[query] ?? query}». Попробуй другие слова запроса или покажи это сценой (Scene).`);
+    else missing.push(`Фото по запросу «${query}» не нашлось: на фотостоках ищут 2–4 словами («water beads», «police dog»). Дай другой запрос или покажи сценой (Scene).`);
   }
-  for (const prompt of needs.illustrations ?? []) {
-    // Both shapes are drawn once and cached: a square card or a tall full-frame picture.
-    const file = await illustration(prompt, path.join(cache, "drawn"), "1:1");
-    if (file) assets[`gen:${prompt}`] = rel(file);
-    else missing.push(`Иллюстрацию «${prompt}» нарисовать не удалось — упрости сцену (без людей с оружием и надписей) или покажи иначе.`);
+  for (const prompt of needs.scenes ?? []) {
+    const file = await scene(prompt, path.join(cache, "scenes"));
+    if (file) await put(`scene:${prompt}`, file);
+    else missing.push(`Сцену «${prompt.slice(0, 80)}…» сгенерировать не удалось (${generationErrors.at(-1) ?? "генератор не вернул картинку"}) — опиши её иначе: например, покажи действие со стороны, без крупных лиц, или покажи иначе.`);
   }
-  const library = listMemes(memesDir);
+  for (const m of needs.morphs ?? []) {
+    if (!options.video) break;
+    const file = await morph(options.video, m.from, m.into, options.face ?? { y: 445 }, path.join(cache, "morphs"));
+    if (file) await put(`morph:${m.from.toFixed(2)}`, file);
+    else missing.push(`Превращение на ${m.from.toFixed(2)} с не получилось — выбери другой момент или опиши превращение проще.`);
+  }
+  const library = listMemes(options.memesDir);
   for (const name of needs.memes ?? []) {
     const source = library[name];
     if (!source) { missing.push(`Мема «${name}» нет в библиотеке — выбери из списка в задании или покажи иначе.`); continue; }
@@ -202,5 +268,5 @@ export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheS
     if (!fs.existsSync(target)) fs.copyFileSync(source, target);
     assets[`meme:${name}`] = rel(target);
   }
-  return { assets, missing };
+  return { assets, sizes, missing };
 }

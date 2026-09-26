@@ -18,19 +18,33 @@ export function pickFile(files: string[] | undefined, seed: string): string | nu
   return files[hash(seed) % files.length];
 }
 
+/** How loud each role sits under a voice normalized to -16 LUFS (files are levelled to the same peak). */
+const ROLE_VOLUME: Record<SfxRole, number> = {
+  whoosh: 0.38, swipe: 0.34, pop: 0.34, click: 0.3, typing: 0.26, tick: 0.26, ding: 0.42, error: 0.4,
+  cash: 0.42, notification: 0.42, riser: 0.34, impact: 0.55, glitch: 0.32, shutter: 0.38,
+};
+/** Loops like ticking and typing play only this long unless a duration is given. */
+const DEFAULT_SECONDS: Partial<Record<SfxRole, number>> = { tick: 2, typing: 2 };
+
 /**
- * One sound effect at `at` seconds. Silent when the library has no file for the role yet,
- * so a montage never fails because a folder is empty.
+ * One sound effect at `at` seconds. A riser is placed so that its peak lands exactly on `at`.
+ * Silent when the library has no file for the role yet, so a montage never fails because a folder is empty.
  */
-export const Sfx: React.FC<{ at: number; role: SfxRole; volume?: number }> = ({ at, role, volume = 0.55 }) => {
-  const { sounds } = useInput();
+export const Sfx: React.FC<{ at: number; role: SfxRole; volume?: number; duration?: number }> = ({ at, role, volume, duration }) => {
+  const { sounds, soundInfo } = useInput();
   const { fps } = useVideoConfig();
   const offset = useClipOffset();
   const file = pickFile(sounds[role], `${role}:${at.toFixed(2)}`);
   if (!file) return null;
+  const length = soundInfo[file]?.duration ?? 1;
+  const start = role === "riser" ? Math.max(0, at - length) : at;
+  const play = Math.min(length, duration ?? DEFAULT_SECONDS[role] ?? length);
+  const frames = Math.max(1, Math.round(play * fps));
+  const level = volume ?? ROLE_VOLUME[role];
+  const fadeFrames = Math.round(0.12 * fps);
   return (
-    <Sequence from={Math.max(0, Math.round(at * fps)) - offset} name={`sfx ${role}`} layout="none">
-      <Audio src={staticFile(file)} volume={volume} />
+    <Sequence from={Math.max(0, Math.round(start * fps)) - offset} durationInFrames={frames} name={`sfx ${role}`} layout="none">
+      <Audio src={staticFile(file)} volume={f => level * interpolate(f, [frames - fadeFrames, frames], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })} />
     </Sequence>
   );
 };

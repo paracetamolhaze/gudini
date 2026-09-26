@@ -10,7 +10,7 @@
 
 ```tsx
 import React from "react";
-import { AstraVideo, Captions, cam, FocusCard, Illustration, Logo, MapFocus, Music, Photo, SidePanel, Sfx } from "../kit";
+import { AstraVideo, BehindText, Captions, cam, MapFocus, Music, Photo, Scene, SidePanel, Sfx } from "../kit";
 
 export const Montage: React.FC = () => (
   <AstraVideo
@@ -19,30 +19,29 @@ export const Montage: React.FC = () => (
       cam.reset(4.6),
       cam.punch(6.0, 1.2),        // «Только на диске…» — поворот
       cam.reset(9.3),
-      cam.push(18.6, 23.5, 1.14), // мораль — медленно ближе
+      cam.push(18.6, 21.4, 1.14), // мораль — медленно ближе
+      cam.reset(22.4),
     ]}
   >
     {/* История: крючок — место, где всё случилось */}
     <MapFocus from={0.15} to={3.0} region="world" lat={51.59} lon={-2.99} label="Уэльс" highlight="United Kingdom" zoom={5} />
-    <Photo from={3.2} to={6.0} query="hard drive" look="старый жёсткий диск компьютера крупно" pos="lower" />
+    <Photo from={3.2} to={6.0} query="old hard drive" look="старый жёсткий диск компьютера целиком, крупно" pos="full" />
     <Sfx at={6.0} role="riser" volume={0.4} />
-    <Logo from={7.2} to={9.2} name="Bitcoin" pos="above" sfx="impact" />
-    {/* Числа — то, что стоит показать текстом: сравнение цены */}
+    {/* Число — то, что стоит показать крупно: за спиной автора */}
+    <BehindText from={7.55} to={9.2} text="8 000 BTC" color="highlight" sfx="impact" />
     <SidePanel
       from={9.3}
       to={13.9}
-      title="Цена ошибки"
       items={[
         { text: "2013 — пара тысяч $", at: 9.3 },
         { text: "Сегодня — сотни миллионов $", at: 11.8 },
       ]}
       sfx="cash"
     />
-    {/* «раскопать свалку» — настоящая свалка на весь кадр, затем рисунок того, что ищут */}
-    <Photo from={14.9} to={16.4} query="landfill" look="огромная городская свалка сверху" pos="full" />
-    <Illustration from={16.4} to={18.5} prompt="a man with a shovel in front of a huge mountain of garbage, a tiny glowing hard drive hidden deep inside" sfx="error" />
-    <FocusCard from={18.6} to={25.9} title="Мораль" items={[
-      { text: "Биткоин — в ключе, не в диске", at: 19.9 },
+    {/* «раскопать свалку» — настоящая свалка, затем сцена самой истории */}
+    <Photo from={14.9} to={16.4} query="landfill" look="огромная городская свалка, видна гора мусора целиком" pos="full" />
+    <Scene from={16.4} to={18.5} prompt="a man in his thirties in a high-visibility vest standing at the gate of a huge landfill, a city worker shaking his head and blocking the way, overcast day, medium shot" sfx="error" />
+    <SidePanel from={22.4} to={25.9} items={[
       { text: "Нет ключа — нет денег", at: 22.4 },
       { text: "Делай резервные копии", at: 24.3 },
     ]} />
@@ -54,6 +53,6 @@ export const Montage: React.FC = () => (
 
 ## Почему так
 
-- История: место — карта, предмет — фото, монета — логотип над головой, событие без фото — рисунок.
-- Текстом показаны только числа: цена тогда и сейчас.
-- Мораль — карточка, подсветка идёт по пунктам вслед за речью.
+- История: место — карта, предмет — вертикальное фото целиком, событие без фотостока — реалистичная сцена с участниками.
+- Число «8 000 BTC» стоит крупно за спиной автора.
+- Сравнение цены и мораль — списки снизу, автор уезжает вверх; подсветка идёт за речью.

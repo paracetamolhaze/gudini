@@ -54,6 +54,6 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ app, title, text, 
 export const Notification: React.FC<Props> = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Notification ${rest.title}`}><Body {...rest} /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="notification" volume={0.5} />
+    <BlockSfx at={from} sfx={sfx} fallback="notification" />
   </>
 );

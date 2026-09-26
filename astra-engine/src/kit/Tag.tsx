@@ -50,6 +50,6 @@ const TagBody: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ text, pos = "to
 export const Tag: React.FC<Props> = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Tag ${rest.text}`}><TagBody {...rest} /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="click" volume={0.4} />
+    <BlockSfx at={from} sfx={sfx} fallback="click" />
   </>
 );

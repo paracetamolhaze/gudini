@@ -66,7 +66,7 @@ const Body: React.FC<Omit<Props, "sfx">> = ({ from, to, name, pos = "above", siz
 export const Logo: React.FC<Props> & { layoutOf: (p: Props) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Logo ${rest.name}`}><Body from={from} to={to} {...rest} /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="pop" volume={0.45} />
+    <BlockSfx at={from} sfx={sfx} fallback="pop" />
   </>
 );
 Logo.layoutOf = ({ from, to }) => ({ occupied: { from, to, zone: "top" } });

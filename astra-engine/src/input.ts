@@ -25,8 +25,12 @@ export const astraInputSchema = z.object({
   /** Sound library by role (whoosh, pop, ding...) and music by mood (calm, tense...). */
   sounds: z.record(z.string(), z.array(z.string())).default({}),
   music: z.record(z.string(), z.array(z.string())).default({}),
+  /** Length in seconds of every prepared sound, by its path: risers are placed so their peak hits the accent. */
+  soundInfo: z.record(z.string(), z.object({ duration: z.number() })).default({}),
   /** Images and logos prepared for this video, by name. */
   assets: z.record(z.string(), z.string()).default({}),
+  /** Pixel size of each prepared picture, so the kit can show it whole. */
+  sizes: z.record(z.string(), z.object({ w: z.number(), h: z.number() })).default({}),
 });
 export type AstraInput = z.infer<typeof astraInputSchema>;
 

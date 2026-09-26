@@ -25,7 +25,7 @@ async function main() {
   let failed = 0;
   for (const example of examples) {
     const words = [...example.text.matchAll(/(\d+):([^\s@]+)@(\d+(?:\.\d+)?)/g)].map(m => ({ word: m[2], start: Number(m[3]), end: Number(m[3]) + 0.3 }));
-    const input: AstraInput = { duration: example.duration, fps: 30, video: "dev/smoke.mp4", words, cutouts: [], sounds: {}, music: {}, assets: {} };
+    const input: AstraInput = { duration: example.duration, fps: 30, video: "dev/smoke.mp4", words, cutouts: [], sounds: {}, music: {}, assets: {}, sizes: {}, soundInfo: {} };
     const analysis = analyzeMontage(example.code, example.duration);
     // Every block's first frame, a moment inside it, and just before each list item lights up.
     const times = new Set<number>([0]);

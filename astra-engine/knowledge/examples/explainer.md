@@ -12,7 +12,7 @@
 
 ```tsx
 import React from "react";
-import { AstraVideo, BehindText, Captions, cam, FocusCard, Flash, Illustration, Music, Notification, SidePanel, Sfx } from "../kit";
+import { AstraVideo, BehindText, Captions, cam, Flash, Music, Notification, Scene, SidePanel, Sfx } from "../kit";
 
 export const Montage: React.FC = () => (
   <AstraVideo
@@ -28,18 +28,17 @@ export const Montage: React.FC = () => (
     {/* Обучающий ролик: главный термин словом за спиной */}
     <BehindText from={0.05} to={2.3} text="12 слов" />
     {/* «Это сид-фраза» — как она выглядит в жизни: экран кошелька */}
-    <Notification from={3.0} to={6.4} app="Кошелёк" icon="🔐" title="Запишите сид-фразу" text="12 слов в этом порядке — ключ к вашим деньгам" />
+    <Notification from={3.0} to={6.4} app="Кошелёк" icon="Trust Wallet" title="Запишите сид-фразу" text="12 слов в этом порядке — ключ к вашим деньгам" />
     {/* «Потеряешь телефон — вводишь слова, и деньги на месте» — сцена, которой нет на фотостоке */}
-    <Illustration from={11.1} to={15.4} prompt="a smartphone falling into a puddle, next to it a paper note with a list of words and a pile of gold coins safe and sound" />
+    <Scene from={11.1} to={14.0} prompt="a smartphone with a cracked screen lying on a wooden table next to a handwritten paper card with 12 numbered words, a hand holding a new phone above them, close-up" />
     {/* Поворот: кто узнал слова — тот забрал всё */}
     <Sfx at={17.3} role="riser" volume={0.45} />
-    <Illustration from={17.3} to={20.1} prompt="a sneaky cartoon thief in a hoodie tiptoeing away with a big bag of gold coins, a paper note with words sticking out of his pocket" sfx="impact" />
+    <Scene from={17.3} to={20.1} prompt="a man in a dark hoodie at night reading a stolen paper card with 12 numbered words by the light of his laptop, a crypto wallet balance dropping to zero on the screen, tense mood, medium shot" sfx="impact" />
     <Flash at={18.82} sfx={false} />
-    {/* Автор перечисляет — список, подсветка идёт за его словами */}
+    {/* Автор перечисляет — автор уезжает вверх, снизу правила, подсветка за словами */}
     <SidePanel
       from={20.2}
       to={27.4}
-      title="3 правила"
       numbered
       items={[
         { text: "Только на бумаге", at: 22.2 },
@@ -48,8 +47,7 @@ export const Montage: React.FC = () => (
       ]}
     />
     {/* «Настоящая поддержка никогда не спросит» — показываем саму ловушку */}
-    <Notification from={27.8} to={29.9} app="Поддержка" icon="🛟" title="Проверка аккаунта" text="Для защиты введите вашу сид-фразу" sfx="error" />
-    <FocusCard from={29.9} to={31.8} title="Это мошенник" items={[{ text: "Сид-фразу не просит никто", at: 30.0 }]} />
+    <Notification from={27.8} to={31.8} app="Поддержка" icon="Telegram" title="Проверка аккаунта" text="Для защиты введите вашу сид-фразу" sfx="error" />
     <Music mood="curious" />
     <Captions emphasis={[0, 8, 20, 23, 46, 47, 50, 59, 66]} />
   </AstraVideo>
@@ -60,6 +58,6 @@ export const Montage: React.FC = () => (
 
 - Обучающий ролик: главный термин «12 слов» стоит за спиной автора в крючке.
 - «Сид-фраза» показана экраном кошелька — зритель видит, как это выглядит в жизни.
-- Событиям без фото («потерял телефон — деньги на месте», «вор забрал всё») нарисованы сцены.
-- Правила — список: все пункты белые, подсветка идёт за словами автора.
-- Финал показывает саму ловушку — уведомление «поддержки», — и карточка делает вывод.
+- Событиям без фотостока («потерял телефон — деньги на месте», «вор забрал всё») сгенерированы реалистичные сцены: кто в кадре, что в руках, какой план.
+- Правила идут списком снизу, автор уезжает вверх, подсветка идёт за его словами. Заголовок не нужен: автор сам говорит «три правила».
+- Финал показывает саму ловушку — уведомление «поддержки».

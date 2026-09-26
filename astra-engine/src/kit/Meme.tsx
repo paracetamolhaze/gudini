@@ -52,7 +52,7 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ name, pos = "lower
 export const Meme: React.FC<Props> & { layoutOf: (p: Props, input?: AstraInput) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Meme ${rest.name}`}><Body {...rest} /></Clip>
-    <BlockSfx at={from} sfx={sfx} fallback="pop" volume={0.35} />
+    <BlockSfx at={from} sfx={sfx} fallback="pop" />
   </>
 );
 Meme.layoutOf = ({ from, to, pos = "lower", name }, input) =>

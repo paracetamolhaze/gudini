@@ -4,7 +4,9 @@ import { theme } from "../theme";
 import { useAsset } from "./assets";
 import { BlockSfx, type SfxRole } from "./audio";
 import type { LayoutDeclaration } from "./AstraVideo";
-import { EASE_IN, glide, leave } from "./motion";
+import { useInput, type AstraInput } from "../input";
+import { Icon } from "./List";
+import { EASE_IN, glide, leave, pop } from "./motion";
 import { Clip, useClip } from "./time";
 
 type Pos = "lower" | "full" | { x: number; y: number; w: number; h: number };
@@ -19,17 +21,33 @@ type Props = {
   /** Slight tilt in degrees; 0 for screenshots that must read straight. */
   tilt?: number;
   fit?: "cover" | "contain";
+  /** Emoji shown instead when a requested photo was not found. */
+  fallback?: string;
   sfx?: SfxRole | false;
 };
 
-const LOWER = { x: 60, y: 900, w: 960, h: 600 };
+// Under the raised author and below the caption line (above-panel captions sit at y 880).
+const LOWER = { x: 60, y: 965, w: 960, h: 560 };
 
-const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, pos = "lower", caption, tilt = -1.5, fit = "cover" }) => {
+const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, pos = "lower", caption, tilt = -1.5, fit = "cover", fallback }) => {
   const { frame, fps, lengthFrames } = useClip();
   const asset = useAsset();
+  const { assets } = useInput();
   const inP = glide(frame, fps);
   const out = leave(frame, fps, lengthFrames, 0.3);
   const zoom = interpolate(frame, [0, lengthFrames], [1, 1.08]);
+  // A photo that was not found turns into its fallback emoji instead of breaking the render.
+  if (src.startsWith("photo:") && !assets[src]) {
+    if (!fallback) return null;
+    const s = pop(frame, fps);
+    return (
+      <AbsoluteFill style={{ pointerEvents: "none" }}>
+        <div style={{ position: "absolute", left: 830 - 120, top: 560 - 120, scale: String(s * (0.6 + 0.4 * out)), opacity: out }}>
+          <Icon icon={fallback} size={240} />
+        </div>
+      </AbsoluteFill>
+    );
+  }
   if (pos === "full") {
     const fade = Math.min(interpolate(frame, [0, 0.25 * fps], [0, 1], { extrapolateRight: "clamp" }), out);
     return (
@@ -62,13 +80,15 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ src, pos = "lower"
 };
 
 /** A photo or screenshot of what is being talked about: under the face, or as a full cutaway. */
-export const ImageCard: React.FC<Props> & { layoutOf: (p: Props) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
+export const ImageCard: React.FC<Props> & { layoutOf: (p: Props, input?: AstraInput) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`Image ${rest.caption ?? rest.src}`}><Body {...rest} /></Clip>
     <BlockSfx at={from} sfx={sfx} fallback={rest.pos === "full" ? "whoosh" : "swipe"} volume={0.45} />
   </>
 );
-ImageCard.layoutOf = ({ from, to, pos = "lower" }) =>
-  pos === "full" ? { occupied: { from, to, zone: "full" } }
+ImageCard.layoutOf = ({ from, to, pos = "lower", src }, input) =>
+  // A photo that was not found takes no space: nothing moves for it.
+  src.startsWith("photo:") && input && !input.assets[src] ? {}
+  : pos === "full" ? { occupied: { from, to, zone: "full" } }
   : pos === "lower" ? { occupied: { from, to, zone: "bottom" }, panel: { from, to, dx: 0, dy: -300, zoom: 1 } }
   : {};

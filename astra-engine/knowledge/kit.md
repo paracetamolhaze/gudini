@@ -45,10 +45,10 @@ export const Montage: React.FC = () => (
 ### Photo
 
 ```tsx
-<Photo from to query="police K9 german shepherd dog" pos="lower|full" caption? />
+<Photo from to query="police dog" pos="lower|full" fallback="🐕" caption? />
 ```
 
-Настоящее фото: запрос по-английски, фото подбирается до рендера. `full` — перебивка на весь кадр.
+Настоящее фото: запрос по-английски в 2–4 слова, как ищут на фотостоке («police dog», «water beads», «empty car seat»). Фото подбирается и проверяется до рендера. `full` — перебивка на весь кадр. `fallback` — эмодзи на случай, если подходящего фото нет.
 
 ### IconPop
 

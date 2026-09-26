@@ -18,7 +18,11 @@ async function main() {
   const input = astraInputSchema.parse({ ...raw, ...linkSounds(arg("sounds"), publicDir), cutouts: [] });
   const lessonsFile = arg("lessons");
   const lessons = lessonsFile && fs.existsSync(lessonsFile) ? fs.readFileSync(lessonsFile, "utf8").split(/\r?\n/).filter(Boolean) : [];
-  await directMontage({ input, topic: arg("topic", "")!, lessons, publicDir, mediaSubdir: arg("media", "dev")!, outDir: out, log: console.log });
+  const start = arg("start");
+  await directMontage({
+    input, topic: arg("topic", "")!, lessons, publicDir, mediaSubdir: arg("media", "dev")!, outDir: out, log: console.log,
+    startCode: start ? fs.readFileSync(path.resolve(start), "utf8") : undefined, skipReview: process.argv.includes("--skip-review"),
+  });
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

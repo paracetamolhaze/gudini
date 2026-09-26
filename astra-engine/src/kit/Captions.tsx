@@ -9,7 +9,7 @@ export type CaptionPos = "low" | "mid" | "high" | "above-panel" | { y: number };
 export type CaptionStyle = "clean" | "bold" | "minimal";
 
 // above-panel: between the raised author's chin and the top edge of a bottom panel.
-const POS_Y = { low: 1330, mid: 1010, high: 330, "above-panel": 900 } as const;
+const POS_Y = { low: 1330, mid: 1010, high: 330, "above-panel": 880 } as const;
 
 const STYLES: Record<CaptionStyle, { font: React.CSSProperties; emphasis: string }> = {
   clean: { font: { fontFamily: theme.font.text, fontWeight: 800, fontSize: 74, letterSpacing: -0.5 }, emphasis: theme.color.highlight },

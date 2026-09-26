@@ -25,7 +25,7 @@ export const Montage: React.FC = () => (
     {/* Крючок: год за спиной, затем карта — где это было */}
     <BehindText from={0.15} to={1.9} text="2013" />
     <MapFocus from={1.9} to={4.5} region="world" lat={51.59} lon={-2.99} label="Уэльс" highlight="United Kingdom" zoom={5} />
-    <Photo from={4.6} to={6.0} query="old computer hard drive disk" pos="lower" />
+    <Photo from={4.6} to={6.0} query="hard drive" fallback="💽" pos="lower" />
     <Sfx at={6.0} role="riser" volume={0.4} />
     <Logo from={7.2} to={9.2} name="Bitcoin" x={850} y={560} />
     <BehindText from={7.55} to={9.2} text="8 000 BTC" color="highlight" sfx="impact" />
@@ -41,7 +41,7 @@ export const Montage: React.FC = () => (
       sfx="cash"
     />
     {/* «раскопать свалку» — настоящая свалка на весь кадр */}
-    <Photo from={14.9} to={17.2} query="landfill garbage dump aerial" pos="full" />
+    <Photo from={14.9} to={17.2} query="landfill" fallback="🗑️" pos="full" />
     <IconPop from={17.1} to={18.4} emoji="🚫" x={850} y={560} sfx="error" />
     <FocusCard from={18.6} to={25.9} title="Мораль" items={[
       { text: "Биткоин — в ключе, не в диске", at: 19.9, icon: "🔑" },

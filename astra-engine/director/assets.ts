@@ -149,7 +149,7 @@ export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheS
   for (const query of needs.photos) {
     const file = found[query];
     if (file) assets[`photo:${query}`] = rel(file);
-    else missing.push(`Фото по запросу «${query}» не нашлось или ни одно не показывает это ясно — сформулируй запрос иначе или покажи по-другому.`);
+    else missing.push(`Фото по запросу «${query}» не нашлось: на фотостоках ищут 2–4 словами («water beads», «toy gun»). Дай запрос короче или покажи иначе; fallback с эмодзи подстрахует.`);
   }
   return { assets, missing };
 }

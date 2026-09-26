@@ -22,6 +22,9 @@ export type MontageJob = {
   outDir: string;
   /** Subfolder of publicDir where fetched emoji, logos and photos are cached between jobs. */
   assetCache?: string;
+  /** Continue from a montage Astra already wrote (and reviewed), without asking her again. */
+  startCode?: string;
+  skipReview?: boolean;
   log?: (line: string) => void;
   onStage?: (stage: "write" | "cutout" | "draft" | "review" | "final", fraction?: number) => void;
 };
@@ -53,20 +56,28 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
   };
 
   const settle = async (code: string, label: string) => {
+    let assetRounds = 0;
     for (let attempt = 1; ; attempt++) {
       const analysis = analyzeMontage(code, input.duration);
       const errors = typecheck(prepareWorkspace(code, `${path.basename(outDir)}-check-${label}-${attempt}`));
       const problems = [...analysis.problems, ...errors];
+      let missing: string[] = [];
       if (!problems.length) {
-        // Emoji, logos and photos the montage asks for are fetched now; what cannot be found goes back to Astra.
+        // Emoji, logos and photos the montage asks for are fetched now; what cannot be found goes back to Astra once.
         const needs = assetNeeds(analysis.blocks);
         const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", pickPhotos);
         input = { ...input, assets: { ...input.assets, ...resolved.assets } };
-        log(`Материалы: эмодзи ${needs.emoji.length}, логотипы ${needs.logos.length}, фото ${needs.photos.length}; не нашлось ${resolved.missing.length}`);
-        problems.push(...resolved.missing);
+        missing = resolved.missing;
+        log(`Материалы: эмодзи ${needs.emoji.length}, логотипы ${needs.logos.length}, фото ${needs.photos.length}; не нашлось ${missing.length}`);
       }
-      fs.writeFileSync(path.join(outDir, `${label}-analysis-${attempt}.json`), JSON.stringify({ ...analysis, errors, problems }, null, 2));
-      if (!problems.length) return { code, analysis };
+      fs.writeFileSync(path.join(outDir, `${label}-analysis-${attempt}.json`), JSON.stringify({ ...analysis, errors, problems, missing }, null, 2));
+      // A photo that still cannot be found is shown by its fallback emoji (or skipped): the montage goes on.
+      if (!problems.length && (!missing.length || assetRounds >= 1)) {
+        if (missing.length) log(`Без фото, с запасными эмодзи: ${missing.length}`);
+        return { code, analysis };
+      }
+      if (!problems.length) assetRounds++;
+      problems.push(...missing);
       log(`Проверка: ${problems.length} проблем(ы): ${problems.slice(0, 3).join(" | ")}`);
       if (attempt >= 3) throw new Error(`Астра: монтаж не собирается после ${attempt} попыток: ${problems.slice(0, 5).join("; ")}`);
       code = await ask(`${label}-fix-${attempt}`, fixPrompt(task, code, problems));
@@ -84,7 +95,8 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
     });
     const user = [
       "Для монтажа нужны фото. К заданию приложены варианты в таком порядке:", lines.join("\n"), "",
-      "Для каждого запроса выбери вариант, где предмет виден ясно, крупно и без чужих надписей; -1 — если ни один не подходит.",
+      "Для каждого запроса выбери вариант, где предмет из запроса узнаётся с первого взгляда. Надписи на самих предметах — нормально (POLICE на форме, марка на бутылке).",
+      "Не подходят: водяные знаки, коллажи, другой предмет, слишком тёмное или размытое фото. -1 — только если ни один вариант не показывает предмет.",
       `Ответ — только JSON вида {"запрос": номер варианта}.`,
     ].join("\n");
     log(`Астра выбирает фото: ${sets.length} запрос(ов), ${images.length} вариантов...`);
@@ -99,19 +111,21 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
   };
 
   job.onStage?.("write");
-  let { code, analysis } = await settle(await ask("montage-v1", taskPrompt(task)), "v1");
+  let { code, analysis } = await settle(job.startCode ?? await ask("montage-v1", taskPrompt(task)), "v1");
   job.onStage?.("cutout");
   input = { ...input, cutouts: cutouts(analysis) };
 
   const draft = path.join(outDir, "draft.mp4");
-  log("Черновой рендер...");
-  job.onStage?.("draft", 0);
-  await renderVideo({ workspace: prepareWorkspace(code, `${path.basename(outDir)}-draft`), publicDir, input, out: draft, scale: 0.5,
-    onProgress: f => job.onStage?.("draft", f) });
-  job.onStage?.("review");
-  const { images, labels } = draftImages(draft, path.join(outDir, "draft-frames"), keyMoments(analysis.blocks, input.duration), input.duration);
-  ({ code, analysis } = await settle(await ask("montage-review", reviewPrompt(task, code, labels, analysis.notes), images), "review"));
-  input = { ...input, cutouts: cutouts(analysis) };
+  if (!job.skipReview) {
+    log("Черновой рендер...");
+    job.onStage?.("draft", 0);
+    await renderVideo({ workspace: prepareWorkspace(code, `${path.basename(outDir)}-draft`), publicDir, input, out: draft, scale: 0.5,
+      onProgress: f => job.onStage?.("draft", f) });
+    job.onStage?.("review");
+    const { images, labels } = draftImages(draft, path.join(outDir, "draft-frames"), keyMoments(analysis.blocks, input.duration), input.duration);
+    ({ code, analysis } = await settle(await ask("montage-review", reviewPrompt(task, code, labels, analysis.notes), images), "review"));
+    input = { ...input, cutouts: cutouts(analysis) };
+  }
   fs.writeFileSync(path.join(outDir, "Montage.tsx"), code);
   fs.writeFileSync(path.join(outDir, "input.json"), JSON.stringify(input));
 

@@ -62,6 +62,7 @@ export async function draftStills(opts: { workspace: string; publicDir: string; 
     }
   } finally {
     await browser.close({ silent: true });
+    fs.rmSync(serveUrl, { recursive: true, force: true });
   }
   return { images, labels };
 }

@@ -47,7 +47,8 @@ export async function runAstraEngine(opts: {
     workDir,
     soundsDir: path.join(root, "assets", "astra", "sounds"),
     memesDir: path.join(root, "assets", "astra", "memes"),
-    cacheDir: path.join(root, "data", "astra-cache"),
+    // Звуки подготовлены при сборке образа (astra-sounds); без него готовятся один раз в data.
+    cacheDir: fs.existsSync(path.join(root, "astra-sounds")) ? path.join(root, "astra-sounds") : path.join(root, "data", "astra-cache"),
   }));
 
   let result = "";

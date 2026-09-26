@@ -1,0 +1,8 @@
+# Sound and music files are third-party content: their licenses allow use in videos,
+# not redistribution as files, and this repository is public.
+*.mp3
+*.wav
+*.ogg
+*.m4a
+*.flac
+*.aac

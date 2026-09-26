@@ -74,7 +74,7 @@ export type SoundLibrary = {
  * The owner's library (sfx/<role>, music/<mood>) prepared into the bundle's public folder.
  * The owner's files stay untouched; prepared copies are cached by source contents.
  */
-export function linkSounds(soundsDir: string | undefined, publicDir: string): SoundLibrary {
+export function linkSounds(soundsDir: string | undefined, publicDir: string, cacheDir = publicDir): SoundLibrary {
   const library: SoundLibrary = { sounds: {}, music: {}, soundInfo: {} };
   if (!soundsDir || !fs.existsSync(soundsDir)) return library;
   const seen = new Set<string>();
@@ -90,11 +90,17 @@ export function linkSounds(soundsDir: string | undefined, publicDir: string): So
         const source = path.join(dir, file);
         const bytes = fs.readFileSync(source);
         const hash = createHash("sha1").update(bytes).update(role).update(PREPARE_VERSION).digest("hex").slice(0, 10);
-        const out = path.join(publicDir, "sounds", kind, role, `${path.parse(file).name.slice(0, 40)}-${hash}.${kind === "sfx" ? "wav" : path.extname(file).slice(1)}`);
+        const name = `${path.parse(file).name.slice(0, 40)}-${hash}.${kind === "sfx" ? "wav" : path.extname(file).slice(1)}`;
+        const cached = path.join(cacheDir, "sounds", kind, role, name);
+        if (!fs.existsSync(cached)) {
+          fs.mkdirSync(path.dirname(cached), { recursive: true });
+          if (kind === "sfx") prepareSfx(source, role, cached);
+          else fs.copyFileSync(source, cached);
+        }
+        const out = path.join(publicDir, "sounds", kind, role, name);
         if (!fs.existsSync(out)) {
           fs.mkdirSync(path.dirname(out), { recursive: true });
-          if (kind === "sfx") prepareSfx(source, role, out);
-          else fs.copyFileSync(source, out);
+          try { fs.linkSync(cached, out); } catch { fs.copyFileSync(cached, out); }
         }
         const rel = path.relative(publicDir, out).split(path.sep).join("/");
         if (seen.has(`${role}:${hash}`)) continue;

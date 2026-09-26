@@ -16,6 +16,7 @@ export async function renderVideo(opts: {
   onProgress?: (fraction: number) => void;
 }): Promise<void> {
   const serveUrl = await bundle({ entryPoint: path.join(opts.workspace, "src/index.ts"), publicDir: opts.publicDir });
+  try {
   const inputProps = opts.input as unknown as Record<string, unknown>;
   const composition = await selectComposition({ serveUrl, id: "Astra", inputProps });
   await renderMedia({
@@ -26,6 +27,10 @@ export async function renderVideo(opts: {
     scale: opts.scale ?? 1,
     onProgress: ({ progress }) => opts.onProgress?.(progress),
   });
+  } finally {
+    // A bundle carries a copy of the job's public folder (the video, pictures, sounds): hundreds of MB.
+    fs.rmSync(serveUrl, { recursive: true, force: true });
+  }
   masterAudio(opts.out);
 }
 

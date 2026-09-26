@@ -33,7 +33,7 @@ export type MontageJob = {
   startCode?: string;
   skipReview?: boolean;
   log?: (line: string) => void;
-  onStage?: (stage: "write" | "cutout" | "draft" | "review" | "final", fraction?: number) => void;
+  onStage?: (stage: "write" | "assets" | "check" | "cutout" | "draft" | "review" | "final", fraction?: number) => void;
 };
 
 export type MontageResult = { code: string; input: AstraInput; final: string };
@@ -71,6 +71,7 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
       let missing: string[] = [];
       if (!problems.length) {
         // Emoji, logos and photos the montage asks for are fetched now; what cannot be found goes back to Astra once.
+        job.onStage?.("assets");
         const needs = assetNeeds(analysis.blocks);
         // On the second round, photos that still do not fit are drawn from what should be visible on them.
         const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", {
@@ -143,6 +144,7 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
       ...needs.morphs.map(m => ({ key: `morph:${m.from.toFixed(2)}`, need: `автор в той же позе и комнате превращён в ${m.into}`, redraw: "" })),
     ].filter(w => input.assets[w.key] && (only ? only.has(w.key) : verified.get(w.key) !== input.assets[w.key])).slice(0, 20);
     if (!wanted.length) return;
+    job.onStage?.("check");
     const images: BridgeImage[] = [];
     for (const w of wanted) {
       const buffer = await sharp(path.join(publicDir, input.assets[w.key])).resize(640, 800, { fit: "inside" }).jpeg({ quality: 82 }).toBuffer();

@@ -9,8 +9,9 @@ import { postBridge } from "./bridge";
 
 /** One look for every generated picture of a video: a real vertical photo, the subject whole and centered. */
 export const SCENE_STYLE = "Photorealistic vertical photo, as if shot on a good phone camera for a news story: natural light, real materials and people, " +
-  "realistic proportions, sharp focus on the subject. Vertical composition for a phone screen: the main subject is large, whole and centered, " +
-  "as close together as the scene allows, with some background around it; nothing important touches the edges. " +
+  "realistic proportions, sharp focus on the subject. The picture will be cropped to a narrow vertical 9:16 phone screen, so the outer sides are cut away: " +
+  "keep the main subject and every important person and object within the central 65% of the width, large, whole and close together; " +
+  "only background goes into the outer side strips. Nothing important touches any edge. " +
   "No text, no captions, no watermark, no logos except those that are part of real objects. Scene: ";
 
 /**
@@ -264,7 +265,10 @@ export async function resolveAssets(needs: AssetNeeds, publicDir: string, cacheS
     if (file) await put(`logo:${name.toLowerCase()}`, file);
     else missing.push(`Логотип «${name}» не нашёлся — покажи название словом за спиной автора (BehindText) или сценой.`);
   }
-  const found = await photos(needs.photos, path.join(cache, "photos"), options.pick, needs.looks);
+  // Stock photos are searched only when asked (ASTRA_STOCK_PHOTOS=1); otherwise the picture is generated from `look`.
+  const found = process.env.ASTRA_STOCK_PHOTOS === "1"
+    ? await photos(needs.photos, path.join(cache, "photos"), options.pick, needs.looks)
+    : { files: {} as Record<string, string | null>, rejected: new Set<string>() };
   for (const query of needs.photos) {
     let file = found.files[query];
     // No stock photo shows it: a realistic picture is generated from what must be visible.

@@ -175,7 +175,7 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
         input = { ...input, sizes: { ...input.sizes, [w.key]: { ...size, span: [span[0], span[1]] } } };
         // A vertical screen shows only part of the width: the important part has to fit into it.
         const visible = Math.min(1, (1080 / 1920) / (size.w / size.h));
-        if (!problem && !only && size.w / size.h <= 0.85 && span[1] - span[0] > visible + 0.05) {
+        if (!problem && !only && size.w / size.h <= 0.85 && span[1] - span[0] > visible + 0.12) {
           problem = `everything important spans ${Math.round((span[1] - span[0]) * 100)}% of the width, but a vertical phone screen shows only the central ${Math.round(visible * 100)}%: reframe closer so the subject is large and fits in the central part`;
         }
       }

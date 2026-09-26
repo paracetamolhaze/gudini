@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
+import { prepareWorkspace } from "../director/workspace";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -17,13 +18,8 @@ async function main() {
   const inputProps = arg("input") ? JSON.parse(fs.readFileSync(arg("input")!, "utf8")) : undefined;
   let entry = path.join(root, "src/index.ts");
   const montage = arg("montage");
-  if (montage) {
-    // A job's montage replaces the kit check montage in a private copy of the sources.
-    const work = fs.mkdtempSync(path.join(os.tmpdir(), "astra-src-"));
-    fs.cpSync(path.join(root, "src"), path.join(work, "src"), { recursive: true });
-    fs.copyFileSync(path.resolve(montage), path.join(work, "src/montage/Montage.tsx"));
-    entry = path.join(work, "src/index.ts");
-  }
+  // A job's montage replaces the kit check montage in a private copy of the sources.
+  if (montage) entry = path.join(prepareWorkspace(fs.readFileSync(path.resolve(montage), "utf8")), "src/index.ts");
   const started = Date.now();
   const serveUrl = await bundle({ entryPoint: entry, publicDir: path.resolve(arg("public") ?? path.join(root, "public")) });
   const composition = await selectComposition({ serveUrl, id: "Astra", inputProps });

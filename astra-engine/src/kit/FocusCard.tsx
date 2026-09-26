@@ -1,4 +1,5 @@
 import React from "react";
+import { fitText } from "@remotion/layout-utils";
 import { Video } from "@remotion/media";
 import { AbsoluteFill, interpolate, staticFile } from "remotion";
 import { faceOf, useInput } from "../input";
@@ -51,13 +52,16 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ title, items, numb
   const circleIn = pop(frame, fps) * interpolate(frame, [lengthFrames - 0.12 * fps, lengthFrames], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const titleIn = interpolate(frame, [0.3 * fps, 0.8 * fps], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_OUT });
   const cardOpacity = interpolate(frame, [0.1 * fps, 0.25 * fps], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  // The title column ends before the author's circle; long words shrink the font to fit it.
+  const longest = title.toUpperCase().split(/\s+/).reduce((a, b) => (b.length > a.length ? b : a), "");
+  const titleSize = Math.max(60, Math.min(104, fitText({ text: longest, withinWidth: 560, fontFamily: theme.font.display, fontWeight: "700" }).fontSize));
   return (
     <AbsoluteFill>
       <AbsoluteFill style={{ opacity: cardOpacity, clipPath: `circle(${radius}px at ${PIP.x + PIP.size / 2}px ${PIP.y + PIP.size / 2}px)` }}>
         <AbsoluteFill style={{ background: `radial-gradient(circle at 15% 8%, rgba(255,106,31,0.16), rgba(255,106,31,0) 55%), ${theme.color.ink}` }} />
         <div style={{
           position: "absolute", left: 70, top: 290, width: 560,
-          fontFamily: theme.font.display, fontWeight: 700, fontSize: 104, lineHeight: 1, textTransform: "uppercase", color: theme.color.accent,
+          fontFamily: theme.font.display, fontWeight: 700, fontSize: titleSize, lineHeight: 1, textTransform: "uppercase", color: theme.color.accent,
           opacity: titleIn, translate: `0 ${(1 - titleIn) * 30}px`,
         }}>
           {title}

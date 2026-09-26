@@ -5,6 +5,10 @@ import { useAsset } from "./assets";
 import { EASE_OUT } from "./motion";
 import { useClip } from "./time";
 
+export const EMOJI_FONT = "'Noto Color Emoji','Segoe UI Emoji','Apple Color Emoji',sans-serif";
+/** An icon is either a file (logo, picture) or an emoji written as text. */
+const isImage = (icon: string) => /\.(png|jpe?g|webp|svg|gif|avif)$/i.test(icon) || icon.includes("/") || /^[\w-]+$/.test(icon);
+
 export type ListItem = {
   text: string;
   /** Second of the video when the item appears; say it and show it together. */
@@ -34,7 +38,10 @@ export const List: React.FC<{ items: ListItem[]; size?: number; numbered?: boole
                 {String(i + 1).padStart(2, "0")}
               </span>
             ) : null}
-            {item.icon ? <Img src={asset(item.icon)} style={{ width: size * 1.15, height: size * 1.15, objectFit: "contain" }} /> : null}
+            {item.icon && isImage(item.icon) ? <Img src={asset(item.icon)} style={{ width: size * 1.15, height: size * 1.15, objectFit: "contain" }} /> : null}
+            {item.icon && !isImage(item.icon) ? (
+              <span style={{ fontSize: size * 1.0, lineHeight: 1, width: size * 1.15, textAlign: "center", fontFamily: EMOJI_FONT }}>{item.icon}</span>
+            ) : null}
             <span style={{
               fontFamily: font === "display" ? theme.font.display : theme.font.text,
               fontWeight: font === "display" ? 700 : 800, fontSize: size, lineHeight: 1.12,

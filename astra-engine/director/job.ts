@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AstraInput } from "../src/input";
 import { askAstra, extractCode, type BridgeImage } from "./bridge";
-import { draftImages, keyMoments } from "./frames";
+import { draftStills, keyMoments } from "./frames";
 import { makeCutouts } from "./matting";
 import { fixPrompt, reviewPrompt, systemPrompt, taskPrompt, type Task } from "./prompt";
 import { renderVideo } from "./render";
@@ -27,6 +27,8 @@ export type MontageJob = {
   memesDir?: string;
   /** Checked facts of the story (who, what, where), so pictures show what really happened. */
   facts?: string[];
+  /** The prepared voice track; it is made in parallel with Astra's writing and awaited before the first frame is drawn. */
+  voice?: Promise<string>;
   /** Continue from a montage Astra already wrote (and reviewed), without asking her again. */
   startCode?: string;
   skipReview?: boolean;
@@ -34,7 +36,7 @@ export type MontageJob = {
   onStage?: (stage: "write" | "cutout" | "draft" | "review" | "final", fraction?: number) => void;
 };
 
-export type MontageResult = { code: string; input: AstraInput; draft: string; final: string };
+export type MontageResult = { code: string; input: AstraInput; final: string };
 
 /**
  * Astra edits one video end to end: writes the montage, fixes what does not build,
@@ -72,7 +74,7 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
         const needs = assetNeeds(analysis.blocks);
         // On the second round, photos that still do not fit are drawn from what should be visible on them.
         const resolved = await resolveAssets(needs, publicDir, job.assetCache ?? "asset-cache", {
-          pick: pickPhotos, memesDir: job.memesDir, drawMissingPhotos: assetRounds >= 1, rescue: rescueScene,
+          pick: pickPhotos, memesDir: job.memesDir, drawMissingPhotos: true, rescue: rescueScene,
           video: path.join(publicDir, input.video), face: input.face,
         });
         input = { ...input, assets: { ...input.assets, ...resolved.assets }, sizes: { ...input.sizes, ...resolved.sizes } };
@@ -132,13 +134,14 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
    * Astra looks at every prepared picture next to what it must show. What is wrong is drawn again
    * with the problem spelled out; a photo that fails is replaced by a generated scene.
    */
+  const verified = new Map<string, string>();
   const verifyPictures = async (analysis: ReturnType<typeof analyzeMontage>, only?: Set<string>) => {
     const needs = assetNeeds(analysis.blocks);
     const wanted: { key: string; need: string; redraw: string }[] = [
       ...needs.scenes.map(prompt => ({ key: `scene:${prompt}`, need: prompt, redraw: prompt })),
       ...needs.photos.map(query => ({ key: `photo:${query}`, need: needs.looks[query] ?? query, redraw: needs.looks[query] ?? query })),
       ...needs.morphs.map(m => ({ key: `morph:${m.from.toFixed(2)}`, need: `автор в той же позе и комнате превращён в ${m.into}`, redraw: "" })),
-    ].filter(w => input.assets[w.key] && (!only || only.has(w.key))).slice(0, 20);
+    ].filter(w => input.assets[w.key] && (only ? only.has(w.key) : verified.get(w.key) !== input.assets[w.key])).slice(0, 20);
     if (!wanted.length) return;
     const images: BridgeImage[] = [];
     for (const w of wanted) {
@@ -148,7 +151,9 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
     const user = [
       "Перед рендером проверь картинки, которые войдут в ролик. Картинка займёт вертикальный экран телефона: если всё важное помещается в вертикальную полосу, экран кадрируется по ней, иначе картинка показывается целиком.",
       "Для каждой ответь, показывает ли она требуемое: нужные участники и их число, нужные предметы (пистолет — это пистолет, а не автомат), действие, место.",
-      "Хорошая картинка похожа на настоящее фото и читается с первого взгляда. Мультяшность, лишние люди, другой предмет или обрезанный краем картинки главный объект — это ошибка.",
+      "Хорошая картинка похожа на настоящее фото и читается с первого взгляда.",
+      "Ошибка — это то, что зритель заметит: другой предмет (автомат вместо пистолета), не те участники (девочка вместо парня), нет главного действия, мультяшность, главный объект обрезан краем картинки.",
+      "Мелочи — не ошибка: чуть другое число людей в толпе, другой ракурс, другой цвет фона. Такие картинки принимай.",
       "Отметь span — левую и правую границу всего важного на картинке в долях ширины (от 0 до 1): людей, машину, предмет целиком.",
       "", ...wanted.map((w, i) => `${i + 1}. должно быть: ${w.need}`), "",
       `Ответ — только JSON: {"1": {"ok": true, "span": [0.2, 0.75]}, "2": {"ok": false, "problem": "что не так, одной фразой по-английски", "span": [0.1, 0.9]}}`,
@@ -172,7 +177,10 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
           problem = `everything important spans ${Math.round((span[1] - span[0]) * 100)}% of the width, but a vertical phone screen shows only the central ${Math.round(visible * 100)}%: reframe closer so the subject is large and fits in the central part`;
         }
       }
-      if (!problem || !w.redraw || only) continue;
+      if (!problem || !w.redraw || only) {
+        if (!problem) verified.set(w.key, input.assets[w.key]);
+        continue;
+      }
       log(`Перерисовка ${w.key.slice(0, 60)}: ${problem}`);
       const result = await redrawScene(w.redraw, problem, publicDir, job.assetCache ?? "asset-cache");
       if (result) {
@@ -181,7 +189,10 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
       }
     }
     // Redrawn pictures are looked at once more, to frame them; they are not redrawn again.
-    if (redrawn.size && !only) await verifyPictures(analysis, redrawn);
+    if (redrawn.size && !only) {
+      await verifyPictures(analysis, redrawn);
+      for (const key of redrawn) verified.set(key, input.assets[key]);
+    }
   };
 
   const cutouts = (analysis: ReturnType<typeof analyzeMontage>) => {
@@ -196,14 +207,13 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
   job.onStage?.("cutout");
   input = { ...input, cutouts: cutouts(analysis) };
 
-  const draft = path.join(outDir, "draft.mp4");
+  if (job.voice) input = { ...input, voice: await job.voice };
   if (!job.skipReview) {
-    log("Черновой рендер...");
+    log("Кадры черновика...");
     job.onStage?.("draft", 0);
-    await renderVideo({ workspace: prepareWorkspace(code, `${path.basename(outDir)}-draft`), publicDir, input, out: draft, scale: 0.5,
-      onProgress: f => job.onStage?.("draft", f) });
+    const { images, labels } = await draftStills({ workspace: prepareWorkspace(code, `${path.basename(outDir)}-draft`), publicDir, input,
+      workDir: path.join(outDir, "draft-frames"), moments: keyMoments(analysis.blocks, input.duration) });
     job.onStage?.("review");
-    const { images, labels } = draftImages(draft, path.join(outDir, "draft-frames"), keyMoments(analysis.blocks, input.duration), input.duration);
     ({ code, analysis } = await settle(await ask("montage-review", reviewPrompt(task, code, labels, analysis.notes), images), "review"));
     await verifyPictures(analysis);
     input = { ...input, cutouts: cutouts(analysis) };
@@ -224,5 +234,5 @@ export async function directMontage(job: MontageJob): Promise<MontageResult> {
     },
   });
   log(`Готово: ${final}`);
-  return { code, input, draft, final };
+  return { code, input, final };
 }

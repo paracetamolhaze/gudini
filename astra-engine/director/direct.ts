@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { astraInputSchema } from "../src/input";
 import { directMontage } from "./job";
-import { linkSounds, prepareVoice } from "./sounds";
+import { linkSounds, prepareVoiceAsync } from "./sounds";
 
 const arg = (name: string, fallback?: string) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -17,16 +17,16 @@ async function main() {
   const raw = JSON.parse(fs.readFileSync(path.resolve(arg("input")!), "utf8"));
   const library = linkSounds(arg("sounds"), publicDir);
   const video = path.join(publicDir, raw.video);
-  // The voice goes in cleaned and at TikTok loudness; the video itself plays muted.
-  const voice = raw.voice ?? prepareVoice(video, publicDir, `${arg("media", "dev")}/voice`);
-  const input = astraInputSchema.parse({ ...raw, ...library, voice, cutouts: [] });
+  // The voice goes in cleaned and at TikTok loudness; it is prepared while Astra writes the montage.
+  const voice = raw.voice ? Promise.resolve(raw.voice as string) : prepareVoiceAsync(video, publicDir, `${arg("media", "dev")}/voice`);
+  const input = astraInputSchema.parse({ ...raw, ...library, cutouts: [] });
   const lessonsFile = arg("lessons");
   const lessons = lessonsFile && fs.existsSync(lessonsFile) ? fs.readFileSync(lessonsFile, "utf8").split(/\r?\n/).filter(Boolean) : [];
   const start = arg("start");
   await directMontage({
     input, topic: arg("topic", "")!, lessons, publicDir, mediaSubdir: arg("media", "dev")!, outDir: out, log: console.log,
     startCode: start ? fs.readFileSync(path.resolve(start), "utf8") : undefined, skipReview: process.argv.includes("--skip-review"),
-    memesDir: arg("memes"),
+    memesDir: arg("memes"), voice,
     facts: arg("facts") && fs.existsSync(arg("facts")!) ? JSON.parse(fs.readFileSync(arg("facts")!, "utf8")) : undefined,
   });
 }

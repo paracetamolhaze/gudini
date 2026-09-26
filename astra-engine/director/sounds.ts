@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -116,4 +116,24 @@ export function prepareVoice(video: string, publicDir: string, subdir: string): 
     run(["-y", "-i", video, "-vn", "-af", "afftdn=nr=10:nf=-45:tn=1,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", out]);
   }
   return path.relative(publicDir, out).split(path.sep).join("/");
+}
+
+/** The same voice preparation without blocking: it runs while Astra writes the montage. */
+export function prepareVoiceAsync(video: string, publicDir: string, subdir: string): Promise<string> {
+  const stat = fs.statSync(video);
+  const out = path.join(publicDir, subdir, `voice-${createHash("sha1").update(`${video}|${stat.size}|${stat.mtimeMs}`).digest("hex").slice(0, 10)}.wav`);
+  const rel = path.relative(publicDir, out).split(path.sep).join("/");
+  if (fs.existsSync(out)) return Promise.resolve(rel);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  const temp = `${out}.part.wav`;
+  return new Promise((resolve, reject) => {
+    const child = spawn("ffmpeg", ["-hide_banner", "-v", "error", "-y", "-i", video, "-vn", "-af", "afftdn=nr=10:nf=-45:tn=1,loudnorm=I=-16:TP=-1.5:LRA=11",
+      "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", temp], { stdio: "ignore" });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code !== 0) return reject(new Error(`Подготовка голоса не удалась (ffmpeg ${code})`));
+      fs.renameSync(temp, out);
+      resolve(rel);
+    });
+  });
 }

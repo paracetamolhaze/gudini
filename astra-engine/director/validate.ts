@@ -144,7 +144,14 @@ export function analyzeMontage(code: string, duration: number): Analysis {
       if (typeof item?.at === "number" && (item.at < b.from - 0.05 || item.at > b.to)) problems.push(`<${b.type}> ${b.from}–${b.to}: пункт с at=${item.at} вне сцены.`);
     }
   }
-  for (const m of blocks.filter(b => b.type === "Morph")) {
+  const morphs = blocks.filter(b => b.type === "Morph");
+  if (morphs.length > 1) problems.push(`Превращений ${morphs.length}: превращение звучит один раз за ролик — в момент, где действие ИИ можно показать (звонит в полицию — робот с телефоном у уха). Оставь одно.`);
+  const banners = blocks.filter(b => b.type === "Notification").sort((a, b) => a.from - b.from);
+  banners.forEach((n, i) => {
+    const next = banners[i + 1];
+    if (next && next.from - n.to < 1.5) problems.push(`Уведомления ${n.from}–${n.to} и ${next.from}–${next.to} идут подряд: одно сообщение — одно уведомление, оно держится, пока автор его пересказывает. Объедини их в одно.`);
+  });
+  for (const m of morphs) {
     if (m.to - m.from > 2.5) problems.push(`<Morph> ${m.from}–${m.to}: превращение держится 1–2.5 секунды, иначе застывший кадр заметен.`);
   }
   const heavy = blocks.filter(b => HEAVY.has(b.type)).sort((a, b) => a.from - b.from);

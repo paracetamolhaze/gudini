@@ -18,11 +18,6 @@ export function pickFile(files: string[] | undefined, seed: string): string | nu
   return files[hash(seed) % files.length];
 }
 
-/** How loud each role sits under a voice normalized to -16 LUFS (files are levelled to the same peak). */
-const ROLE_VOLUME: Record<SfxRole, number> = {
-  whoosh: 0.38, swipe: 0.34, pop: 0.34, click: 0.3, typing: 0.26, tick: 0.26, ding: 0.42, error: 0.4,
-  cash: 0.42, notification: 0.42, riser: 0.34, impact: 0.55, glitch: 0.32, shutter: 0.38,
-};
 /** Loops like ticking and typing play only this long unless a duration is given. */
 const DEFAULT_SECONDS: Partial<Record<SfxRole, number>> = { tick: 2, typing: 2 };
 
@@ -40,7 +35,8 @@ export const Sfx: React.FC<{ at: number; role: SfxRole; volume?: number; duratio
   const start = role === "riser" ? Math.max(0, at - length) : at;
   const play = Math.min(length, duration ?? DEFAULT_SECONDS[role] ?? length);
   const frames = Math.max(1, Math.round(play * fps));
-  const level = volume ?? ROLE_VOLUME[role];
+  // Files are prepared at their role's level, behind the voice; `volume` only nudges one sound.
+  const level = Math.max(0, Math.min(2, volume ?? 1));
   const fadeFrames = Math.round(0.12 * fps);
   return (
     <Sequence from={Math.max(0, Math.round(start * fps)) - offset} durationInFrames={frames} name={`sfx ${role}`} layout="none">

@@ -3,7 +3,7 @@ import { createContext, useContext } from "react";
 /** Screen area a block occupies for a while; captions and the camera make room for it. */
 export type Zone = "bottom" | "top" | "left" | "right" | "full" | "card" | "sheet" | "word";
 /** `text`: words the block already shows big, so captions do not repeat them. */
-export type Occupied = { from: number; to: number; zone: Zone; text?: string };
+export type Occupied = { from: number; to: number; zone: Zone; text?: string; top?: number };
 
 export const LayoutContext = createContext<Occupied[]>([]);
 export const useOccupied = () => useContext(LayoutContext);

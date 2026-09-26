@@ -70,7 +70,8 @@ export const Captions: React.FC<Props> = ({ style = "clean", emphasis = [], plac
   const placed = placements.find(p => current.from >= p.from && current.from < p.to)?.pos;
   // A list or a photo card in the lower half sends captions above the head; a card sends them below its list.
   // A card or picture in the lower part sends captions above the head; a list that lifted the author puts them on the chest, above the list.
-  const pos: CaptionPos = placed ?? (zones.includes("sheet") ? { y: 900 } : zones.includes("bottom") ? "high" : zones.includes("card") ? { y: 1500 } : "low");
+  const sheet = occupied.find(o => o.zone === "sheet" && current.from >= o.from && current.from < o.to);
+  const pos: CaptionPos = placed ?? (sheet ? { y: (sheet.top ?? 1100) - 66 } : zones.includes("bottom") ? "high" : zones.includes("card") ? { y: 1500 } : "low");
   const y = typeof pos === "string" ? POS_Y[pos] : pos.y;
   const local = frame - Math.round(current.from * fps);
   const p = spring({ frame: local, fps, config: { damping: 14, stiffness: 260, mass: 0.5 } });

@@ -1,9 +1,21 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 const AUDIO = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
+
+/** Bump when the preparation changes, so cached files are prepared again. */
+const PREPARE_VERSION = "background-v2";
+
+/**
+ * Loudest moment of each role (EBU R128 momentary, LUFS). The voice runs around -19 LUFS,
+ * so effects sit 8-11 dB under it: heard, but behind the voice.
+ */
+const ROLE_LOUDNESS: Record<string, number> = {
+  whoosh: -28, swipe: -28, pop: -28, click: -30, typing: -32, tick: -32, ding: -27, error: -27,
+  cash: -27, notification: -26, riser: -29, impact: -25, glitch: -29, shutter: -28,
+};
 
 /** Longest useful length of a sound in each role; longer files are cut (risers keep their ending, where the peak is). */
 const MAX_SECONDS: Record<string, number> = {
@@ -17,7 +29,15 @@ function run(args: string[]): string {
 }
 
 const duration = (file: string) => Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file]).toString().trim()) || 0;
-const peak = (file: string) => Number(run(["-i", file, "-af", "volumedetect", "-f", "null", "-"]).match(/max_volume: (-?[\d.]+) dB/)?.[1] ?? -1);
+/** ffmpeg analysis filters report on stderr. */
+const analysis = (args: string[]) => spawnSync("ffmpeg", ["-hide_banner", "-nostats", ...args], { encoding: "utf8" }).stderr ?? "";
+const peak = (file: string) => Number(analysis(["-i", file, "-af", "volumedetect", "-f", "null", "-"]).match(/max_volume: (-?[\d.]+) dB/)?.[1] ?? 0);
+/** Loudest 400 ms of a sound; a short sound is padded with silence so it is measured too. */
+function momentaryMax(file: string): number {
+  const values = [...analysis(["-i", file, "-af", "apad=pad_dur=0.6,ebur128", "-f", "null", "-"]).matchAll(/M:\s*(-?[\d.]+)/g)]
+    .map(m => Number(m[1])).filter(v => Number.isFinite(v) && v > -70);
+  return values.length ? Math.max(...values) : -40;
+}
 
 /**
  * One sound effect made ready for the montage: the silence before and after it is cut, so the sound
@@ -35,8 +55,9 @@ function prepareSfx(source: string, role: string, target: string) {
   const window = role === "riser" && cut ? ["-ss", (length - max).toFixed(3)] : [];
   const fades = cut ? (role === "riser" ? `afade=t=in:d=0.4` : `afade=t=out:st=${(max - 0.12).toFixed(3)}:d=0.12`) : "anull";
   const shaped = `${target}.shape.wav`;
-  run(["-y", ...window, "-i", trimmed, "-t", String(Math.min(length, max)), "-af", fades, shaped]);
-  const gain = -3 - peak(shaped);
+  // Softer highs move an effect back, behind the voice.
+  run(["-y", ...window, "-i", trimmed, "-t", String(Math.min(length, max)), "-af", `${fades},highshelf=f=6500:g=-3`, shaped]);
+  const gain = Math.min((ROLE_LOUDNESS[role] ?? -28) - momentaryMax(shaped), -6 - peak(shaped));
   run(["-y", "-i", shaped, "-af", `volume=${gain.toFixed(2)}dB`, "-c:a", "pcm_s16le", target]);
   fs.rmSync(trimmed, { force: true });
   fs.rmSync(shaped, { force: true });
@@ -68,7 +89,7 @@ export function linkSounds(soundsDir: string | undefined, publicDir: string): So
         if (kind === "sfx" && role !== "riser" && /riser/i.test(file)) continue;
         const source = path.join(dir, file);
         const bytes = fs.readFileSync(source);
-        const hash = createHash("sha1").update(bytes).update(role).digest("hex").slice(0, 10);
+        const hash = createHash("sha1").update(bytes).update(role).update(PREPARE_VERSION).digest("hex").slice(0, 10);
         const out = path.join(publicDir, "sounds", kind, role, `${path.parse(file).name.slice(0, 40)}-${hash}.${kind === "sfx" ? "wav" : path.extname(file).slice(1)}`);
         if (!fs.existsSync(out)) {
           fs.mkdirSync(path.dirname(out), { recursive: true });

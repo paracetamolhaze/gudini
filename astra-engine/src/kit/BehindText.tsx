@@ -5,7 +5,7 @@ import { faceOf, useInput } from "../input";
 import { color, theme } from "../theme";
 import type { LayoutDeclaration } from "./AstraVideo";
 import { BlockSfx, type SfxRole } from "./audio";
-import { CameraLayer } from "./camera";
+import { CameraLayer, useHighestTop } from "./camera";
 import { EASE_OUT, leave } from "./motion";
 import { Clip, useClip, useClipOffset } from "./time";
 
@@ -25,12 +25,15 @@ const Body: React.FC<Omit<Props, "sfx">> = ({ from, to, text, y, color: tint }) 
   const face = faceOf(input);
   const { frame, fps, lengthFrames } = useClip();
   const offset = useClipOffset();
+  const highestTop = useHighestTop();
   const cutout = input.cutouts.find(c => c.from <= from + 0.05 && c.to >= to - 0.05);
   const upper = text.toUpperCase();
   const { fontSize } = fitText({ text: upper, withinWidth: 990, fontFamily: theme.font.display, fontWeight: "700" });
   const size = Math.max(120, Math.min(360, fontSize));
-  // Without a cutout the text would cover the face, so it moves above the head instead.
-  const center = cutout ? y ?? face.y + face.h * 0.3 : Math.min(y ?? Infinity, face.y - size * 0.45);
+  // The word stands at the crown: its upper part reads above the hair and the head covers the rest,
+  // so it is readable and clearly behind. It never sinks lower than that.
+  const headTop = highestTop(face, from, to);
+  const center = cutout ? Math.min(y ?? headTop + size * 0.1, headTop + size * 0.2) : Math.min(y ?? Infinity, headTop - size * 0.45);
   const appear = interpolate(frame, [0, 0.5 * fps], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: EASE_OUT });
   const out = leave(frame, fps, lengthFrames, 0.3);
   return (

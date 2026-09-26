@@ -56,7 +56,7 @@ export const Montage: React.FC = () => (
 ### Morph
 
 ```tsx
-<Morph from to into="a friendly humanoid robot with a glossy white face and glowing blue eyes" />
+<Morph from to into="a humanoid robot with a glossy white face and glowing blue eyes, holding a smartphone to its ear and talking on the phone" />
 ```
 
 Автор на 1–2.5 секунды превращается в того, кто описан в `into`, и возвращается обратно с глитчем. Картинка делается из его же кадра в момент `from`, поэтому поза и комната сохраняются. Лучший момент — когда действует ИИ.
@@ -116,7 +116,7 @@ export const Montage: React.FC = () => (
 ### BehindText
 
 ```tsx
-<BehindText from to text="WAYMO" y? color? />
+<BehindText from to text="WAYMO" color? />
 ```
 
 Огромное слово за головой автора, до 14 букв. Субтитр в этот момент сам прячется.
@@ -151,7 +151,7 @@ export const Montage: React.FC = () => (
 
 - `<Arrow from to x1 y1 x2 y2 label="коротко" />` — стрелка от руки, остриё в точке (x2, y2).
 - `<Flash at />` — вспышка на кульминации.
-- `<Sfx at role="whoosh|pop|click|typing|ding|error|cash|notification|riser|impact|glitch|swipe|shutter|tick" volume={0.55} />` — отдельный звуковой эффект.
+- `<Sfx at role="whoosh|pop|click|typing|ding|error|cash|notification|riser|impact|glitch|swipe|shutter|tick" volume? />` — отдельный звуковой эффект. Громкость роли уже настроена фоном под голос; `volume` меняет её для одного звука: 0.6 — тише, 1.3 — громче.
 - `<Music mood="calm|curious|upbeat|tense|dramatic|playful" />` — музыкальная подложка, сама стихает под голос.
 
 `sfx={false}` у любого кубика выключает его встроенный звук, `sfx="ding"` заменяет его.

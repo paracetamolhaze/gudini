@@ -84,7 +84,7 @@ export const Morph: React.FC<Props> & { layoutOf: (p: Props, input?: AstraInput)
   <>
     <Clip from={from} to={to} name="Morph"><Body from={from} /></Clip>
     <BlockSfx at={from} sfx={sfx} fallback="glitch" />
-    <BlockSfx at={Math.max(from, to - 0.25)} sfx={sfx} fallback="glitch" volume={0.22} />
+    <BlockSfx at={Math.max(from, to - 0.25)} sfx={sfx} fallback="glitch" volume={0.6} />
   </>
 );
 Morph.layoutOf = () => ({});

@@ -219,8 +219,9 @@ async function morph(video: string, from: number, into: string, face: { y: numbe
   const y0 = Math.max(0, Math.min(1920 - 1350, Math.round(face.y - 150)));
   const region = await sharp(base).extract({ left: 0, top: y0, width: 1080, height: 1350 }).jpeg({ quality: 95 }).toBuffer();
   const edited = await generate(
-    `Edit this photo: transform the person into ${into}, keeping EXACTLY the same pose, head position, framing, camera angle, ` +
-      "every object in front of the person (microphone, hands), the chair, the room and the lighting. Photorealistic, same composition and image size. No text.",
+    `Edit this photo: transform the person into ${into}. Keep the same head position, framing, camera angle, the microphone in front, ` +
+      "the chair, the room and the lighting; change the pose only where the description needs it (for example a hand raised to hold a phone to the ear). " +
+      "Photorealistic, same composition and image size. No text.",
     path.join(dir, `morph-${tag}-edit.png`), [`data:image/jpeg;base64,${region.toString("base64")}`], "edit");
   if (!edited) return null;
   // Soft top and bottom edges so the edited region melts into the untouched frame.

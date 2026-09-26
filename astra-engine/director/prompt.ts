@@ -1,5 +1,5 @@
 import type { AstraInput } from "../src/input";
-import { loadExamples, loadGuide } from "./knowledge";
+import { loadExamples, loadGuide, loadLessons } from "./knowledge";
 
 export type Task = {
   topic: string;
@@ -55,7 +55,7 @@ export function taskPrompt(task: Task): string {
     transcript(input),
     ``,
     `## Уроки`,
-    task.lessons.length ? task.lessons.map(l => `- ${l}`).join("\n") : "Пока нет.",
+    [...loadLessons(), ...task.lessons].map(l => `- ${l}`).join("\n"),
     ``,
     `Смонтируй этот ролик.`,
   ].filter(line => line !== undefined).join("\n");

@@ -17,12 +17,12 @@ type Props = {
   icon?: string;
   /** Small time label on the right, e.g. "сейчас". */
   time?: string;
-  /** Vertical position of the banner top; by default right under the TikTok top bar. */
+  /** Vertical position of the banner top; by default at the very top, where a phone shows notifications. */
   top?: number;
   sfx?: SfxRole | false;
 };
 
-const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ app, title, text, icon, time = "сейчас", top = 200 }) => {
+const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ app, title, text, icon, time = "сейчас", top = 56 }) => {
   const { frame, fps, lengthFrames } = useClip();
   const inP = glide(frame, fps);
   const out = leave(frame, fps, lengthFrames, 0.3);

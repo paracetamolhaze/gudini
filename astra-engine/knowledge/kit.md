@@ -151,7 +151,7 @@ export const Montage: React.FC = () => (
 
 - `<Arrow from to x1 y1 x2 y2 label="коротко" />` — стрелка от руки, остриё в точке (x2, y2).
 - `<Flash at />` — вспышка на кульминации.
-- `<Sfx at role="whoosh|pop|click|typing|ding|error|cash|notification|riser|impact|glitch|swipe|shutter|tick" volume? />` — отдельный звуковой эффект. Громкость роли уже настроена фоном под голос; `volume` меняет её для одного звука: 0.6 — тише, 1.3 — громче.
+- `<Sfx at role="impact|cash|ding|error|pop|whoosh|swipe|shutter|notification" volume? />` — звук на появление картинки: `at` совпадает с началом её блока или с панчем камеры. Громкость роли уже настроена фоном под голос; `volume` меняет её для одного звука: 0.6 — тише, 1.3 — громче.
 - `<Music mood="calm|curious|upbeat|tense|dramatic|playful" />` — музыкальная подложка, сама стихает под голос.
 
 `sfx={false}` у любого кубика выключает его встроенный звук, `sfx="ding"` заменяет его.

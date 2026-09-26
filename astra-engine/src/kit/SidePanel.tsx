@@ -1,4 +1,5 @@
 import React from "react";
+import { measureText } from "@remotion/layout-utils";
 import { AbsoluteFill, interpolate } from "remotion";
 import { theme } from "../theme";
 import { BlockSfx, type SfxRole } from "./audio";
@@ -22,22 +23,34 @@ type Props = {
   sfx?: SfxRole | false;
 };
 
-// The list stands on the lower edge of the part of the screen TikTok leaves free.
+// The list stands centred on the lower edge of the part of the screen TikTok leaves free.
 const BOTTOM = 1480;
-const LEFT = 60;
-const MAX_WIDTH = 870;
-const SIZE = 46;
+const FRAME_MAX = 900;
 const PAD = { y: 22, x: 26 };
+const GAP = 12;
 // The author glides up just enough to show that the list came in from below.
 const LIFT = 110;
 const SHADOW = "0 2px 4px rgba(0,0,0,0.8), 0 6px 20px rgba(0,0,0,0.6)";
 
+/**
+ * Font size at which the longest item fills the frame's width: the frame is always wide and the text
+ * proportional to it, whatever the length of the items.
+ */
+export function listFontSize(items: ListItem[] = [], numbered?: boolean): number {
+  const longest = items.reduce((a, b) => (b.text.length > a.length ? b.text : a), "");
+  if (!longest) return 50;
+  const unit = measureText({ text: longest, fontFamily: theme.font.text, fontWeight: "800", fontSize: 100, validateFontIsLoaded: false }).width / 100;
+  // A row is the pill's side padding (0.84·s), the number circle (1.15·s + 18 px) and the text.
+  const extras = 0.84 + (numbered ? 1.15 : 0);
+  const available = FRAME_MAX - 2 * PAD.x - (numbered ? 18 : 0);
+  return Math.max(40, Math.min(64, Math.floor(available / (unit + extras))));
+}
+
 /** Height the list takes on screen, so the author and the captions make exactly that much room. */
-export function listHeight(items: ListItem[] = [], title?: string, size = SIZE): number {
-  const perLine = Math.floor((MAX_WIDTH - 2 * PAD.x - size * 1.15 - 60) / (size * 0.6));
-  const lines = items.reduce((sum, item) => sum + Math.max(1, Math.ceil(item.text.length / perLine)), 0);
-  const rows = lines * size * 1.12 + items.length * 2 * size * 0.22 + Math.max(0, items.length - 1) * 12;
-  return 2 * PAD.y + rows + (title ? size * 1.4 * 1.05 + 14 : 0);
+export function listHeight(items: ListItem[] = [], title?: string, numbered?: boolean): number {
+  const size = listFontSize(items, numbered);
+  const rows = items.length * (size * 1.12 + 2 * size * 0.22) + Math.max(0, items.length - 1) * GAP;
+  return 2 * PAD.y + rows + (title ? size * 1.3 * 1.05 + 14 : 0);
 }
 
 const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ side = "bottom", title, items, numbered, children }) => {
@@ -57,36 +70,36 @@ const Body: React.FC<Omit<Props, "from" | "to" | "sfx">> = ({ side = "bottom", t
       </AbsoluteFill>
     );
   }
+  const size = listFontSize(items, numbered);
   return (
     <AbsoluteFill style={{ pointerEvents: "none" }}>
-      {/* No background: a thin frame hugs the items and slides up with them; the shot stays visible inside. */}
-      <div style={{
-        position: "absolute", left: LEFT, bottom: 1920 - BOTTOM, maxWidth: MAX_WIDTH, padding: `${PAD.y}px ${PAD.x}px`,
-        borderRadius: 30, border: "2px solid rgba(255,255,255,0.6)", boxShadow: "0 2px 14px rgba(0,0,0,0.3)",
-        opacity: Math.min(1, shown * 1.4), translate: `0 ${(1 - shown) * 240}px`,
-      }}>
-        {title ? (
-          <div style={{
-            fontFamily: theme.font.display, fontWeight: 700, fontSize: SIZE * 1.4, lineHeight: 1.05, textTransform: "uppercase",
-            color: theme.color.text, textShadow: SHADOW, marginBottom: 14, opacity: titleIn,
-          }}>
-            {title}
-          </div>
-        ) : null}
-        {items?.length ? <List items={items} numbered={numbered} size={SIZE} gap={12} /> : null}
-        {children}
+      {/* No background: a thin frame, centred, hugs the items and slides up with them; the shot stays visible inside. */}
+      <div style={{ position: "absolute", left: 0, right: 0, bottom: 1920 - BOTTOM, display: "flex", justifyContent: "center",
+        opacity: Math.min(1, shown * 1.4), translate: `0 ${(1 - shown) * 240}px` }}>
+        <div style={{ maxWidth: FRAME_MAX, padding: `${PAD.y}px ${PAD.x}px`, borderRadius: 30, border: "2px solid rgba(255,255,255,0.6)", boxShadow: "0 2px 14px rgba(0,0,0,0.3)" }}>
+          {title ? (
+            <div style={{
+              fontFamily: theme.font.display, fontWeight: 700, fontSize: size * 1.3, lineHeight: 1.05, textTransform: "uppercase",
+              color: theme.color.text, textShadow: SHADOW, marginBottom: 14, opacity: titleIn,
+            }}>
+              {title}
+            </div>
+          ) : null}
+          {items?.length ? <List items={items} numbered={numbered} size={size} gap={GAP} /> : null}
+          {children}
+        </div>
       </div>
     </AbsoluteFill>
   );
 };
 
-/** A compact list over the shot: the author glides up, a framed list rises from below; the item being said lights up. */
+/** A compact list over the shot: the author glides up, a centred framed list rises from below; the item being said lights up. */
 export const SidePanel: React.FC<Props> & { layoutOf: (p: Props) => LayoutDeclaration } = ({ from, to, sfx, ...rest }) => (
   <>
     <Clip from={from} to={to} name={`List ${rest.title ?? ""}`}><Body {...rest} /></Clip>
     <BlockSfx at={from} sfx={sfx} fallback="whoosh" />
   </>
 );
-SidePanel.layoutOf = ({ from, to, side = "bottom", items, title }) => side === "bottom"
-  ? { occupied: { from, to, zone: "sheet", top: BOTTOM - listHeight(items, title) }, panel: { from, to, dx: 0, dy: -LIFT, zoom: 1 } }
+SidePanel.layoutOf = ({ from, to, side = "bottom", items, title, numbered }) => side === "bottom"
+  ? { occupied: { from, to, zone: "sheet", top: BOTTOM - listHeight(items, title, numbered) }, panel: { from, to, dx: 0, dy: -LIFT, zoom: 1 } }
   : { occupied: { from, to, zone: "right" }, panel: { from, to, dx: -250, dy: 0, zoom: 1 } };

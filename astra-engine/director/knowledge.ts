@@ -22,3 +22,8 @@ export function loadGuide(): { director: string; kit: string } {
     kit: fs.readFileSync(path.join(dir, "kit.md"), "utf8"),
   };
 }
+
+/** The owner's lessons from earlier videos: one per line, newest last. */
+export function loadLessons(): string[] {
+  return fs.readFileSync(path.join(dir, "lessons.md"), "utf8").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+}

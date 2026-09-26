@@ -162,6 +162,17 @@ export function analyzeMontage(code: string, duration: number): Analysis {
   const moves = camera.map(m => ({ ...m, start: m.args[0] ?? 0, end: m.kind === "punch" || m.kind === "reset" ? m.args[0] ?? 0 : m.args[1] ?? m.args[0] ?? 0 })).sort((a, b) => a.start - b.start);
   moves.forEach((m, i) => { const n = moves[i + 1]; if (n && n.start < m.end - 0.01) problems.push(`Камера: cam.${m.kind} до ${m.end} с и cam.${n.kind} с ${n.start} с пересекаются.`); });
 
+  // A sound voices something the viewer sees appear: a picture, a list, a banner, a punch-in of the camera.
+  const appearances = [...blocks.filter(b => VISUAL.has(b.type)).map(b => b.from), ...moves.filter(m => m.kind === "punch").map(m => m.start)];
+  for (const s of blocks.filter(b => b.type === "Sfx")) {
+    const role = String(s.props.role ?? "");
+    if (["riser", "typing", "tick", "click", "glitch"].includes(role)) {
+      problems.push(`Звук ${role} на ${s.from} с: эти звуки кубики ставят сами, когда на экране есть их событие (печать, часы, превращение). Здесь такого события нет — убери этот <Sfx>.`);
+    } else if (!appearances.some(t => Math.abs(t - s.from) <= 0.35)) {
+      problems.push(`Звук ${role} на ${s.from} с звучит, когда на экране ничего не появляется: зритель слышит звук без причины. Поставь его точно на появление картинки или убери.`);
+    }
+  }
+
   // Rhythm notes guide the review; they are not hard errors.
   const visual = blocks.filter(b => VISUAL.has(b.type)).flatMap(b => [b.from,
     ...((Array.isArray(b.props.items) ? b.props.items : []) as { at?: unknown }[]).flatMap(item => (typeof item?.at === "number" ? [item.at] : []))]);

@@ -10,7 +10,7 @@
 
 ```tsx
 import React from "react";
-import { AstraVideo, BehindText, Captions, cam, MapFocus, Music, Photo, Scene, SidePanel, Sfx } from "../kit";
+import { AstraVideo, BehindText, Captions, cam, MapFocus, Music, Photo, Scene, SidePanel } from "../kit";
 
 export const Montage: React.FC = () => (
   <AstraVideo
@@ -26,7 +26,6 @@ export const Montage: React.FC = () => (
     {/* История: крючок — место, где всё случилось */}
     <MapFocus from={0.15} to={3.0} region="world" lat={51.59} lon={-2.99} label="Уэльс" highlight="United Kingdom" zoom={5} />
     <Photo from={3.2} to={6.0} query="old hard drive" look="старый жёсткий диск компьютера целиком, крупно" pos="full" />
-    <Sfx at={6.0} role="riser" />
     {/* Число — то, что стоит показать крупно: за спиной автора */}
     <BehindText from={7.55} to={9.2} text="8 000 BTC" color="highlight" sfx="impact" />
     <SidePanel

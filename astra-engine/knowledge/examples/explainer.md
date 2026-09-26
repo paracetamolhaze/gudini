@@ -12,7 +12,7 @@
 
 ```tsx
 import React from "react";
-import { AstraVideo, BehindText, Captions, cam, Flash, Music, Notification, Scene, SidePanel, Sfx } from "../kit";
+import { AstraVideo, BehindText, Captions, cam, Flash, Music, Notification, Scene, SidePanel } from "../kit";
 
 export const Montage: React.FC = () => (
   <AstraVideo
@@ -32,7 +32,6 @@ export const Montage: React.FC = () => (
     {/* «Потеряешь телефон — вводишь слова, и деньги на месте» — сцена, которой нет на фотостоке */}
     <Scene from={11.1} to={14.0} prompt="a smartphone with a cracked screen lying on a wooden table next to a handwritten paper card with 12 numbered words, a hand holding a new phone above them, close-up" />
     {/* Поворот: кто узнал слова — тот забрал всё */}
-    <Sfx at={17.3} role="riser" />
     <Scene from={17.3} to={20.1} prompt="a man in a dark hoodie at night reading a stolen paper card with 12 numbered words by the light of his laptop, a crypto wallet balance dropping to zero on the screen, tense mood, medium shot" sfx="impact" />
     <Flash at={18.82} sfx={false} />
     {/* Автор перечисляет — автор уезжает вверх, снизу правила, подсветка за словами */}
